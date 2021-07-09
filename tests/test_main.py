@@ -4,6 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import call
 
+import isort
 import pytest
 from _pytest.capture import CaptureFixture
 from _pytest.tmpdir import TempdirFactory
@@ -2773,6 +2774,308 @@ def test_main_jsonschema_combine_any_of_object():
                 EXPECTED_MAIN_PATH
                 / 'main_jsonschema_combine_any_of_object'
                 / 'output.py'
+            ).read_text()
+        )
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_jsonschema_field_include_all_keys():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'person.json'),
+                '--output',
+                str(output_file),
+                '--input-file-type',
+                'jsonschema',
+                '--field-include-all-keys',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (EXPECTED_MAIN_PATH / 'main_jsonschema' / 'output.py').read_text()
+        )
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_jsonschema_field_extras_field_include_all_keys():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'extras.json'),
+                '--output',
+                str(output_file),
+                '--input-file-type',
+                'jsonschema',
+                '--field-include-all-keys',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH
+                / 'main_jsonschema_field_extras_field_include_all_keys'
+                / 'output.py'
+            ).read_text()
+        )
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_jsonschema_field_extras_field_extra_keys():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'extras.json'),
+                '--output',
+                str(output_file),
+                '--input-file-type',
+                'jsonschema',
+                '--field-extra-keys',
+                'key2',
+                'invalid-key-1',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH
+                / 'main_jsonschema_field_extras_field_extra_keys'
+                / 'output.py'
+            ).read_text()
+        )
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_jsonschema_field_extras():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'extras.json'),
+                '--output',
+                str(output_file),
+                '--input-file-type',
+                'jsonschema',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH / 'main_jsonschema_field_extras' / 'output.py'
+            ).read_text()
+        )
+    with pytest.raises(SystemExit):
+        main()
+
+
+@pytest.mark.skipif(
+    not isort.__version__.startswith('4.'),
+    reason="isort 5.x don't sort pydantic modules",
+)
+@freeze_time('2019-07-26')
+def test_main_jsonschema_custom_type_path():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'custom_type_path.json'),
+                '--output',
+                str(output_file),
+                '--input-file-type',
+                'jsonschema',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH / 'main_jsonschema_custom_type_path' / 'output.py'
+            ).read_text()
+        )
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_jsonschema_unsupported_parent_class():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'all_of_unsupported_parent_class.json'),
+                '--output',
+                str(output_file),
+                '--input-file-type',
+                'jsonschema',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH
+                / 'main_jsonschema_unsupported_parent_class'
+                / 'output.py'
+            ).read_text()
+        )
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_openapi_body_and_parameters():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(OPEN_API_DATA_PATH / 'body_and_parameters.yaml'),
+                '--output',
+                str(output_file),
+                '--input-file-type',
+                'openapi',
+                '--openapi-scopes',
+                'paths',
+                'schemas',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH / 'main_openapi_body_and_parameters' / 'output.py'
+            ).read_text()
+        )
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_openapi_body_and_parameters_only_paths():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(OPEN_API_DATA_PATH / 'body_and_parameters.yaml'),
+                '--output',
+                str(output_file),
+                '--input-file-type',
+                'openapi',
+                '--openapi-scopes',
+                'paths',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH
+                / 'main_openapi_body_and_parameters_only_paths'
+                / 'output.py'
+            ).read_text()
+        )
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_openapi_body_and_parameters_only_schemas():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(OPEN_API_DATA_PATH / 'body_and_parameters.yaml'),
+                '--output',
+                str(output_file),
+                '--input-file-type',
+                'openapi',
+                '--openapi-scopes',
+                'schemas',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH
+                / 'main_openapi_body_and_parameters_only_schemas'
+                / 'output.py'
+            ).read_text()
+        )
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_openapi_content_in_parameters():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(OPEN_API_DATA_PATH / 'content_in_parameters.yaml'),
+                '--output',
+                str(output_file),
+                '--input-file-type',
+                'openapi',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH / 'main_openapi_content_in_parameters' / 'output.py'
+            ).read_text()
+        )
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_openapi_oas_response_reference():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(OPEN_API_DATA_PATH / 'oas_response_reference.yaml'),
+                '--output',
+                str(output_file),
+                '--input-file-type',
+                'openapi',
+                '--openapi-scopes',
+                'paths',
+                'schemas',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH / 'main_openapi_oas_response_reference' / 'output.py'
             ).read_text()
         )
     with pytest.raises(SystemExit):

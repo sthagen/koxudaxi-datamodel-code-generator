@@ -261,6 +261,8 @@ class Parser(ABC):
         custom_class_name_generator: Optional[
             Callable[[str], str]
         ] = title_to_class_name,
+        field_extra_keys: Optional[Set[str]] = None,
+        field_include_all_keys: bool = False,
     ):
         self.data_type_manager: DataTypeManager = data_type_manager_type(
             target_python_version,
@@ -299,6 +301,8 @@ class Parser(ABC):
         self.custom_class_name_generator: Optional[
             Callable[[str], str]
         ] = custom_class_name_generator
+        self.field_extra_keys: Set[str] = field_extra_keys or set()
+        self.field_include_all_keys: bool = field_include_all_keys
 
         self.remote_text_cache: DefaultPutDict[str, str] = (
             remote_text_cache or DefaultPutDict()
@@ -448,6 +452,8 @@ class Parser(ABC):
                             for base_class in child.base_classes:
                                 if base_class.reference == model.reference:
                                     child.base_classes.remove(base_class)
+                            if not child.base_classes:
+                                child.set_base_class()
 
             module_models.append((module, models,))
 
@@ -470,7 +476,6 @@ class Parser(ABC):
                         model.reference.name = generated_name
 
         for module, models in module_models:
-
             init = False
             if module:
                 parent = (*module[:-1], '__init__.py')
@@ -521,6 +526,7 @@ class Parser(ABC):
 
             if self.reuse_model:
                 model_cache: Dict[Tuple[str, ...], Reference] = {}
+                duplicates = []
                 for model in models:
                     model_key = tuple(
                         to_hashable(v)
@@ -536,10 +542,10 @@ class Parser(ABC):
                             for child in model.reference.children[:]:
                                 # child is resolved data_type by reference
                                 data_model = get_most_of_parent(child)
-
                                 # TODO: replace reference in all modules
                                 if data_model in models:  # pragma: no cover
                                     child.replace_reference(cached_model_reference)
+                            duplicates.append(model)
                         else:
                             index = models.index(model)
                             inherited_model = model.__class__(
@@ -563,6 +569,9 @@ class Parser(ABC):
 
                     else:
                         model_cache[model_key] = model.reference
+
+                for duplicate in duplicates:
+                    models.remove(duplicate)
 
             if self.set_default_enum_member:
                 for model in models:

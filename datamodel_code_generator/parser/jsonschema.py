@@ -1,6 +1,7 @@
 import enum as _enum
 from collections import defaultdict
 from contextlib import contextmanager
+from functools import lru_cache
 from pathlib import Path
 from typing import (
     Any,
@@ -185,10 +186,21 @@ class JsonSchemaObject(BaseModel):
     examples: Any
     default: Any
     id: Optional[str] = Field(default=None, alias='$id')
+    custom_type_path: Optional[str] = Field(default=None, alias='customTypePath')
+    _raw: Dict[str, Any]
 
     class Config:
         arbitrary_types_allowed = True
         keep_untouched = (cached_property,)
+        underscore_attrs_are_private = True
+
+    def __init__(self, **data: Any) -> None:  # type: ignore
+        super().__init__(**data)
+        self._raw = data
+
+    @cached_property
+    def extras(self) -> Dict[str, Any]:
+        return {k: v for k, v in self._raw.items() if k not in EXCLUDE_FIELD_KEYS}
 
     @cached_property
     def is_object(self) -> bool:
@@ -225,15 +237,32 @@ class JsonSchemaObject(BaseModel):
     @cached_property
     def ref_type(self) -> Optional[JSONReference]:
         if self.ref:
-            if self.ref[0] == '#':
-                return JSONReference.LOCAL
-            elif is_url(self.ref):
-                return JSONReference.URL
-            return JSONReference.REMOTE
+            return get_ref_type(self.ref)
         return None  # pragma: no cover
 
 
+@lru_cache()
+def get_ref_type(ref: str) -> JSONReference:
+    if ref[0] == '#':
+        return JSONReference.LOCAL
+    elif is_url(ref):
+        return JSONReference.URL
+    return JSONReference.REMOTE
+
+
 JsonSchemaObject.update_forward_refs()
+
+DEFAULT_FIELD_KEYS: Set[str] = {
+    'example',
+    'examples',
+    'description',
+    'title',
+}
+
+EXCLUDE_FIELD_KEYS = (set(JsonSchemaObject.__fields__) - DEFAULT_FIELD_KEYS) | {
+    '$id',
+    '$ref',
+}
 
 
 @snooper_to_methods(max_variable_length=None)
@@ -275,6 +304,8 @@ class JsonSchemaParser(Parser):
         strict_types: Optional[Sequence[StrictTypes]] = None,
         empty_enum_field_name: Optional[str] = None,
         custom_class_name_generator: Optional[Callable[[str], str]] = None,
+        field_extra_keys: Optional[Set[str]] = None,
+        field_include_all_keys: bool = False,
     ):
         super().__init__(
             source=source,
@@ -311,6 +342,8 @@ class JsonSchemaParser(Parser):
             strict_types=strict_types,
             empty_enum_field_name=empty_enum_field_name,
             custom_class_name_generator=custom_class_name_generator,
+            field_extra_keys=field_extra_keys,
+            field_include_all_keys=field_include_all_keys,
         )
 
         self.remote_object_cache: DefaultPutDict[str, Dict[str, Any]] = DefaultPutDict()
@@ -318,6 +351,20 @@ class JsonSchemaParser(Parser):
         self._root_id: Optional[str] = None
         self._root_id_base_path: Optional[str] = None
         self.reserved_refs: DefaultDict[Tuple[str], Set[str]] = defaultdict(set)
+        self.field_keys: Set[str] = {*DEFAULT_FIELD_KEYS, *self.field_extra_keys}
+
+    def get_field_extras(self, obj: JsonSchemaObject) -> Dict[str, Any]:
+        if self.field_include_all_keys:
+            return {
+                self.model_resolver.get_valid_field_name_and_alias(k)[0]: v
+                for k, v in obj.extras.items()
+            }
+        else:
+            return {
+                self.model_resolver.get_valid_field_name_and_alias(k)[0]: v
+                for k, v in obj.extras.items()
+                if k in self.field_keys
+            }
 
     @property
     def root_id(self) -> Optional[str]:
@@ -477,11 +524,7 @@ class JsonSchemaParser(Parser):
             fields.append(
                 self.data_model_field_type(
                     name=field_name,
-                    example=field.example,
-                    examples=field.examples,
-                    description=field.description,
                     default=field.default,
-                    title=field.title,
                     data_type=field_type,
                     required=required,
                     alias=alias,
@@ -490,6 +533,7 @@ class JsonSchemaParser(Parser):
                     if self.strict_nullable and (field.has_default or required)
                     else None,
                     strip_default_none=self.strip_default_none,
+                    extras={**self.get_field_extras(field)},
                 )
             )
         return fields
@@ -551,6 +595,10 @@ class JsonSchemaParser(Parser):
             )
         elif item.ref:
             return self.get_ref_data_type(item.ref)
+        elif item.custom_type_path:
+            return self.data_type_manager.get_data_type_from_full_path(
+                item.custom_type_path, is_custom_type=True
+            )
         elif item.is_array:
             return self.parse_array_fields(
                 name, item, get_special_path('array', path)
@@ -593,7 +641,10 @@ class JsonSchemaParser(Parser):
             return self.data_type_manager.get_data_type(Types.object)
         elif item.enum:
             if self.should_parse_enum_as_literal(item):
-                return self.data_type(literals=item.enum)
+                enum_literals = item.enum
+                if item.nullable:
+                    enum_literals = [i for i in item.enum if i is not None]
+                return self.data_type(literals=enum_literals)
             return self.parse_enum(
                 name, item, get_special_path('enum', path), singular_name=singular_name
             )
@@ -658,15 +709,12 @@ class JsonSchemaParser(Parser):
 
         return self.data_model_field_type(
             data_type=self.data_type(data_types=data_types),
-            example=obj.example,
-            examples=obj.examples,
             default=obj.default,
-            description=obj.description,
-            title=obj.title,
             required=required,
             constraints=obj.dict(),
             nullable=nullable,
             strip_default_none=self.strip_default_none,
+            extras=self.get_field_extras(obj),
         )
 
     def parse_array(
@@ -692,15 +740,12 @@ class JsonSchemaParser(Parser):
                         *field.data_type.data_types[1:],
                     ]
                 ),
-                example=field.example,
-                examples=field.examples,
                 default=field.default,
-                description=field.description,
-                title=field.title,
                 required=field.required,
                 constraints=field.constraints,
                 nullable=field.nullable,
                 strip_default_none=field.strip_default_none,
+                extras=field.extras,
             )
 
         data_model_root = self.data_model_root_type(
@@ -720,6 +765,10 @@ class JsonSchemaParser(Parser):
     ) -> DataType:
         if obj.ref:
             data_type: DataType = self.get_ref_data_type(obj.ref)
+        elif obj.custom_type_path:
+            data_type = self.data_type_manager.get_data_type_from_full_path(
+                obj.custom_type_path, is_custom_type=True
+            )
         elif obj.is_object or obj.anyOf or obj.oneOf:
             data_types: List[DataType] = []
             object_path = [*path, name]
@@ -759,14 +808,12 @@ class JsonSchemaParser(Parser):
             fields=[
                 self.data_model_field_type(
                     data_type=data_type,
-                    description=obj.description,
-                    example=obj.example,
-                    examples=obj.examples,
                     default=obj.default,
                     required=required,
                     constraints=obj.dict() if self.field_constraints else {},
                     nullable=obj.nullable if self.strict_nullable else None,
                     strip_default_none=self.strip_default_none,
+                    extras=self.get_field_extras(obj),
                 )
             ],
             custom_base_class=self.base_class,
@@ -845,6 +892,7 @@ class JsonSchemaParser(Parser):
                 fields=enum_fields,
                 path=self.current_source_path,
                 description=obj.description if self.use_schema_description else None,
+                custom_template_dir=self.custom_template_dir,
             )
             self.results.append(enum)
             return self.data_type(reference=reference_)
@@ -875,13 +923,11 @@ class JsonSchemaParser(Parser):
             fields=[
                 self.data_model_field_type(
                     data_type=create_enum(enum_reference),
-                    description=obj.description,
-                    example=obj.example,
-                    examples=obj.examples,
                     default=obj.default,
                     required=False,
                     nullable=True,
                     strip_default_none=self.strip_default_none,
+                    extras=self.get_field_extras(obj),
                 )
             ],
             custom_base_class=self.base_class,
@@ -913,40 +959,47 @@ class JsonSchemaParser(Parser):
             default_factory=lambda _: load_yaml_from_path(full_path, self.encoding),
         )
 
+    def resolve_ref(self, object_ref: str) -> Reference:
+        reference = self.model_resolver.add_ref(object_ref)
+        if reference.loaded:
+            return reference
+
+        # https://swagger.io/docs/specification/using-ref/
+        ref = self.model_resolver.resolve_ref(object_ref)
+        if get_ref_type(object_ref) == JSONReference.LOCAL:
+            # Local Reference – $ref: '#/definitions/myElement'
+            self.reserved_refs[tuple(self.model_resolver.current_root)].add(ref)  # type: ignore
+            return reference
+        elif self.model_resolver.is_after_load(ref):
+            self.reserved_refs[tuple(ref.split('#')[0].split('/'))].add(ref)  # type: ignore
+            return reference
+
+        if is_url(ref):
+            relative_path, object_path = ref.split('#')
+            relative_paths = [relative_path]
+            base_path = None
+        else:
+            if self.model_resolver.is_external_root_ref(ref):
+                relative_path, object_path = ref[:-1], ''
+            else:
+                relative_path, object_path = ref.split('#')
+            relative_paths = relative_path.split('/')
+            base_path = Path(*relative_paths).parent
+        with self.model_resolver.current_base_path_context(
+            base_path
+        ), self.model_resolver.base_url_context(relative_path):
+            self._parse_file(
+                self._get_ref_body(relative_path),
+                self.model_resolver.add_ref(ref, resolved=True).name,
+                relative_paths,
+                object_path.split('/') if object_path else None,
+            )
+        reference.loaded = True
+        return reference
+
     def parse_ref(self, obj: JsonSchemaObject, path: List[str]) -> None:
         if obj.ref:
-            reference = self.model_resolver.add_ref(obj.ref)
-            if not reference or not reference.loaded:
-                # https://swagger.io/docs/specification/using-ref/
-                ref = self.model_resolver.resolve_ref(obj.ref)
-                if obj.ref_type == JSONReference.LOCAL:
-                    # Local Reference – $ref: '#/definitions/myElement'
-                    self.reserved_refs[tuple(self.model_resolver.current_root)].add(ref)  # type: ignore
-                elif self.model_resolver.is_after_load(ref):
-                    self.reserved_refs[tuple(ref.split('#')[0].split('/'))].add(ref)  # type: ignore
-                else:
-                    if is_url(ref):
-                        relative_path, object_path = ref.split('#')
-                        relative_paths = [relative_path]
-                        base_path = None
-                    else:
-                        if self.model_resolver.is_external_root_ref(ref):
-                            relative_path, object_path = ref[:-1], ''
-                        else:
-                            relative_path, object_path = ref.split('#')
-                        relative_paths = relative_path.split('/')
-                        base_path = Path(*relative_paths).parent
-                    with self.model_resolver.current_base_path_context(
-                        base_path
-                    ), self.model_resolver.base_url_context(relative_path):
-                        self._parse_file(
-                            self._get_ref_body(relative_path),
-                            self.model_resolver.add_ref(ref, resolved=True).name,
-                            relative_paths,
-                            object_path.split('/') if object_path else None,
-                        )
-                    self.model_resolver.add_ref(obj.ref,).loaded = True
-
+            self.resolve_ref(obj.ref)
         if obj.items:
             if isinstance(obj.items, JsonSchemaObject):
                 self.parse_ref(obj.items, path)
