@@ -17,6 +17,7 @@ from typing import (
     Sequence,
     Set,
     TextIO,
+    Tuple,
     Type,
     TypeVar,
     Union,
@@ -223,6 +224,8 @@ def generate(
     field_include_all_keys: bool = False,
     openapi_scopes: Optional[List[OpenAPIScope]] = None,
     wrap_string_literal: Optional[bool] = None,
+    use_title_as_name: bool = False,
+    http_headers: Optional[Sequence[Tuple[str, str]]] = None,
 ) -> None:
     remote_text_cache: DefaultPutDict[str, str] = DefaultPutDict()
     if isinstance(input_, str):
@@ -231,7 +234,7 @@ def generate(
         from datamodel_code_generator.http import get_body
 
         input_text = remote_text_cache.get_or_put(
-            input_.geturl(), default_factory=get_body
+            input_.geturl(), default_factory=lambda url: get_body(url, http_headers)
         )
     else:
         input_text = None
@@ -339,6 +342,8 @@ def generate(
         field_extra_keys=field_extra_keys,
         field_include_all_keys=field_include_all_keys,
         wrap_string_literal=wrap_string_literal,
+        use_title_as_name=use_title_as_name,
+        http_headers=http_headers,
         **kwargs,
     )
 
