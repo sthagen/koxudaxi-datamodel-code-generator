@@ -60,7 +60,10 @@ class Modular(Protocol):
         raise NotImplementedError
 
 
-class DataType(_BaseModel):  # type: ignore
+class DataType(_BaseModel):
+    class Config:
+        extra = "forbid"
+
     type: Optional[str]
     reference: Optional[Reference]
     data_types: List['DataType'] = []
@@ -202,7 +205,8 @@ class DataType(_BaseModel):  # type: ignore
             yield from self.dict_key.imports
 
     def __init__(self, **values: Any) -> None:
-        super().__init__(**values)
+        if not TYPE_CHECKING:
+            super().__init__(**values)
 
         for type_ in self.data_types:
             if type_.type == 'Any' and type_.is_optional:
@@ -320,11 +324,15 @@ class DataTypeManager(ABC):
         use_standard_collections: bool = False,
         use_generic_container_types: bool = False,
         strict_types: Optional[Sequence[StrictTypes]] = None,
+        use_non_positive_negative_number_constrained_types: bool = False,
     ) -> None:
         self.python_version = python_version
         self.use_standard_collections: bool = use_standard_collections
         self.use_generic_container_types: bool = use_generic_container_types
         self.strict_types: Sequence[StrictTypes] = strict_types or ()
+        self.use_non_positive_negative_number_constrained_types: bool = (
+            use_non_positive_negative_number_constrained_types
+        )
 
         if (
             use_generic_container_types and python_version == PythonVersion.PY_36
