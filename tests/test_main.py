@@ -8,11 +8,15 @@ import isort
 import pydantic
 import pytest
 from _pytest.capture import CaptureFixture
-from _pytest.tmpdir import TempdirFactory
 from freezegun import freeze_time
 
 from datamodel_code_generator import InputFileType, chdir, generate
 from datamodel_code_generator.__main__ import Exit, main
+
+try:
+    from pytest import TempdirFactory
+except ImportError:
+    from _pytest.tmpdir import TempdirFactory
 
 DATA_PATH: Path = Path(__file__).parent / 'data'
 OPEN_API_DATA_PATH: Path = DATA_PATH / 'openapi'
@@ -1159,7 +1163,7 @@ def test_main_root_id_jsonschema_with_remote_file(mocker):
         )
         httpx_get_mock.assert_has_calls(
             [
-                call('https://example.com/person.json', headers=None),
+                call('https://example.com/person.json', headers=None, verify=True),
             ]
         )
     with pytest.raises(SystemExit):
@@ -1221,7 +1225,7 @@ def test_main_root_id_jsonschema_self_refs_with_remote_file(mocker):
         )
         httpx_get_mock.assert_has_calls(
             [
-                call('https://example.com/person.json', headers=None),
+                call('https://example.com/person.json', headers=None, verify=True),
             ]
         )
     with pytest.raises(SystemExit):
@@ -1258,7 +1262,7 @@ def test_main_root_id_jsonschema_with_absolute_remote_file(mocker):
         )
         httpx_get_mock.assert_has_calls(
             [
-                call('https://example.com/person.json', headers=None),
+                call('https://example.com/person.json', headers=None, verify=True),
             ]
         )
     with pytest.raises(SystemExit):
@@ -2462,34 +2466,42 @@ def test_main_http_jsonschema(mocker):
                 call(
                     'https://example.com/external_files_in_directory/person.json',
                     headers=None,
+                    verify=True,
                 ),
                 call(
                     'https://example.com/external_files_in_directory/definitions/pet.json',
                     headers=None,
+                    verify=True,
                 ),
                 call(
                     'https://example.com/external_files_in_directory/definitions/fur.json',
                     headers=None,
+                    verify=True,
                 ),
                 call(
                     'https://example.com/external_files_in_directory/definitions/friends.json',
                     headers=None,
+                    verify=True,
                 ),
                 call(
                     'https://example.com/external_files_in_directory/definitions/food.json',
                     headers=None,
+                    verify=True,
                 ),
                 call(
                     'https://example.com/external_files_in_directory/definitions/machine/robot.json',
                     headers=None,
+                    verify=True,
                 ),
                 call(
                     'https://example.com/external_files_in_directory/definitions/drink/coffee.json',
                     headers=None,
+                    verify=True,
                 ),
                 call(
                     'https://example.com/external_files_in_directory/definitions/drink/tea.json',
                     headers=None,
+                    verify=True,
                 ),
             ]
         )
@@ -2499,20 +2511,22 @@ def test_main_http_jsonschema(mocker):
 
 @freeze_time('2019-07-26')
 @pytest.mark.parametrize(
-    'headers_arguments,headers_requests',
+    'headers_arguments,headers_requests,http_ignore_tls',
     [
         (
             ('Authorization: Basic dXNlcjpwYXNz',),
             [('Authorization', 'Basic dXNlcjpwYXNz')],
+            False,
         ),
         (
             ('Authorization: Basic dXNlcjpwYXNz', 'X-API-key: abcefg'),
             [('Authorization', 'Basic dXNlcjpwYXNz'), ('X-API-key', 'abcefg')],
+            True,
         ),
     ],
 )
-def test_main_http_jsonschema_with_http_headers(
-    mocker, headers_arguments, headers_requests
+def test_main_http_jsonschema_with_http_headers_and_ignore_tls(
+    mocker, headers_arguments, headers_requests, http_ignore_tls
 ):
     external_directory = JSON_SCHEMA_DATA_PATH / 'external_files_in_directory'
 
@@ -2536,18 +2550,20 @@ def test_main_http_jsonschema_with_http_headers(
     )
     with TemporaryDirectory() as output_dir:
         output_file: Path = Path(output_dir) / 'output.py'
-        return_code: Exit = main(
-            [
-                '--url',
-                'https://example.com/external_files_in_directory/person.json',
-                '--http-headers',
-                *headers_arguments,
-                '--output',
-                str(output_file),
-                '--input-file-type',
-                'jsonschema',
-            ]
-        )
+        args = [
+            '--url',
+            'https://example.com/external_files_in_directory/person.json',
+            '--http-headers',
+            *headers_arguments,
+            '--output',
+            str(output_file),
+            '--input-file-type',
+            'jsonschema',
+        ]
+        if http_ignore_tls:
+            args.append('--http-ignore-tls')
+
+        return_code: Exit = main(args)
         assert return_code == Exit.OK
         assert output_file.read_text() == (
             EXPECTED_MAIN_PATH / 'main_external_files_in_directory' / 'output.py'
@@ -2560,34 +2576,42 @@ def test_main_http_jsonschema_with_http_headers(
                 call(
                     'https://example.com/external_files_in_directory/person.json',
                     headers=headers_requests,
+                    verify=True if not http_ignore_tls else False,
                 ),
                 call(
                     'https://example.com/external_files_in_directory/definitions/pet.json',
                     headers=headers_requests,
+                    verify=True if not http_ignore_tls else False,
                 ),
                 call(
                     'https://example.com/external_files_in_directory/definitions/fur.json',
                     headers=headers_requests,
+                    verify=True if not http_ignore_tls else False,
                 ),
                 call(
                     'https://example.com/external_files_in_directory/definitions/friends.json',
                     headers=headers_requests,
+                    verify=True if not http_ignore_tls else False,
                 ),
                 call(
                     'https://example.com/external_files_in_directory/definitions/food.json',
                     headers=headers_requests,
+                    verify=True if not http_ignore_tls else False,
                 ),
                 call(
                     'https://example.com/external_files_in_directory/definitions/machine/robot.json',
                     headers=headers_requests,
+                    verify=True if not http_ignore_tls else False,
                 ),
                 call(
                     'https://example.com/external_files_in_directory/definitions/drink/coffee.json',
                     headers=headers_requests,
+                    verify=True if not http_ignore_tls else False,
                 ),
                 call(
                     'https://example.com/external_files_in_directory/definitions/drink/tea.json',
                     headers=headers_requests,
+                    verify=True if not http_ignore_tls else False,
                 ),
             ]
         )
@@ -2628,10 +2652,11 @@ def test_main_http_openapi(mocker):
         )
         httpx_get_mock.assert_has_calls(
             [
-                call('https://example.com/refs.yaml', headers=None),
+                call('https://example.com/refs.yaml', headers=None, verify=True),
                 call(
                     'https://teamdigitale.github.io/openapi/0.0.6/definitions.yaml',
                     headers=None,
+                    verify=True,
                 ),
             ]
         )
@@ -2676,6 +2701,7 @@ def test_main_http_json(mocker):
                 call(
                     'https://example.com/pet.json',
                     headers=None,
+                    verify=True,
                 ),
             ]
         )
@@ -3226,7 +3252,7 @@ def test_main_openapi_body_and_parameters_remote_ref(mocker):
         )
         httpx_get_mock.assert_has_calls(
             [
-                call('https://schema.example', headers=None),
+                call('https://schema.example', headers=None, verify=True),
             ]
         )
     with pytest.raises(SystemExit):
