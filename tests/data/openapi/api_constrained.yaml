@@ -122,6 +122,7 @@ components:
         $ref: "#/components/schemas/Pet"
       maxItems: 10
       minItems: 1
+      uniqueItems: true
     UID:
       type: integer
       minimum: 0
@@ -156,6 +157,19 @@ components:
             items:
               type: string
               minLength: 3
+          height:
+            type:
+              - integer
+              - number
+            minimum: 1
+            maximum: 300
+          weight:
+            type:
+              - number
+              - integer
+            minimum: 1
+            maximum: 1000
+
     Id:
       type: string
     Rules:

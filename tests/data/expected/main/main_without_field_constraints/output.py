@@ -4,9 +4,9 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Optional, Union
 
-from pydantic import AnyUrl, BaseModel, Field, conint, constr
+from pydantic import AnyUrl, BaseModel, Field, confloat, conint, constr
 
 
 class Pet(BaseModel):
@@ -16,7 +16,7 @@ class Pet(BaseModel):
 
 
 class Pets(BaseModel):
-    __root__: List[Pet] = Field(..., max_items=10, min_items=1)
+    __root__: List[Pet] = Field(..., max_items=10, min_items=1, unique_items=True)
 
 
 class UID(BaseModel):
@@ -34,6 +34,8 @@ class User(BaseModel):
     uid: UID
     phones: Optional[List[Phone]] = Field(None, max_items=10)
     fax: Optional[List[constr(min_length=3)]] = None
+    height: Optional[Union[conint(ge=1, le=300), confloat(ge=1.0, le=300.0)]] = None
+    weight: Optional[Union[confloat(ge=1.0, le=1000.0), conint(ge=1, le=1000)]] = None
 
 
 class Users(BaseModel):
