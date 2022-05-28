@@ -146,6 +146,13 @@ arg_parser.add_argument(
     action='store_true',
     default=None,
 )
+
+arg_parser.add_argument(
+    '--original-field-name-delimiter',
+    help='Set delimiter to convert to snake case. This option only can be used with --snake-case-field (default: `_` )',
+    default=None,
+)
+
 arg_parser.add_argument(
     '--strip-default-none',
     help='Strip default None on fields',
@@ -258,6 +265,12 @@ arg_parser.add_argument(
     default=None,
 )
 
+arg_parser.add_argument(
+    '--use-subclass-enum',
+    help='Define Enum class as subclass with field type when enum has type (int, float, bytes, str)',
+    action='store_true',
+    default=False,
+)
 
 arg_parser.add_argument(
     '--class-name',
@@ -352,6 +365,17 @@ class Config(BaseModel):
                 )
         return values
 
+    @root_validator
+    def validate_original_field_name_delimiter(
+        cls, values: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        if values.get('original_field_name_delimiter') is not None:
+            if not values.get('snake_case_field'):
+                raise Error(
+                    "`--original-field-name-delimiter` can not be used without `--snake-case-field`."
+                )
+        return values
+
     # Pydantic 1.5.1 doesn't support each_item=True correctly
     @validator('http_headers', pre=True)
     def validate_http_headers(cls, value: Any) -> Optional[List[Tuple[str, str]]]:
@@ -404,6 +428,7 @@ class Config(BaseModel):
     encoding: str = 'utf-8'
     enum_field_as_literal: Optional[LiteralType] = None
     set_default_enum_member: bool = False
+    use_subclass_enum: bool = False
     strict_nullable: bool = False
     use_generic_container_types: bool = False
     enable_faux_immutability: bool = False
@@ -420,6 +445,7 @@ class Config(BaseModel):
     http_ignore_tls: bool = False
     use_annotated: bool = False
     use_non_positive_negative_number_constrained_types: bool = False
+    original_field_name_delimiter: Optional[str] = None
 
     def merge_args(self, args: Namespace) -> None:
         set_args = {
@@ -536,6 +562,7 @@ def main(args: Optional[Sequence[str]] = None) -> Exit:
             encoding=config.encoding,
             enum_field_as_literal=config.enum_field_as_literal,
             set_default_enum_member=config.set_default_enum_member,
+            use_subclass_enum=config.use_subclass_enum,
             strict_nullable=config.strict_nullable,
             use_generic_container_types=config.use_generic_container_types,
             enable_faux_immutability=config.enable_faux_immutability,
@@ -551,6 +578,7 @@ def main(args: Optional[Sequence[str]] = None) -> Exit:
             http_ignore_tls=config.http_ignore_tls,
             use_annotated=config.use_annotated,
             use_non_positive_negative_number_constrained_types=config.use_non_positive_negative_number_constrained_types,
+            original_field_name_delimiter=config.original_field_name_delimiter,
         )
         return Exit.OK
     except InvalidClassNameError as e:

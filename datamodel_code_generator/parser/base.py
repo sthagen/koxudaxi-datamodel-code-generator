@@ -280,6 +280,7 @@ class Parser(ABC):
         encoding: str = 'utf-8',
         enum_field_as_literal: Optional[LiteralType] = None,
         set_default_enum_member: bool = False,
+        use_subclass_enum: bool = False,
         strict_nullable: bool = False,
         use_generic_container_types: bool = False,
         enable_faux_immutability: bool = False,
@@ -298,6 +299,7 @@ class Parser(ABC):
         http_ignore_tls: bool = False,
         use_annotated: bool = False,
         use_non_positive_negative_number_constrained_types: bool = False,
+        original_field_name_delimiter: Optional[str] = None,
     ):
         self.data_type_manager: DataTypeManager = data_type_manager_type(
             target_python_version,
@@ -330,6 +332,7 @@ class Parser(ABC):
         self.encoding: str = encoding
         self.enum_field_as_literal: Optional[LiteralType] = enum_field_as_literal
         self.set_default_enum_member: bool = set_default_enum_member
+        self.use_subclass_enum: bool = use_subclass_enum
         self.strict_nullable: bool = strict_nullable
         self.use_generic_container_types: bool = use_generic_container_types
         self.enable_faux_immutability: bool = enable_faux_immutability
@@ -374,6 +377,7 @@ class Parser(ABC):
             snake_case_field=snake_case_field,
             custom_class_name_generator=custom_class_name_generator,
             base_path=self.base_path,
+            original_field_name_delimiter=original_field_name_delimiter,
         )
         self.class_name: Optional[str] = class_name
         self.wrap_string_literal: Optional[bool] = wrap_string_literal

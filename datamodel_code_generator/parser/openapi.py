@@ -165,6 +165,7 @@ class OpenAPIParser(JsonSchemaParser):
         encoding: str = 'utf-8',
         enum_field_as_literal: Optional[LiteralType] = None,
         set_default_enum_member: bool = False,
+        use_subclass_enum: bool = False,
         strict_nullable: bool = False,
         use_generic_container_types: bool = False,
         enable_faux_immutability: bool = False,
@@ -182,6 +183,7 @@ class OpenAPIParser(JsonSchemaParser):
         http_ignore_tls: bool = False,
         use_annotated: bool = False,
         use_non_positive_negative_number_constrained_types: bool = False,
+        original_field_name_delimiter: Optional[str] = None,
     ):
         super().__init__(
             source=source,
@@ -210,6 +212,7 @@ class OpenAPIParser(JsonSchemaParser):
             encoding=encoding,
             enum_field_as_literal=enum_field_as_literal,
             set_default_enum_member=set_default_enum_member,
+            use_subclass_enum=use_subclass_enum,
             strict_nullable=strict_nullable,
             use_generic_container_types=use_generic_container_types,
             enable_faux_immutability=enable_faux_immutability,
@@ -226,6 +229,7 @@ class OpenAPIParser(JsonSchemaParser):
             http_ignore_tls=http_ignore_tls,
             use_annotated=use_annotated,
             use_non_positive_negative_number_constrained_types=use_non_positive_negative_number_constrained_types,
+            original_field_name_delimiter=original_field_name_delimiter,
         )
         self.open_api_scopes: List[OpenAPIScope] = openapi_scopes or [
             OpenAPIScope.Schemas

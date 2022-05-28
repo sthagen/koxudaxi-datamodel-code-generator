@@ -131,10 +131,12 @@ class FieldNameResolver:
         aliases: Optional[Mapping[str, str]] = None,
         snake_case_field: bool = False,
         empty_field_name: Optional[str] = None,
+        original_delimiter: Optional[str] = None,
     ):
         self.aliases: Mapping[str, str] = {} if aliases is None else {**aliases}
         self.empty_field_name: str = empty_field_name or '_'
         self.snake_case_field = snake_case_field
+        self.original_delimiter: Optional[str] = original_delimiter
 
     @classmethod
     def _validate_field_name(cls, field_name: str) -> bool:
@@ -144,16 +146,25 @@ class FieldNameResolver:
         self,
         name: str,
         excludes: Optional[Set[str]] = None,
+        ignore_snake_case_field: bool = False,
     ) -> str:
         if not name:
             name = self.empty_field_name
         if name[0] == '#':
             name = name[1:] or self.empty_field_name
+
+        if (
+            self.snake_case_field
+            and not ignore_snake_case_field
+            and self.original_delimiter is not None
+        ):
+            name = snake_to_upper_camel(name, delimiter=self.original_delimiter)
+
         # TODO: when first character is a number
         name = re.sub(r'\W', '_', name)
         if name[0].isnumeric():
             name = f'field_{name}'
-        if self.snake_case_field:
+        if self.snake_case_field and not ignore_snake_case_field:
             name = camel_to_snake(name)
         count = 1
         if iskeyword(name) or not self._validate_field_name(name):
@@ -230,6 +241,7 @@ class ModelResolver:
         field_name_resolver_classes: Optional[
             Dict[ModelType, Type[FieldNameResolver]]
         ] = None,
+        original_field_name_delimiter: Optional[str] = None,
     ) -> None:
         self.references: Dict[str, Reference] = {}
         self._current_root: Sequence[str] = []
@@ -253,6 +265,7 @@ class ModelResolver:
                 aliases=aliases,
                 snake_case_field=snake_case_field,
                 empty_field_name=empty_field_name,
+                original_delimiter=original_field_name_delimiter,
             )
             for k, v in merged_field_name_resolver_classes.items()
         }
@@ -492,7 +505,9 @@ class ModelResolver:
 
     def default_class_name_generator(self, name: str) -> str:
         # TODO: create a validate for class name
-        name = self.field_name_resolvers[ModelType.CLASS].get_valid_name(name)
+        name = self.field_name_resolvers[ModelType.CLASS].get_valid_name(
+            name, ignore_snake_case_field=True
+        )
         return snake_to_upper_camel(name)
 
     def get_class_name(
@@ -508,7 +523,9 @@ class ModelResolver:
             split_name = name.split('.')
             prefix = '.'.join(
                 # TODO: create a validate for class name
-                self.field_name_resolvers[ModelType.CLASS].get_valid_name(n)
+                self.field_name_resolvers[ModelType.CLASS].get_valid_name(
+                    n, ignore_snake_case_field=True
+                )
                 for n in split_name[:-1]
             )
             prefix += '.'
@@ -583,13 +600,13 @@ def get_singular_name(name: str, suffix: str = SINGULAR_NAME_SUFFIX) -> str:
 
 
 @lru_cache()
-def snake_to_upper_camel(word: str) -> str:
+def snake_to_upper_camel(word: str, delimiter: str = '_') -> str:
     prefix = ''
-    if word.startswith('_'):
+    if word.startswith(delimiter):
         prefix = '_'
         word = word[1:]
 
-    return prefix + ''.join(x[0].upper() + x[1:] for x in word.split('_') if x)
+    return prefix + ''.join(x[0].upper() + x[1:] for x in word.split(delimiter) if x)
 
 
 def is_url(ref: str) -> bool:
