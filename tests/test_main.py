@@ -3785,3 +3785,56 @@ def test_openapi_special_yaml_keywords():
 
     with pytest.raises(SystemExit):
         main()
+
+
+@freeze_time('2019-07-26')
+def test_main_jsonschema_boolean_property():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'boolean_property.json'),
+                '--output',
+                str(output_file),
+                '--input-file-type',
+                'jsonschema',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH / 'main_jsonschema_boolean_property' / 'output.py'
+            ).read_text()
+        )
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_jsonschema_modular_default_enum_member(
+    tmpdir_factory: TempdirFactory,
+) -> None:
+
+    output_directory = Path(tmpdir_factory.mktemp('output'))
+
+    input_filename = JSON_SCHEMA_DATA_PATH / 'modular_default_enum_member'
+    output_path = output_directory / 'model'
+
+    with freeze_time(TIMESTAMP):
+        main(
+            [
+                '--input',
+                str(input_filename),
+                '--output',
+                str(output_path),
+                '--set-default-enum-member',
+            ]
+        )
+    main_modular_dir = (
+        EXPECTED_MAIN_PATH / 'main_jsonschema_modular_default_enum_member'
+    )
+    for path in main_modular_dir.rglob('*.py'):
+        result = output_path.joinpath(path.relative_to(main_modular_dir)).read_text()
+        assert result == path.read_text()
