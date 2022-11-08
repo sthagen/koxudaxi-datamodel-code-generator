@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 from collections import defaultdict
 from contextlib import contextmanager
@@ -50,14 +52,14 @@ class _BaseModel(BaseModel):
     def dict(
         self,
         *,
-        include: Union['AbstractSetIntStr', 'MappingIntStrAny'] = None,
-        exclude: Union['AbstractSetIntStr', 'MappingIntStrAny'] = None,
+        include: Union[AbstractSetIntStr, MappingIntStrAny] = None,
+        exclude: Union[AbstractSetIntStr, MappingIntStrAny] = None,
         by_alias: bool = False,
         skip_defaults: bool = None,
         exclude_unset: bool = False,
         exclude_defaults: bool = False,
         exclude_none: bool = False,
-    ) -> 'DictStrAny':
+    ) -> DictStrAny:
         return super().dict(
             include=include,
             exclude=set(exclude or ()) | self._exclude_fields,
@@ -76,7 +78,7 @@ class Reference(_BaseModel):
     loaded: bool = True
     source: Optional[Any] = None
     children: List[Any] = []
-    _exclude_fields: ClassVar = {'children'}
+    _exclude_fields: ClassVar[Set[str]] = {'children'}
 
     @validator('original_name')
     def validate_original_name(cls, v: Any, values: Dict[str, Any]) -> str:
@@ -197,7 +199,19 @@ class PydanticFieldNameResolver(FieldNameResolver):
 
 
 class EnumFieldNameResolver(FieldNameResolver):
-    pass
+    def get_valid_name(
+        self,
+        name: str,
+        excludes: Optional[Set[str]] = None,
+        ignore_snake_case_field: bool = False,
+        upper_camel: bool = False,
+    ) -> str:
+        return super().get_valid_name(
+            name='mro_' if name == 'mro' else name,
+            excludes=excludes,
+            ignore_snake_case_field=ignore_snake_case_field,
+            upper_camel=upper_camel,
+        )
 
 
 class ModelType(Enum):
