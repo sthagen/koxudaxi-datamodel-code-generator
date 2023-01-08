@@ -421,6 +421,20 @@ def test_openapi_parser_parse_nested_oneof():
     )
 
 
+def test_openapi_parser_parse_allof_ref():
+    parser = OpenAPIParser(
+        Path(DATA_PATH / 'allof_same_prefix_with_ref.yaml'),
+    )
+    assert (
+        parser.parse()
+        == (
+            EXPECTED_OPEN_API_PATH
+            / 'openapi_parser_parse_allof_same_prefix_with_ref'
+            / 'output.py'
+        ).read_text()
+    )
+
+
 def test_openapi_parser_parse_allof():
     parser = OpenAPIParser(
         Path(DATA_PATH / 'allof.yaml'),
@@ -574,66 +588,77 @@ def test_openapi_model_resolver():
     }
     assert references == {
         'api.yaml#/components/schemas/Error': {
+            'duplicate_name': None,
             'loaded': True,
             'name': 'Error',
             'original_name': 'Error',
             'path': 'api.yaml#/components/schemas/Error',
         },
         'api.yaml#/components/schemas/Event': {
+            'duplicate_name': None,
             'loaded': True,
             'name': 'Event',
             'original_name': 'Event',
             'path': 'api.yaml#/components/schemas/Event',
         },
         'api.yaml#/components/schemas/Id': {
+            'duplicate_name': None,
             'loaded': True,
             'name': 'Id',
             'original_name': 'Id',
             'path': 'api.yaml#/components/schemas/Id',
         },
         'api.yaml#/components/schemas/Pet': {
+            'duplicate_name': None,
             'loaded': True,
             'name': 'Pet',
             'original_name': 'Pet',
             'path': 'api.yaml#/components/schemas/Pet',
         },
         'api.yaml#/components/schemas/Pets': {
+            'duplicate_name': None,
             'loaded': True,
             'name': 'Pets',
             'original_name': 'Pets',
             'path': 'api.yaml#/components/schemas/Pets',
         },
         'api.yaml#/components/schemas/Result': {
+            'duplicate_name': None,
             'loaded': True,
             'name': 'Result',
             'original_name': 'Result',
             'path': 'api.yaml#/components/schemas/Result',
         },
         'api.yaml#/components/schemas/Rules': {
+            'duplicate_name': None,
             'loaded': True,
             'name': 'Rules',
             'original_name': 'Rules',
             'path': 'api.yaml#/components/schemas/Rules',
         },
         'api.yaml#/components/schemas/Users': {
+            'duplicate_name': None,
             'loaded': True,
             'name': 'Users',
             'original_name': 'Users',
             'path': 'api.yaml#/components/schemas/Users',
         },
         'api.yaml#/components/schemas/Users/Users/0#-datamodel-code-generator-#-object-#-special-#': {
+            'duplicate_name': None,
             'loaded': True,
             'name': 'User',
             'original_name': 'Users',
             'path': 'api.yaml#/components/schemas/Users/Users/0#-datamodel-code-generator-#-object-#-special-#',
         },
         'api.yaml#/components/schemas/apis': {
+            'duplicate_name': None,
             'loaded': True,
             'name': 'Apis',
             'original_name': 'apis',
             'path': 'api.yaml#/components/schemas/apis',
         },
         'api.yaml#/components/schemas/apis/apis/0#-datamodel-code-generator-#-object-#-special-#': {
+            'duplicate_name': None,
             'loaded': True,
             'name': 'Api',
             'original_name': 'apis',

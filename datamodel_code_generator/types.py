@@ -64,6 +64,13 @@ class Modular(Protocol):
         raise NotImplementedError
 
 
+@runtime_checkable
+class Nullable(Protocol):
+    @property
+    def nullable(self) -> bool:
+        raise NotImplementedError
+
+
 class DataType(_BaseModel):
     class Config:
         extra = 'forbid'
@@ -133,16 +140,21 @@ class DataType(_BaseModel):
             | ({self.reference.path} if self.reference else set())
         )
 
-    def replace_reference(self, reference: Reference) -> None:
+    def replace_reference(self, reference: Optional[Reference]) -> None:
         if not self.reference:  # pragma: no cover
             raise Exception(
                 f'`{self.__class__.__name__}.replace_reference()` can\'t be called'
                 f' when `reference` field is empty.'
             )
 
-        self.reference.children.remove(self)
+        while self in self.reference.children:
+            self.reference.children.remove(self)
         self.reference = reference
-        reference.children.append(self)
+        if reference:
+            reference.children.append(self)
+
+    def remove_reference(self) -> None:
+        self.replace_reference(None)
 
     @property
     def module_name(self) -> Optional[str]:
@@ -262,6 +274,10 @@ class DataType(_BaseModel):
                     # TODO support strict Any
                     # type_ = 'Any'
                     type_ = ''
+        if self.reference:
+            source = self.reference.source
+            if isinstance(source, Nullable) and source.nullable:
+                self.is_optional = True
         if self.reference and self.python_version == PythonVersion.PY_36:
             type_ = f"'{type_}'"
         if self.is_list:
@@ -397,3 +413,21 @@ class DataTypeManager(ABC):
         return self.data_type.from_import(
             Import.from_full_path(full_path), is_custom_type=is_custom_type
         )
+
+    def get_data_type_from_value(self, value: Any) -> DataType:
+        type_: Optional[Types] = None
+        if isinstance(value, str):
+            type_ = Types.string
+        elif isinstance(value, bool):
+            type_ = Types.boolean
+        elif isinstance(value, int):
+            type_ = Types.integer
+        elif isinstance(value, float):
+            type_ = Types.float
+        elif isinstance(value, dict):
+            return self.data_type.from_import(IMPORT_DICT)
+        elif isinstance(value, list):
+            return self.data_type.from_import(IMPORT_LIST)
+        else:
+            type_ = Types.any
+        return self.get_data_type(type_)

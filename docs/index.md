@@ -56,9 +56,11 @@ usage: datamodel-codegen [-h] [--input INPUT] [--url URL]
                          [--disable-timestamp] [--use-standard-collections]
                          [--use-generic-container-types]
                          [--use-schema-description] [--use-field-description] [--reuse-model]
-                         [--enum-field-as-literal {all,one}]
+                         [--collapse-root-models] [--enum-field-as-literal {all,one}]
                          [--set-default-enum-member]
                          [--empty-enum-field-name EMPTY_ENUM_FIELD_NAME]
+                         [--capitalise-enum-members]
+                         [--special-field-name-prefix SPECIAL_FIELD_NAME_PREFIX]
                          [--use-subclass-enum]
                          [--class-name CLASS_NAME] [--use-title-as-name]
                          [--custom-template-dir CUSTOM_TEMPLATE_DIR]
@@ -130,6 +132,9 @@ optional arguments:
                         Use schema description to populate field docstring
   --reuse-model         Re-use models on the field when a module has the model
                         with the same content
+  --collapse-root-models
+                        Models generated with a root-type field will be
+                        merged into the models using that root-type model
   --enum-field-as-literal {all,one}
                         Parse enum field as literal. all: all enum field type
                         are Literal. one: field type is Literal when an enum
@@ -137,6 +142,9 @@ optional arguments:
   --set-default-enum-member
                         Set enum members as default values for enum field
   --empty-enum-field-name EMPTY_ENUM_FIELD_NAME
+  --capitalise-enum-members
+                        Capitalize field names on enum
+  --special-field-name-prefix SPECIAL_FIELD_NAME_PREFIX
                         Set field name when enum value is empty (default: `_`)
   --use-subclass-enum   Define Enum class as subclass with field type when enum has
                         type (int, float, bytes, str)

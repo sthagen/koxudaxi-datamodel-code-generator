@@ -265,6 +265,16 @@ arg_parser.add_argument(
     default=None,
 )
 
+
+arg_parser.add_argument(
+    "--collapse-root-models",
+    action='store_true',
+    default=False,
+    help="Models generated with a root-type field will be merged"
+    "into the models using that root-type model",
+)
+
+
 arg_parser.add_argument(
     '--enum-field-as-literal',
     help='Parse enum field as literal. '
@@ -284,6 +294,20 @@ arg_parser.add_argument(
 arg_parser.add_argument(
     '--empty-enum-field-name',
     help='Set field name when enum value is empty (default:  `_`)',
+    default=None,
+)
+
+
+arg_parser.add_argument(
+    '--capitalise-enum-members',
+    help='Capitalize field names on enum',
+    action='store_true',
+    default=None,
+)
+
+arg_parser.add_argument(
+    '--special-field-name-prefix',
+    help='Set field name prefix when first character can\'t be used as Python field name (default:  `field`)',
     default=None,
 )
 
@@ -495,6 +519,9 @@ class Config(BaseModel):
     use_non_positive_negative_number_constrained_types: bool = False
     original_field_name_delimiter: Optional[str] = None
     use_double_quotes: bool = False
+    collapse_root_models: bool = False
+    special_field_name_prefix: Optional[str] = None
+    capitalise_enum_members: bool = False
 
     def merge_args(self, args: Namespace) -> None:
         set_args = {
@@ -640,7 +667,10 @@ def main(args: Optional[Sequence[str]] = None) -> Exit:
             use_non_positive_negative_number_constrained_types=config.use_non_positive_negative_number_constrained_types,
             original_field_name_delimiter=config.original_field_name_delimiter,
             use_double_quotes=config.use_double_quotes,
+            collapse_root_models=config.collapse_root_models,
             use_union_operator=config.use_union_operator,
+            special_field_name_prefix=config.special_field_name_prefix,
+            capitalise_enum_members=config.capitalise_enum_members,
         )
         return Exit.OK
     except InvalidClassNameError as e:
