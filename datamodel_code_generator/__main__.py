@@ -10,6 +10,7 @@ import json
 import locale
 import signal
 import sys
+import warnings
 from argparse import ArgumentParser, FileType, Namespace
 from collections import defaultdict
 from enum import IntEnum
@@ -91,7 +92,7 @@ arg_parser.add_argument(
     '--http-ignore-tls',
     help="Disable verification of the remote host's TLS certificate",
     action='store_true',
-    default=False,
+    default=None,
 )
 
 arg_parser.add_argument(
@@ -104,7 +105,7 @@ arg_parser.add_argument(
     help='Scopes of OpenAPI model generation (default: schemas)',
     choices=[o.value for o in OpenAPIScope],
     nargs='+',
-    default=[OpenAPIScope.Schemas.value],
+    default=None,
 )
 arg_parser.add_argument('--output', help='Output file (default: stdout)')
 
@@ -259,6 +260,12 @@ arg_parser.add_argument(
 )
 
 arg_parser.add_argument(
+    '--use-default-kwarg',
+    action='store_true',
+    help="Use `default=` instead of a positional argument for Fields that have default values.",
+)
+
+arg_parser.add_argument(
     '--reuse-model',
     help='Re-use models on the field when a module has the model with the same content',
     action='store_true',
@@ -269,7 +276,7 @@ arg_parser.add_argument(
 arg_parser.add_argument(
     "--collapse-root-models",
     action='store_true',
-    default=False,
+    default=None,
     help="Models generated with a root-type field will be merged"
     "into the models using that root-type model",
 )
@@ -312,10 +319,17 @@ arg_parser.add_argument(
 )
 
 arg_parser.add_argument(
+    '--remove-special-field-name-prefix',
+    help='Remove field name prefix when first character can\'t be used as Python field name',
+    action='store_true',
+    default=None,
+)
+
+arg_parser.add_argument(
     '--use-subclass-enum',
     help='Define Enum class as subclass with field type when enum has type (int, float, bytes, str)',
     action='store_true',
-    default=False,
+    default=None,
 )
 
 arg_parser.add_argument(
@@ -361,7 +375,7 @@ arg_parser.add_argument(
 arg_parser.add_argument(
     "--use-double-quotes",
     action='store_true',
-    default=False,
+    default=None,
     help="Model generated with double quotes. Single quotes or "
     "your black config skip_string_normalization value will be used without this option.",
 )
@@ -369,11 +383,14 @@ arg_parser.add_argument(
 arg_parser.add_argument(
     '--encoding',
     help=f'The encoding of input and output (default: {DEFAULT_ENCODING})',
-    default=DEFAULT_ENCODING,
+    default=None,
 )
 
 arg_parser.add_argument(
     '--debug', help='show debug message', action='store_true', default=None
+)
+arg_parser.add_argument(
+    '--disable-warnings', help='disable warnings', action='store_true', default=None
 )
 arg_parser.add_argument('--version', help='show version', action='store_true')
 
@@ -462,14 +479,15 @@ class Config(BaseModel):
     @classmethod
     def _validate_use_union_operator(cls, values: Dict[str, Any]) -> Dict[str, Any]:
         if values.get('use_union_operator'):
-            target_python_version: PythonVersion = values.get(
-                'target_python_version', PythonVersion.PY_37
+            target_python_version: PythonVersion = PythonVersion(
+                values.get('target_python_version', PythonVersion.PY_37.value)
             )
             if not target_python_version.has_union_operator:
-                warn(
-                    f"`--use-union-operator` can not be used with `--target-python_version` {target_python_version.value}.\n"
-                    f"`--target-python_version` {PythonVersion.PY_310.value} will be used."
-                )
+                if not values.get('disable_warnings'):
+                    warn(
+                        f"`--use-union-operator` can not be used with `--target-python_version` {target_python_version.value}.\n"
+                        f"`--target-python_version` {PythonVersion.PY_310.value} will be used."
+                    )
                 values['target_python_version'] = PythonVersion.PY_310
         return values
 
@@ -477,6 +495,7 @@ class Config(BaseModel):
     input_file_type: InputFileType = InputFileType.Auto
     output: Optional[Path]
     debug: bool = False
+    disable_warnings: bool = False
     target_python_version: PythonVersion = PythonVersion.PY_37
     base_class: str = DEFAULT_BASE_CLASS
     custom_template_dir: Optional[Path]
@@ -495,8 +514,9 @@ class Config(BaseModel):
     use_standard_collections: bool = False
     use_schema_description: bool = False
     use_field_description: bool = False
+    use_default_kwarg: bool = True
     reuse_model: bool = False
-    encoding: str = 'utf-8'
+    encoding: str = DEFAULT_ENCODING
     enum_field_as_literal: Optional[LiteralType] = None
     set_default_enum_member: bool = False
     use_subclass_enum: bool = False
@@ -510,7 +530,7 @@ class Config(BaseModel):
     empty_enum_field_name: Optional[str] = None
     field_extra_keys: Optional[Set[str]] = None
     field_include_all_keys: bool = False
-    openapi_scopes: Optional[List[OpenAPIScope]] = None
+    openapi_scopes: Optional[List[OpenAPIScope]] = [OpenAPIScope.Schemas]
     wrap_string_literal: Optional[bool] = None
     use_title_as_name: bool = False
     http_headers: Optional[Sequence[Tuple[str, str]]] = None
@@ -521,6 +541,7 @@ class Config(BaseModel):
     use_double_quotes: bool = False
     collapse_root_models: bool = False
     special_field_name_prefix: Optional[str] = None
+    remove_special_field_name_prefix: bool = False
     capitalise_enum_members: bool = False
 
     def merge_args(self, args: Namespace) -> None:
@@ -591,6 +612,8 @@ def main(args: Optional[Sequence[str]] = None) -> Exit:
     if config.debug:  # pragma: no cover
         enable_debug_message()
 
+    if config.disable_warnings:
+        warnings.simplefilter('ignore')
     extra_template_data: Optional[DefaultDict[str, Dict[str, Any]]]
     if config.extra_template_data is None:
         extra_template_data = None
@@ -645,6 +668,7 @@ def main(args: Optional[Sequence[str]] = None) -> Exit:
             use_standard_collections=config.use_standard_collections,
             use_schema_description=config.use_schema_description,
             use_field_description=config.use_field_description,
+            use_default_kwarg=config.use_default_kwarg,
             reuse_model=config.reuse_model,
             encoding=config.encoding,
             enum_field_as_literal=config.enum_field_as_literal,
@@ -670,6 +694,7 @@ def main(args: Optional[Sequence[str]] = None) -> Exit:
             collapse_root_models=config.collapse_root_models,
             use_union_operator=config.use_union_operator,
             special_field_name_prefix=config.special_field_name_prefix,
+            remove_special_field_name_prefix=config.remove_special_field_name_prefix,
             capitalise_enum_members=config.capitalise_enum_members,
         )
         return Exit.OK
