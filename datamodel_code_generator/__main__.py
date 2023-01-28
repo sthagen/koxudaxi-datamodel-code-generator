@@ -225,6 +225,13 @@ arg_parser.add_argument(
 )
 
 arg_parser.add_argument(
+    '--enable-version-header',
+    help='Enable package version on file headers',
+    action='store_true',
+    default=None,
+)
+
+arg_parser.add_argument(
     '--use-standard-collections',
     help='Use standard collections for type hinting (list, dict)',
     action='store_true',
@@ -272,6 +279,12 @@ arg_parser.add_argument(
     default=None,
 )
 
+arg_parser.add_argument(
+    '--keep-model-order',
+    help='Keep generated models\' order',
+    action='store_true',
+    default=None,
+)
 
 arg_parser.add_argument(
     "--collapse-root-models",
@@ -506,6 +519,7 @@ class Config(BaseModel):
     strip_default_none: bool = False
     aliases: Optional[TextIOBase]
     disable_timestamp: bool = False
+    enable_version_header: bool = False
     allow_population_by_field_name: bool = False
     allow_extra_fields: bool = False
     use_default: bool = False
@@ -543,6 +557,7 @@ class Config(BaseModel):
     special_field_name_prefix: Optional[str] = None
     remove_special_field_name_prefix: bool = False
     capitalise_enum_members: bool = False
+    keep_model_order: bool = False
 
     def merge_args(self, args: Namespace) -> None:
         set_args = {
@@ -660,6 +675,7 @@ def main(args: Optional[Sequence[str]] = None) -> Exit:
             extra_template_data=extra_template_data,
             aliases=aliases,
             disable_timestamp=config.disable_timestamp,
+            enable_version_header=config.enable_version_header,
             allow_population_by_field_name=config.allow_population_by_field_name,
             allow_extra_fields=config.allow_extra_fields,
             apply_default_values_for_required_fields=config.use_default,
@@ -696,6 +712,7 @@ def main(args: Optional[Sequence[str]] = None) -> Exit:
             special_field_name_prefix=config.special_field_name_prefix,
             remove_special_field_name_prefix=config.remove_special_field_name_prefix,
             capitalise_enum_members=config.capitalise_enum_members,
+            keep_model_order=config.keep_model_order,
         )
         return Exit.OK
     except InvalidClassNameError as e:

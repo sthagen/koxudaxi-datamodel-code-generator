@@ -58,6 +58,34 @@ def test_main_inheritance_forward_ref():
 
 
 @freeze_time('2019-07-26')
+def test_main_inheritance_forward_ref_keep_model_order():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        shutil.copy(DATA_PATH / 'pyproject.toml', Path(output_dir) / 'pyproject.toml')
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'inheritance_forward_ref.json'),
+                '--output',
+                str(output_file),
+                '--keep-model-order',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH
+                / 'main_inheritance_forward_ref_keep_model_order'
+                / 'output.py'
+            ).read_text()
+        )
+
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
 def test_main():
     with TemporaryDirectory() as output_dir:
         output_file: Path = Path(output_dir) / 'output.py'
@@ -903,6 +931,29 @@ def test_disable_timestamp():
         assert (
             output_file.read_text()
             == (EXPECTED_MAIN_PATH / 'disable_timestamp' / 'output.py').read_text()
+        )
+
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_enable_version_header():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(OPEN_API_DATA_PATH / 'api.yaml'),
+                '--output',
+                str(output_file),
+                '--enable-version-header',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (EXPECTED_MAIN_PATH / 'enable_version_header' / 'output.py').read_text()
         )
 
     with pytest.raises(SystemExit):
@@ -3524,33 +3575,6 @@ def test_main_jsonschema_custom_type_path():
 
 
 @freeze_time('2019-07-26')
-def test_main_jsonschema_unsupported_parent_class():
-    with TemporaryDirectory() as output_dir:
-        output_file: Path = Path(output_dir) / 'output.py'
-        return_code: Exit = main(
-            [
-                '--input',
-                str(JSON_SCHEMA_DATA_PATH / 'all_of_unsupported_parent_class.json'),
-                '--output',
-                str(output_file),
-                '--input-file-type',
-                'jsonschema',
-            ]
-        )
-        assert return_code == Exit.OK
-        assert (
-            output_file.read_text()
-            == (
-                EXPECTED_MAIN_PATH
-                / 'main_jsonschema_unsupported_parent_class'
-                / 'output.py'
-            ).read_text()
-        )
-    with pytest.raises(SystemExit):
-        main()
-
-
-@freeze_time('2019-07-26')
 def test_main_openapi_body_and_parameters():
     with TemporaryDirectory() as output_dir:
         output_file: Path = Path(output_dir) / 'output.py'
@@ -4636,3 +4660,55 @@ def test_main_disable_warnings(capsys: CaptureFixture):
         captured = capsys.readouterr()
         assert return_code == Exit.OK
         assert captured.err == ''
+
+
+@freeze_time('2019-07-26')
+def test_main_openapi_discriminator():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(OPEN_API_DATA_PATH / 'discriminator.yaml'),
+                '--output',
+                str(output_file),
+                '--input-file-type',
+                'openapi',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH / 'main_openapi_discriminator' / 'output.py'
+            ).read_text()
+        )
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_jsonschema_pattern_properties_by_reference():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'pattern_properties_by_reference.json'),
+                '--output',
+                str(output_file),
+                '--input-file-type',
+                'jsonschema',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH
+                / 'main_jsonschema_pattern_properties_by_reference'
+                / 'output.py'
+            ).read_text()
+        )
+    with pytest.raises(SystemExit):
+        main()

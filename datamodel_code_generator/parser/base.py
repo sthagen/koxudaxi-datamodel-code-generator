@@ -258,15 +258,15 @@ def _find_field(
         for field_ in model_.fields:
             if field_.original_name == original_name:
                 return field_, []
-        return None, _find_base_classes(model_)
+        return None, _find_base_classes(model_)  # pragma: no cover
 
     for model in models:
         field, base_models = _find_field_and_base_classes(model)
         if field:
             return field
-        models.extend(base_models)
+        models.extend(base_models)  # pragma: no cover
 
-    return None
+    return None  # pragma: no cover
 
 
 def _copy_data_types(data_types: List[DataType]) -> List[DataType]:
@@ -362,6 +362,7 @@ class Parser(ABC):
         special_field_name_prefix: Optional[str] = None,
         remove_special_field_name_prefix: bool = False,
         capitalise_enum_members: bool = False,
+        keep_model_order: bool = False,
     ):
         self.data_type_manager: DataTypeManager = data_type_manager_type(
             python_version=target_python_version,
@@ -467,6 +468,7 @@ class Parser(ABC):
         self.allow_responses_without_content = allow_responses_without_content
         self.collapse_root_models = collapse_root_models
         self.capitalise_enum_members = capitalise_enum_members
+        self.keep_model_order = keep_model_order
 
     @property
     def iter_source(self) -> Iterator[Source]:
@@ -474,7 +476,12 @@ class Parser(ABC):
             yield Source(path=Path(), text=self.source)
         elif isinstance(self.source, Path):  # pragma: no cover
             if self.source.is_dir():
-                for path in self.source.rglob('*'):
+                paths = (
+                    sorted(self.source.rglob('*'))
+                    if self.keep_model_order
+                    else self.source.rglob('*')
+                )
+                for path in paths:
                     if path.is_file():
                         yield Source.from_path(path, self.base_path, self.encoding)
             else:
@@ -516,6 +523,10 @@ class Parser(ABC):
         raise NotImplementedError
 
     def __delete_duplicate_models(self, models: List[DataModel]) -> None:
+        model_class_names: Dict[str, DataModel] = {}
+        model_to_duplicate_models: DefaultDict[
+            DataModel, List[DataModel]
+        ] = defaultdict(list)
         for model in models[:]:
             if isinstance(model, self.data_model_root_type):
                 root_data_type = model.fields[0].data_type
@@ -551,6 +562,41 @@ class Parser(ABC):
                         if not child.base_classes:
                             child.set_base_class()
 
+            class_name = model.duplicate_class_name or model.class_name
+            if class_name in model_class_names:
+                model_key = tuple(
+                    to_hashable(v)
+                    for v in (
+                        model.base_classes,
+                        model.extra_template_data,
+                        model.fields,
+                        model.description,
+                        model.default,
+                        model.decorators,
+                    )
+                )
+                original_model = model_class_names[class_name]
+                original_model_key = tuple(
+                    to_hashable(v)
+                    for v in (
+                        original_model.base_classes,
+                        original_model.extra_template_data,
+                        original_model.fields,
+                        original_model.description,
+                        original_model.default,
+                        original_model.decorators,
+                    )
+                )
+                if model_key == original_model_key:
+                    model_to_duplicate_models[original_model].append(model)
+                    continue
+            model_class_names[class_name] = model
+        for model, duplicate_models in model_to_duplicate_models.items():
+            for duplicate_model in duplicate_models:
+                for child in duplicate_model.reference.children[:]:
+                    child.replace_reference(model.reference)
+                models.remove(duplicate_model)
+
     @classmethod
     def __replace_duplicate_name_in_module(cls, models: List[DataModel]) -> None:
         scoped_model_resolver = ModelResolver(
@@ -566,13 +612,15 @@ class Parser(ABC):
             ).name
             if class_name != generated_name:
                 model.class_name = generated_name
-            model_names[model.name] = model
+            model_names[model.class_name] = model
 
         for model in models:
             duplicate_name = model.duplicate_class_name
             # check only first desired name
             if duplicate_name and duplicate_name not in model_names:
+                del model_names[model.class_name]
                 model.class_name = duplicate_name
+                model_names[duplicate_name] = model
 
     @classmethod
     def __change_from_import(
@@ -829,21 +877,22 @@ class Parser(ABC):
             if isinstance(model, (Enum, self.data_model_root_type)):
                 continue
             for index, model_field in enumerate(model.fields[:]):
+                data_type = model_field.data_type
                 if (
                     not model_field.original_name
-                    or not model_field.required
-                    and (
-                        model_field.data_type.data_types
-                        or model_field.data_type.reference
-                        or model_field.data_type.type
-                    )
+                    or data_type.data_types
+                    or data_type.reference
+                    or data_type.type
+                    or data_type.literals
+                    or data_type.dict_key
                 ):
                     continue
 
                 original_field = _find_field(
                     model_field.original_name, _find_base_classes(model)
                 )
-                if not original_field:
+                if not original_field:  # pragma: no cover
+                    model.fields.remove(model_field)
                     continue
                 copied_original_field = original_field.copy()
                 if original_field.data_type.reference:
@@ -865,6 +914,37 @@ class Parser(ABC):
                 copied_original_field.required = True
                 model.fields.insert(index, copied_original_field)
                 model.fields.remove(model_field)
+
+    def __sort_models(
+        self,
+        models: List[DataModel],
+        imports: Imports,
+    ) -> None:
+        if not self.keep_model_order:
+            return
+
+        models.sort(key=lambda x: x.class_name)
+
+        imported = set(i for v in imports.values() for i in v)
+        model_class_name_baseclasses: Dict[DataModel, Tuple[str, Set[str]]] = {}
+        for model in models:
+            class_name = model.class_name
+            model_class_name_baseclasses[model] = class_name, {
+                b.type_hint for b in model.base_classes if b.reference
+            } - {class_name}
+
+        changed: bool = True
+        while changed:
+            changed = False
+            resolved = imported.copy()
+            for i in range(len(models) - 1):
+                model = models[i]
+                class_name, baseclasses = model_class_name_baseclasses[model]
+                if not baseclasses - resolved:
+                    resolved.add(class_name)
+                    continue
+                models[i], models[i + 1] = models[i + 1], model
+                changed = True
 
     def parse(
         self,
@@ -943,6 +1023,7 @@ class Parser(ABC):
 
             imports = Imports()
             scoped_model_resolver = ModelResolver()
+
             self.__change_from_import(models, imports, scoped_model_resolver, init)
             self.__extract_inherited_enum(models)
             self.__set_reference_default_value_to_field(models)
@@ -950,6 +1031,7 @@ class Parser(ABC):
             self.__collapse_root_models(models, unused_models)
             self.__set_default_enum_member(models, imports, scoped_model_resolver, init)
             self.__override_required_field(models)
+            self.__sort_models(models, imports)
 
             processed_models.append(Processed(module, models, init, imports))
 

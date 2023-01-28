@@ -92,6 +92,26 @@ def load_yaml_from_path(path: Path, encoding: str) -> Any:
         return load_yaml(f)
 
 
+if TYPE_CHECKING:
+
+    def get_version() -> str:
+        ...
+
+else:
+
+    def get_version() -> str:
+        package = "datamodel-code-generator"
+
+        try:
+            from importlib.metadata import version
+
+            return version(package)
+        except ImportError:
+            import pkg_resources
+
+            return pkg_resources.get_distribution(package).version
+
+
 def enable_debug_message() -> None:  # pragma: no cover
     pysnooper.tracer.DISABLED = False
 
@@ -214,6 +234,7 @@ def generate(
     strip_default_none: bool = False,
     aliases: Optional[Mapping[str, str]] = None,
     disable_timestamp: bool = False,
+    enable_version_header: bool = False,
     allow_population_by_field_name: bool = False,
     allow_extra_fields: bool = False,
     apply_default_values_for_required_fields: bool = False,
@@ -251,6 +272,7 @@ def generate(
     special_field_name_prefix: Optional[str] = None,
     remove_special_field_name_prefix: bool = False,
     capitalise_enum_members: bool = False,
+    keep_model_order: bool = False,
 ) -> None:
     remote_text_cache: DefaultPutDict[str, str] = DefaultPutDict()
     if isinstance(input_, str):
@@ -381,6 +403,7 @@ def generate(
         special_field_name_prefix=special_field_name_prefix,
         remove_special_field_name_prefix=remove_special_field_name_prefix,
         capitalise_enum_members=capitalise_enum_members,
+        keep_model_order=keep_model_order,
         **kwargs,
     )
 
@@ -418,6 +441,8 @@ def generate(
 #   filename:  {}'''
     if not disable_timestamp:
         header += f'\n#   timestamp: {timestamp}'
+    if enable_version_header:
+        header += f'\n#   version:   {get_version()}'
 
     file: Optional[IO[Any]]
     for path, body_and_filename in modules.items():

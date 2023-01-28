@@ -132,6 +132,11 @@ class JSONReference(_enum.Enum):
     URL = 'URL'
 
 
+class Discriminator(BaseModel):
+    propertyName: str
+    mapping: Optional[Dict[str, str]]
+
+
 class JsonSchemaObject(BaseModel):
     __constraint_fields__: Set[str] = {
         'exclusiveMinimum',
@@ -211,6 +216,7 @@ class JsonSchemaObject(BaseModel):
     id: Optional[str] = Field(default=None, alias='$id')
     custom_type_path: Optional[str] = Field(default=None, alias='customTypePath')
     extras: Dict[str, Any] = Field(alias=__extra_key__, default_factory=dict)
+    discriminator: Union[Discriminator, str, None]
 
     class Config:
         arbitrary_types_allowed = True
@@ -299,6 +305,7 @@ DEFAULT_FIELD_KEYS: Set[str] = {
     'discriminator',
     'title',
     'const',
+    'default_factory',
 }
 
 EXCLUDE_FIELD_KEYS = (set(JsonSchemaObject.__fields__) - DEFAULT_FIELD_KEYS) | {
@@ -369,6 +376,7 @@ class JsonSchemaParser(Parser):
         special_field_name_prefix: Optional[str] = None,
         remove_special_field_name_prefix: bool = False,
         capitalise_enum_members: bool = False,
+        keep_model_order: bool = False,
     ):
         super().__init__(
             source=source,
@@ -425,6 +433,7 @@ class JsonSchemaParser(Parser):
             special_field_name_prefix=special_field_name_prefix,
             remove_special_field_name_prefix=remove_special_field_name_prefix,
             capitalise_enum_members=capitalise_enum_members,
+            keep_model_order=keep_model_order,
         )
 
         self.remote_object_cache: DefaultPutDict[str, Dict[str, Any]] = DefaultPutDict()
@@ -499,7 +508,7 @@ class JsonSchemaParser(Parser):
             if self.strict_nullable and (field.has_default or required)
             else None,
             strip_default_none=self.strip_default_none,
-            extras={**self.get_field_extras(field)},
+            extras=self.get_field_extras(field),
             use_annotated=self.use_annotated,
             use_field_description=self.use_field_description,
             use_default_kwarg=self.use_default_kwarg,
@@ -797,6 +806,32 @@ class JsonSchemaParser(Parser):
         self.results.append(data_model_type)
         return self.data_type(reference=reference)
 
+    def parse_pattern_properties(
+        self,
+        name: str,
+        pattern_properties: Dict[str, JsonSchemaObject],
+        path: List[str],
+    ) -> DataType:
+        return self.data_type(
+            data_types=[
+                self.data_type(
+                    data_types=[
+                        self.parse_item(
+                            name,
+                            kv[1],
+                            get_special_path(f'patternProperties/{i}', path),
+                        )
+                    ],
+                    is_dict=True,
+                    dict_key=self.data_type_manager.get_data_type(
+                        Types.string,
+                        pattern=kv[0] if not self.field_constraints else None,
+                    ),
+                )
+                for i, kv in enumerate(pattern_properties.items())
+            ],
+        )
+
     def parse_item(
         self,
         name: str,
@@ -865,18 +900,8 @@ class JsonSchemaParser(Parser):
                 )
             elif item.patternProperties:
                 # support only single key dict.
-                return self.data_type(
-                    data_types=[
-                        self.data_type(
-                            data_types=[self.parse_item(name, v, object_path)],
-                            is_dict=True,
-                            dict_key=self.data_type_manager.get_data_type(
-                                Types.string,
-                                pattern=k if not self.field_constraints else None,
-                            ),
-                        )
-                        for k, v in item.patternProperties.items()
-                    ],
+                return self.parse_pattern_properties(
+                    name, item.patternProperties, object_path
                 )
             elif isinstance(item.additionalProperties, JsonSchemaObject):
                 return self.data_type(
@@ -1059,6 +1084,8 @@ class JsonSchemaParser(Parser):
                 data_type = self.data_type(data_types=data_types)
             else:  # pragma: no cover
                 data_type = data_types[0]
+        elif obj.patternProperties:
+            data_type = self.parse_pattern_properties(name, obj.patternProperties, path)
         elif obj.type:
             data_type = self.get_data_type(obj)
         else:
@@ -1371,7 +1398,11 @@ class JsonSchemaParser(Parser):
             self.parse_root_type(name, obj, path)
         elif obj.anyOf:
             self.parse_root_type(name, obj, path)
-        elif obj.is_object:
+        elif obj.properties:
+            self.parse_object(name, obj, path)
+        elif obj.patternProperties:
+            self.parse_root_type(name, obj, path)
+        elif obj.type == 'object':
             self.parse_object(name, obj, path)
         elif obj.enum:
             self.parse_enum(name, obj, path)
