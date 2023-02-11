@@ -108,6 +108,30 @@ def test_main():
 
 
 @freeze_time('2019-07-26')
+def test_main_pydantic_basemodel():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(OPEN_API_DATA_PATH / 'api.yaml'),
+                '--output',
+                str(output_file),
+                '--output-model-type',
+                'pydantic.BaseModel',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (EXPECTED_MAIN_PATH / 'main' / 'output.py').read_text()
+        )
+
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
 def test_main_base_class():
     with TemporaryDirectory() as output_dir:
         output_file: Path = Path(output_dir) / 'output.py'
@@ -569,6 +593,33 @@ def test_main_extra_template_data_config(capsys: CaptureFixture) -> None:
     assert not captured.err
 
 
+def test_main_custom_template_dir_old_style(capsys: CaptureFixture) -> None:
+    """Test main function with custom template directory."""
+
+    input_filename = OPEN_API_DATA_PATH / 'api.yaml'
+    custom_template_dir = DATA_PATH / 'templates_old_style'
+    extra_template_data = OPEN_API_DATA_PATH / 'extra_data.json'
+
+    with freeze_time(TIMESTAMP):
+        main(
+            [
+                '--input',
+                str(input_filename),
+                '--custom-template-dir',
+                str(custom_template_dir),
+                '--extra-template-data',
+                str(extra_template_data),
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert (
+        captured.out
+        == (EXPECTED_MAIN_PATH / 'main_custom_template_dir' / 'output.py').read_text()
+    )
+    assert not captured.err
+
+
 def test_main_custom_template_dir(capsys: CaptureFixture) -> None:
     """Test main function with custom template directory."""
 
@@ -613,7 +664,7 @@ def test_pyproject():
 
         with chdir(output_dir):
             output_file: Path = output_dir / 'output.py'
-            pyproject_toml_path = Path(DATA_PATH) / "project" / "pyproject.toml"
+            pyproject_toml_path = Path(DATA_PATH) / 'project' / 'pyproject.toml'
             pyproject_toml = (
                 pyproject_toml_path.read_text()
                 .replace('INPUT_PATH', get_path(OPEN_API_DATA_PATH / 'api.yaml'))
@@ -1197,7 +1248,7 @@ def test_main_invalid_model_name_failed(capsys):
         assert return_code == Exit.ERROR
         assert (
             captured.err
-            == 'title=\'with\' is invalid class name. You have to set `--class-name` option\n'
+            == "title='with' is invalid class name. You have to set `--class-name` option\n"
         )
 
 
@@ -1219,7 +1270,7 @@ def test_main_invalid_model_name_converted(capsys):
         assert return_code == Exit.ERROR
         assert (
             captured.err
-            == 'title=\'1Xyz\' is invalid class name. You have to set `--class-name` option\n'
+            == "title='1Xyz' is invalid class name. You have to set `--class-name` option\n"
         )
 
 
@@ -1753,6 +1804,34 @@ def test_main_invalid_enum_name():
         assert (
             output_file.read_text()
             == (EXPECTED_MAIN_PATH / 'main_invalid_enum_name' / 'output.py').read_text()
+        )
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_invalid_enum_name_snake_case_field():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'invalid_enum_name.json'),
+                '--output',
+                str(output_file),
+                '--input-file-type',
+                'jsonschema',
+                '--snake-case-field',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH
+                / 'main_invalid_enum_name_snake_case_field'
+                / 'output.py'
+            ).read_text()
         )
     with pytest.raises(SystemExit):
         main()
@@ -3475,6 +3554,8 @@ def test_main_jsonschema_field_extras_field_include_all_keys():
                 '--input-file-type',
                 'jsonschema',
                 '--field-include-all-keys',
+                '--field-extra-keys-without-x-prefix',
+                'x-repr',
             ]
         )
         assert return_code == Exit.OK
@@ -3505,6 +3586,8 @@ def test_main_jsonschema_field_extras_field_extra_keys():
                 '--field-extra-keys',
                 'key2',
                 'invalid-key-1',
+                '--field-extra-keys-without-x-prefix',
+                'x-repr',
             ]
         )
         assert return_code == Exit.OK
@@ -4098,7 +4181,6 @@ def test_main_jsonschema_boolean_property():
 def test_main_jsonschema_modular_default_enum_member(
     tmpdir_factory: TempdirFactory,
 ) -> None:
-
     output_directory = Path(tmpdir_factory.mktemp('output'))
 
     input_filename = JSON_SCHEMA_DATA_PATH / 'modular_default_enum_member'
@@ -4219,7 +4301,7 @@ def test_main_collapse_root_models():
                 str(OPEN_API_DATA_PATH / 'not_real_string.json'),
                 '--output',
                 str(output_file),
-                "--collapse-root-models",
+                '--collapse-root-models',
             ]
         )
         assert return_code == Exit.OK
@@ -4243,7 +4325,7 @@ def test_main_collapse_root_models_field_constraints():
                 str(OPEN_API_DATA_PATH / 'not_real_string.json'),
                 '--output',
                 str(output_file),
-                "--collapse-root-models",
+                '--collapse-root-models',
                 '--field-constraints',
             ]
         )
@@ -4710,5 +4792,198 @@ def test_main_jsonschema_pattern_properties_by_reference():
                 / 'output.py'
             ).read_text()
         )
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_openapi_default_object():
+    with TemporaryDirectory() as output_dir:
+        output_path: Path = Path(output_dir)
+        return_code: Exit = main(
+            [
+                '--input',
+                str(OPEN_API_DATA_PATH / 'default_object.yaml'),
+                '--output',
+                str(output_dir),
+                '--input-file-type',
+                'openapi',
+            ]
+        )
+        assert return_code == Exit.OK
+
+        main_modular_dir = EXPECTED_MAIN_PATH / 'main_openapi_default_object'
+        for path in main_modular_dir.rglob('*.py'):
+            result = output_path.joinpath(
+                path.relative_to(main_modular_dir)
+            ).read_text()
+            assert result == path.read_text()
+
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_dataclass():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(OPEN_API_DATA_PATH / 'api.yaml'),
+                '--output',
+                str(output_file),
+                '--output-model-type',
+                'dataclasses.dataclass',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (EXPECTED_MAIN_PATH / 'main_dataclass' / 'output.py').read_text()
+        )
+
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_dataclass_base_class():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(OPEN_API_DATA_PATH / 'api.yaml'),
+                '--output',
+                str(output_file),
+                '--output-model-type',
+                'dataclasses.dataclass',
+                '--base-class',
+                'custom_base.Base',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH / 'main_dataclass_base_class' / 'output.py'
+            ).read_text()
+        )
+
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_dataclass_field():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'user.json'),
+                '--output',
+                str(output_file),
+                '--output-model-type',
+                'dataclasses.dataclass',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (EXPECTED_MAIN_PATH / 'main_dataclass_field' / 'output.py').read_text()
+        )
+
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_jsonschema_enum_root_literal():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'enum_in_root' / 'enum_in_root.json'),
+                '--output',
+                str(output_file),
+                '--input-file-type',
+                'jsonschema',
+                '--use-schema-description',
+                '--use-title-as-name',
+                '--field-constraints',
+                '--target-python-version',
+                '3.9',
+                '--allow-population-by-field-name',
+                '--strip-default-none',
+                '--use-default',
+                '--enum-field-as-literal',
+                'all',
+                '--snake-case-field',
+                '--collapse-root-models',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH / 'main_jsonschema_root_in_enum' / 'output.py'
+            ).read_text()
+        )
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_jsonschema_reference_same_hierarchy_directory():
+    with TemporaryDirectory() as output_dir:
+        with chdir(JSON_SCHEMA_DATA_PATH / 'reference_same_hierarchy_directory'):
+            output_file: Path = Path(output_dir) / 'output.py'
+            return_code: Exit = main(
+                [
+                    '--input',
+                    './public/entities.yaml',
+                    '--output',
+                    str(output_file),
+                    '--input-file-type',
+                    'openapi',
+                ]
+            )
+            assert return_code == Exit.OK
+            assert (
+                output_file.read_text()
+                == (
+                    EXPECTED_MAIN_PATH
+                    / 'main_jsonschema_reference_same_hierarchy_directory'
+                    / 'output.py'
+                ).read_text()
+            )
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_multiple_required_any_of():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(OPEN_API_DATA_PATH / 'multiple_required_any_of.yaml'),
+                '--output',
+                str(output_file),
+                '--collapse-root-models',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH / 'main_multiple_required_any_of' / 'output.py'
+            ).read_text()
+        )
+
     with pytest.raises(SystemExit):
         main()

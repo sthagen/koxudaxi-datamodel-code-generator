@@ -10,6 +10,7 @@ from keyword import iskeyword
 from pathlib import Path, PurePath
 from typing import (
     TYPE_CHECKING,
+    AbstractSet,
     Any,
     Callable,
     ClassVar,
@@ -38,7 +39,7 @@ from pydantic import BaseModel, validator
 from datamodel_code_generator import cached_property
 
 if TYPE_CHECKING:
-    from pydantic.typing import AbstractSetIntStr, DictStrAny, MappingIntStrAny
+    from pydantic.typing import DictStrAny
 
 
 class _BaseModel(BaseModel):
@@ -56,10 +57,14 @@ class _BaseModel(BaseModel):
     def dict(
         self,
         *,
-        include: Union[AbstractSetIntStr, MappingIntStrAny] = None,
-        exclude: Union[AbstractSetIntStr, MappingIntStrAny] = None,
+        include: Union[
+            AbstractSet[Union[int, str]], Mapping[Union[int, str], Any], None
+        ] = None,
+        exclude: Union[
+            AbstractSet[Union[int, str]], Mapping[Union[int, str], Any], None
+        ] = None,
         by_alias: bool = False,
-        skip_defaults: bool = None,
+        skip_defaults: Optional[bool] = None,
         exclude_unset: bool = False,
         exclude_defaults: bool = False,
         exclude_none: bool = False,
@@ -242,7 +247,7 @@ class EnumFieldNameResolver(FieldNameResolver):
     ) -> str:
         return super().get_valid_name(
             name='mro_' if name == 'mro' else name,
-            excludes=excludes,
+            excludes={'mro'} | (excludes or set()),
             ignore_snake_case_field=ignore_snake_case_field,
             upper_camel=upper_camel,
         )
@@ -286,7 +291,7 @@ def get_relative_path(base_path: PurePath, target_path: PurePath) -> PurePath:
 class ModelResolver:
     def __init__(
         self,
-        exclude_names: Set[str] = None,
+        exclude_names: Optional[Set[str]] = None,
         duplicate_name_suffix: Optional[str] = None,
         base_url: Optional[str] = None,
         singular_name_suffix: Optional[str] = None,
@@ -367,7 +372,6 @@ class ModelResolver:
 
     @contextmanager
     def base_url_context(self, base_url: str) -> Generator[None, None, None]:
-
         if self._base_url:
             with context_variable(self.set_base_url, self.base_url, base_url):
                 yield
@@ -612,7 +616,6 @@ class ModelResolver:
         singular_name: bool = False,
         singular_name_suffix: Optional[str] = None,
     ) -> ClassName:
-
         if '.' in name:
             split_name = name.split('.')
             prefix = '.'.join(

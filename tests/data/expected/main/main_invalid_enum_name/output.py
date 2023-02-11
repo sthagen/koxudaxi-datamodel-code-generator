@@ -12,4 +12,5 @@ class InvalidEnum(Enum):
     field_space = ' space'
     field___special = '*- special'
     schema = 'schema'
+    MRO = 'MRO'
     mro_ = 'mro'

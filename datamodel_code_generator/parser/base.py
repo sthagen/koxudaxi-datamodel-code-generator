@@ -37,19 +37,14 @@ from datamodel_code_generator.model.base import (
     DataModel,
     DataModelFieldBase,
 )
-from datamodel_code_generator.model.enum import Enum
+from datamodel_code_generator.model.enum import Enum, Member
 from datamodel_code_generator.parser import DefaultPutDict, LiteralType
 from datamodel_code_generator.reference import ModelResolver, Reference
-from datamodel_code_generator.types import (
-    DataType,
-    DataTypeManager,
-    Modular,
-    StrictTypes,
-)
+from datamodel_code_generator.types import DataType, DataTypeManager, StrictTypes
 
 escape_characters = str.maketrans(
     {
-        "\\": r"\\",
+        '\\': r'\\',
         "'": r"\'",
         '\b': r'\b',
         '\f': r'\f',
@@ -61,8 +56,14 @@ escape_characters = str.maketrans(
 
 
 def to_hashable(item: Any) -> Any:
-    if isinstance(item, list):
-        return tuple(to_hashable(i) for i in item)
+    if isinstance(
+        item,
+        (
+            list,
+            tuple,
+        ),
+    ):
+        return tuple(sorted(to_hashable(i) for i in item))
     elif isinstance(item, dict):
         return tuple(
             sorted(
@@ -170,7 +171,7 @@ def sort_data_models(
                 model.reference_classes - {model.path} - set(sorted_data_models)
             )
             base_models = [
-                getattr(s.reference, "path", None) for s in model.base_classes
+                getattr(s.reference, 'path', None) for s in model.base_classes
             ]
             update_action_parent = set(require_update_action_models).intersection(
                 base_models
@@ -186,7 +187,7 @@ def sort_data_models(
                 continue
             # unresolved
             unresolved_classes = ', '.join(
-                f"[class: {item.path} references: {item.reference_classes}]"
+                f'[class: {item.path} references: {item.reference_classes}]'
                 for item in unresolved_references
             )
             raise Exception(f'A Parser can not resolve classes: {unresolved_classes}.')
@@ -348,6 +349,7 @@ class Parser(ABC):
         ] = title_to_class_name,
         field_extra_keys: Optional[Set[str]] = None,
         field_include_all_keys: bool = False,
+        field_extra_keys_without_x_prefix: Optional[Set[str]] = None,
         wrap_string_literal: Optional[bool] = None,
         use_title_as_name: bool = False,
         http_headers: Optional[Sequence[Tuple[str, str]]] = None,
@@ -407,6 +409,9 @@ class Parser(ABC):
             Callable[[str], str]
         ] = custom_class_name_generator
         self.field_extra_keys: Set[str] = field_extra_keys or set()
+        self.field_extra_keys_without_x_prefix: Set[str] = (
+            field_extra_keys_without_x_prefix or set()
+        )
         self.field_include_all_keys: bool = field_include_all_keys
 
         self.remote_text_cache: DefaultPutDict[str, str] = (
@@ -559,7 +564,7 @@ class Parser(ABC):
                         for base_class in child.base_classes[:]:
                             if base_class.reference == model.reference:
                                 child.base_classes.remove(base_class)
-                        if not child.base_classes:
+                        if not child.base_classes:  # pragma: no cover
                             child.set_base_class()
 
             class_name = model.duplicate_class_name or model.class_name
@@ -567,24 +572,18 @@ class Parser(ABC):
                 model_key = tuple(
                     to_hashable(v)
                     for v in (
-                        model.base_classes,
-                        model.extra_template_data,
-                        model.fields,
-                        model.description,
-                        model.default,
-                        model.decorators,
+                        model.render(class_name=model.duplicate_class_name),
+                        model.imports,
                     )
                 )
                 original_model = model_class_names[class_name]
                 original_model_key = tuple(
                     to_hashable(v)
                     for v in (
-                        original_model.base_classes,
-                        original_model.extra_template_data,
-                        original_model.fields,
-                        original_model.description,
-                        original_model.default,
-                        original_model.decorators,
+                        original_model.render(
+                            class_name=original_model.duplicate_class_name
+                        ),
+                        original_model.imports,
                     )
                 )
                 if model_key == original_model_key:
@@ -631,6 +630,8 @@ class Parser(ABC):
         init: bool,
     ) -> None:
         for model in models:
+            scoped_model_resolver.add(model.path, model.class_name)
+        for model in models:
             imports.append(model.imports)
             for data_type in model.all_data_types:
                 # To change from/import
@@ -653,10 +654,14 @@ class Parser(ABC):
 
                 name = data_type.reference.short_name
                 if from_ and import_ and alias != name:
-                    data_type.alias = f'{alias}.{name}'
+                    data_type.alias = (
+                        alias
+                        if from_ == '.' and data_type.full_name == import_
+                        else f'{alias}.{name}'
+                    )
 
                 if init:
-                    from_ = "." + from_
+                    from_ = '.' + from_
                 imports.append(Import(from_=from_, import_=import_, alias=alias))
 
     @classmethod
@@ -705,12 +710,7 @@ class Parser(ABC):
         duplicates = []
         for model in models[:]:
             model_key = tuple(
-                to_hashable(v)
-                for v in (
-                    model.base_classes,
-                    model.extra_template_data,
-                    model.fields,
-                )
+                to_hashable(v) for v in (model.render(class_name='M'), model.imports)
             )
             cached_model_reference = model_cache.get(model_key)
             if cached_model_reference:
@@ -777,7 +777,6 @@ class Parser(ABC):
                     # set copied data_type
                     copied_data_type = root_type_field.data_type.copy()
                     if isinstance(data_type.parent, self.data_model_field_type):
-
                         # for field
                         # override empty field by root-type field
                         model_field.extras = dict(
@@ -826,9 +825,6 @@ class Parser(ABC):
     def __set_default_enum_member(
         self,
         models: List[DataModel],
-        imports: Imports,
-        scoped_model_resolver: ModelResolver,
-        init: bool,
     ) -> None:
         if not self.set_default_enum_member:
             return None
@@ -840,34 +836,28 @@ class Parser(ABC):
                     if data_type.reference and isinstance(
                         data_type.reference.source, Enum
                     ):  # pragma: no cover
-                        enum_member = data_type.reference.source.find_member(
-                            model_field.default
-                        )
-                        if enum_member:
-                            model_field.default = enum_member
-                            enum_member_enum = enum_member.enum
-                            if enum_member_enum in models:
-                                continue
-                            scoped_model_resolver.get(enum_member_enum.path)
-                            if isinstance(enum_member_enum, Modular):
-                                enum_member_enum_name = f'{enum_member_enum.module_name}.{enum_member.enum.name}'
+                        if isinstance(model_field.default, list):
+                            enum_member: Union[List[Member], Optional[Member]] = [
+                                e
+                                for e in (
+                                    data_type.reference.source.find_member(d)
+                                    for d in model_field.default
+                                )
+                                if e
+                            ]
+                        else:
+                            enum_member = data_type.reference.source.find_member(
+                                model_field.default
+                            )
+                        if not enum_member:
+                            continue
+                        model_field.default = enum_member
+                        if data_type.alias:
+                            if isinstance(enum_member, list):
+                                for enum_member_ in enum_member:
+                                    enum_member_.alias = data_type.alias
                             else:
-                                enum_member_enum_name = enum_member.enum.name
-                            from_, import_ = full_path = relative(
-                                model.module_name, enum_member_enum_name
-                            )
-
-                            alias = scoped_model_resolver.add(full_path, import_).name
-
-                            name = data_type.reference.short_name
-                            if from_ and import_ and alias != name:
-                                enum_member.alias = f'{alias}.{name}'
-
-                            if init:
-                                from_ += "."
-                            imports.append(
-                                Import(from_=from_, import_=import_, alias=alias)
-                            )
+                                enum_member.alias = data_type.alias
 
     def __override_required_field(
         self,
@@ -925,7 +915,7 @@ class Parser(ABC):
 
         models.sort(key=lambda x: x.class_name)
 
-        imported = set(i for v in imports.values() for i in v)
+        imported = {i for v in imports.values() for i in v}
         model_class_name_baseclasses: Dict[DataModel, Tuple[str, Set[str]]] = {}
         for model in models:
             class_name = model.class_name
@@ -952,7 +942,6 @@ class Parser(ABC):
         format_: Optional[bool] = True,
         settings_path: Optional[Path] = None,
     ) -> Union[str, Dict[Tuple[str, ...], Result]]:
-
         self.parse_raw()
 
         if with_import:
@@ -974,7 +963,9 @@ class Parser(ABC):
         )
 
         results: Dict[Tuple[str, ...], Result] = {}
-        module_key = lambda x: x.module_path
+
+        def module_key(data_model: DataModel) -> Tuple[str, ...]:
+            return tuple(data_model.module_path)
 
         # process in reverse order to correctly establish module levels
         grouped_models = groupby(
@@ -1029,7 +1020,7 @@ class Parser(ABC):
             self.__set_reference_default_value_to_field(models)
             self.__reuse_model(models, require_update_action_models)
             self.__collapse_root_models(models, unused_models)
-            self.__set_default_enum_member(models, imports, scoped_model_resolver, init)
+            self.__set_default_enum_member(models)
             self.__override_required_field(models)
             self.__sort_models(models, imports)
 

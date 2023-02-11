@@ -29,7 +29,6 @@ from typing import (
     cast,
 )
 from urllib.parse import ParseResult, urlparse
-from warnings import warn
 
 import argcomplete
 import black
@@ -38,6 +37,7 @@ from pydantic import BaseModel, root_validator, validator
 
 from datamodel_code_generator import (
     DEFAULT_BASE_CLASS,
+    DataModelType,
     Error,
     InputFileType,
     InvalidClassNameError,
@@ -101,6 +101,11 @@ arg_parser.add_argument(
     choices=[i.value for i in InputFileType],
 )
 arg_parser.add_argument(
+    '--output-model-type',
+    help='Output model type (default: pydantic.BaseModel)',
+    choices=[i.value for i in DataModelType],
+)
+arg_parser.add_argument(
     '--openapi-scopes',
     help='Scopes of OpenAPI model generation (default: schemas)',
     choices=[o.value for o in OpenAPIScope],
@@ -127,7 +132,7 @@ arg_parser.add_argument(
     default=None,
 )
 arg_parser.add_argument(
-    '--use_non_positive_negative_number_constrained_types',
+    '--use-non-positive-negative-number-constrained-types',
     help='Use the Non{Positive,Negative}{FloatInt} types instead of the corresponding con* constrained types.',
     action='store_true',
     default=None,
@@ -143,6 +148,12 @@ arg_parser.add_argument(
     help='Add all keys to field parameters',
     action='store_true',
     default=None,
+)
+arg_parser.add_argument(
+    '--field-extra-keys-without-x-prefix',
+    help='Add extra keys with `x-` prefix to field parameters. The extra keys are stripped of the `x-` prefix.',
+    type=str,
+    nargs='+',
 )
 arg_parser.add_argument(
     '--snake-case-field',
@@ -269,7 +280,7 @@ arg_parser.add_argument(
 arg_parser.add_argument(
     '--use-default-kwarg',
     action='store_true',
-    help="Use `default=` instead of a positional argument for Fields that have default values.",
+    help='Use `default=` instead of a positional argument for Fields that have default values.',
 )
 
 arg_parser.add_argument(
@@ -281,17 +292,17 @@ arg_parser.add_argument(
 
 arg_parser.add_argument(
     '--keep-model-order',
-    help='Keep generated models\' order',
+    help="Keep generated models' order",
     action='store_true',
     default=None,
 )
 
 arg_parser.add_argument(
-    "--collapse-root-models",
+    '--collapse-root-models',
     action='store_true',
     default=None,
-    help="Models generated with a root-type field will be merged"
-    "into the models using that root-type model",
+    help='Models generated with a root-type field will be merged'
+    'into the models using that root-type model',
 )
 
 
@@ -300,7 +311,7 @@ arg_parser.add_argument(
     help='Parse enum field as literal. '
     'all: all enum field type are Literal. '
     'one: field type is Literal when an enum has only one possible value',
-    choices=[l.value for l in LiteralType],
+    choices=[lt.value for lt in LiteralType],
     default=None,
 )
 
@@ -327,13 +338,13 @@ arg_parser.add_argument(
 
 arg_parser.add_argument(
     '--special-field-name-prefix',
-    help='Set field name prefix when first character can\'t be used as Python field name (default:  `field`)',
+    help="Set field name prefix when first character can't be used as Python field name (default:  `field`)",
     default=None,
 )
 
 arg_parser.add_argument(
     '--remove-special-field-name-prefix',
-    help='Remove field name prefix when first character can\'t be used as Python field name',
+    help="Remove field name prefix when first character can't be used as Python field name",
     action='store_true',
     default=None,
 )
@@ -386,11 +397,11 @@ arg_parser.add_argument(
 )
 
 arg_parser.add_argument(
-    "--use-double-quotes",
+    '--use-double-quotes',
     action='store_true',
     default=None,
-    help="Model generated with double quotes. Single quotes or "
-    "your black config skip_string_normalization value will be used without this option.",
+    help='Model generated with double quotes. Single quotes or '
+    'your black config skip_string_normalization value will be used without this option.',
 )
 
 arg_parser.add_argument(
@@ -414,13 +425,13 @@ class Config(BaseModel):
         # Pydantic 1.5.1 doesn't support validate_assignment correctly
         arbitrary_types_allowed = (TextIOBase,)
 
-    @validator("aliases", "extra_template_data", pre=True)
+    @validator('aliases', 'extra_template_data', pre=True)
     def validate_file(cls, value: Any) -> Optional[TextIOBase]:
         if value is None or isinstance(value, TextIOBase):
             return value
-        return cast(TextIOBase, Path(value).expanduser().resolve().open("rt"))
+        return cast(TextIOBase, Path(value).expanduser().resolve().open('rt'))
 
-    @validator("input", "output", "custom_template_dir", pre=True)
+    @validator('input', 'output', 'custom_template_dir', pre=True)
     def validate_path(cls, value: Any) -> Optional[Path]:
         if value is None or isinstance(value, Path):
             return value  # pragma: no cover
@@ -433,7 +444,7 @@ class Config(BaseModel):
         elif value is None:  # pragma: no cover
             return None
         raise Error(
-            f'This protocol doesn\'t support only http/https. --input={value}'
+            f"This protocol doesn't support only http/https. --input={value}"
         )  # pragma: no cover
 
     @root_validator
@@ -444,8 +455,8 @@ class Config(BaseModel):
             target_python_version: PythonVersion = values['target_python_version']
             if target_python_version == target_python_version.PY_36:
                 raise Error(
-                    f"`--use-generic-container-types` can not be used with `--target-python_version` {target_python_version.PY_36.value}.\n"  # type: ignore
-                    " The version will be not supported in a future version"
+                    f'`--use-generic-container-types` can not be used with `--target-python_version` {target_python_version.PY_36.value}.\n'  # type: ignore
+                    ' The version will be not supported in a future version'
                 )
         return values
 
@@ -456,7 +467,7 @@ class Config(BaseModel):
         if values.get('original_field_name_delimiter') is not None:
             if not values.get('snake_case_field'):
                 raise Error(
-                    "`--original-field-name-delimiter` can not be used without `--snake-case-field`."
+                    '`--original-field-name-delimiter` can not be used without `--snake-case-field`.'
                 )
         return values
 
@@ -481,7 +492,7 @@ class Config(BaseModel):
     @root_validator()
     def validate_root(cls, values: Dict[str, Any]) -> Dict[str, Any]:
         values = cls._validate_use_annotated(values)
-        return cls._validate_use_union_operator(values)
+        return cls._validate_base_class(values)
 
     @classmethod
     def _validate_use_annotated(cls, values: Dict[str, Any]) -> Dict[str, Any]:
@@ -490,22 +501,15 @@ class Config(BaseModel):
         return values
 
     @classmethod
-    def _validate_use_union_operator(cls, values: Dict[str, Any]) -> Dict[str, Any]:
-        if values.get('use_union_operator'):
-            target_python_version: PythonVersion = PythonVersion(
-                values.get('target_python_version', PythonVersion.PY_37.value)
-            )
-            if not target_python_version.has_union_operator:
-                if not values.get('disable_warnings'):
-                    warn(
-                        f"`--use-union-operator` can not be used with `--target-python_version` {target_python_version.value}.\n"
-                        f"`--target-python_version` {PythonVersion.PY_310.value} will be used."
-                    )
-                values['target_python_version'] = PythonVersion.PY_310
+    def _validate_base_class(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        if 'base_class' not in values and 'output_model_type' in values:
+            if values['output_model_type'] != DataModelType.PydanticBaseModel.value:
+                values['base_class'] = ''
         return values
 
     input: Optional[Union[Path, str]]
     input_file_type: InputFileType = InputFileType.Auto
+    output_model_type: DataModelType = DataModelType.PydanticBaseModel
     output: Optional[Path]
     debug: bool = False
     disable_warnings: bool = False
@@ -544,6 +548,7 @@ class Config(BaseModel):
     empty_enum_field_name: Optional[str] = None
     field_extra_keys: Optional[Set[str]] = None
     field_include_all_keys: bool = False
+    field_extra_keys_without_x_prefix: Optional[Set[str]] = None
     openapi_scopes: Optional[List[OpenAPIScope]] = [OpenAPIScope.Schemas]
     wrap_string_literal: Optional[bool] = None
     use_title_as_name: bool = False
@@ -564,7 +569,7 @@ class Config(BaseModel):
             f: getattr(args, f) for f in self.__fields__ if getattr(args, f) is not None
         }
         set_args = self._validate_use_annotated(set_args)
-        set_args = self._validate_use_union_operator(set_args)
+        set_args = self._validate_base_class(set_args)
         parsed_args = self.parse_obj(set_args)
         for field_name in set_args:
             setattr(self, field_name, getattr(parsed_args, field_name))
@@ -588,7 +593,7 @@ def main(args: Optional[Sequence[str]] = None) -> Exit:
         exit(0)
 
     root = black_find_project_root((Path().resolve(),))
-    pyproject_toml_path = root / "pyproject.toml"
+    pyproject_toml_path = root / 'pyproject.toml'
     if pyproject_toml_path.is_file():
         pyproject_toml: Dict[str, Any] = {
             k.replace('-', '_'): v
@@ -639,7 +644,7 @@ def main(args: Optional[Sequence[str]] = None) -> Exit:
                     data, object_hook=lambda d: defaultdict(dict, **d)
                 )
             except json.JSONDecodeError as e:
-                print(f"Unable to load extra template data: {e}", file=sys.stderr)
+                print(f'Unable to load extra template data: {e}', file=sys.stderr)
                 return Exit.ERROR
 
     if config.aliases is None:
@@ -649,7 +654,7 @@ def main(args: Optional[Sequence[str]] = None) -> Exit:
             try:
                 aliases = json.load(data)
             except json.JSONDecodeError as e:
-                print(f"Unable to load alias mapping: {e}", file=sys.stderr)
+                print(f'Unable to load alias mapping: {e}', file=sys.stderr)
                 return Exit.ERROR
         if not isinstance(aliases, dict) or not all(
             isinstance(k, str) and isinstance(v, str) for k, v in aliases.items()
@@ -665,6 +670,7 @@ def main(args: Optional[Sequence[str]] = None) -> Exit:
             input_=config.url or config.input or sys.stdin.read(),
             input_file_type=config.input_file_type,
             output=config.output,
+            output_model_type=config.output_model_type,
             target_python_version=config.target_python_version,
             base_class=config.base_class,
             custom_template_dir=config.custom_template_dir,
@@ -698,6 +704,7 @@ def main(args: Optional[Sequence[str]] = None) -> Exit:
             empty_enum_field_name=config.empty_enum_field_name,
             field_extra_keys=config.field_extra_keys,
             field_include_all_keys=config.field_include_all_keys,
+            field_extra_keys_without_x_prefix=config.field_extra_keys_without_x_prefix,
             openapi_scopes=config.openapi_scopes,
             wrap_string_literal=config.wrap_string_literal,
             use_title_as_name=config.use_title_as_name,

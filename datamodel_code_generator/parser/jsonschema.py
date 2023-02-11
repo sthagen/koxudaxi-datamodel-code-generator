@@ -47,7 +47,13 @@ from datamodel_code_generator.parser.base import (
     title_to_class_name,
 )
 from datamodel_code_generator.reference import ModelType, Reference, is_url
-from datamodel_code_generator.types import DataType, DataTypeManager, StrictTypes, Types
+from datamodel_code_generator.types import (
+    DataType,
+    DataTypeManager,
+    EmptyDataType,
+    StrictTypes,
+    Types,
+)
 
 
 def get_model_by_path(
@@ -268,7 +274,7 @@ class JsonSchemaObject(BaseModel):
 
     @cached_property
     def type_has_null(self) -> bool:
-        return isinstance(self.type, list) and "null" in self.type
+        return isinstance(self.type, list) and 'null' in self.type
 
 
 @lru_cache()
@@ -290,8 +296,8 @@ def _get_type(type_: str, format__: Optional[str] = None) -> Types:
         return data_formats
 
     warn(
-        "format of {!r} not understood for {!r} - using default"
-        "".format(format__, type_)
+        'format of {!r} not understood for {!r} - using default'
+        ''.format(format__, type_)
     )
     return json_schema_data_formats[type_]['default']
 
@@ -362,6 +368,7 @@ class JsonSchemaParser(Parser):
         custom_class_name_generator: Optional[Callable[[str], str]] = None,
         field_extra_keys: Optional[Set[str]] = None,
         field_include_all_keys: bool = False,
+        field_extra_keys_without_x_prefix: Optional[Set[str]] = None,
         wrap_string_literal: Optional[bool] = None,
         use_title_as_name: bool = False,
         http_headers: Optional[Sequence[Tuple[str, str]]] = None,
@@ -419,6 +426,7 @@ class JsonSchemaParser(Parser):
             custom_class_name_generator=custom_class_name_generator,
             field_extra_keys=field_extra_keys,
             field_include_all_keys=field_include_all_keys,
+            field_extra_keys_without_x_prefix=field_extra_keys_without_x_prefix,
             wrap_string_literal=wrap_string_literal,
             use_title_as_name=use_title_as_name,
             http_headers=http_headers,
@@ -441,17 +449,25 @@ class JsonSchemaParser(Parser):
         self._root_id: Optional[str] = None
         self._root_id_base_path: Optional[str] = None
         self.reserved_refs: DefaultDict[Tuple[str], Set[str]] = defaultdict(set)
-        self.field_keys: Set[str] = {*DEFAULT_FIELD_KEYS, *self.field_extra_keys}
+        self.field_keys: Set[str] = {
+            *DEFAULT_FIELD_KEYS,
+            *self.field_extra_keys,
+            *self.field_extra_keys_without_x_prefix,
+        }
 
     def get_field_extras(self, obj: JsonSchemaObject) -> Dict[str, Any]:
         if self.field_include_all_keys:
             return {
-                self.model_resolver.get_valid_field_name_and_alias(k)[0]: v
+                self.model_resolver.get_valid_field_name_and_alias(
+                    k.lstrip('x-') if k in self.field_extra_keys_without_x_prefix else k
+                )[0]: v
                 for k, v in obj.extras.items()
             }
         else:
             return {
-                self.model_resolver.get_valid_field_name_and_alias(k)[0]: v
+                self.model_resolver.get_valid_field_name_and_alias(
+                    k.lstrip('x-') if k in self.field_extra_keys_without_x_prefix else k
+                )[0]: v
                 for k, v in obj.extras.items()
                 if k in self.field_keys
             }
@@ -473,6 +489,19 @@ class JsonSchemaParser(Parser):
             self.enum_field_as_literal == LiteralType.One and len(obj.enum) == 1
         )
 
+    def is_constraints_field(self, obj: JsonSchemaObject) -> bool:
+        return obj.is_array or (
+            self.field_constraints
+            and not (
+                obj.ref
+                or obj.anyOf
+                or obj.oneOf
+                or obj.allOf
+                or obj.is_object
+                or obj.enum
+            )
+        )
+
     def get_object_field(
         self,
         *,
@@ -483,27 +512,13 @@ class JsonSchemaParser(Parser):
         alias: Optional[str],
         original_field_name: Optional[str],
     ) -> DataModelFieldBase:
-        if field.is_array or (
-            self.field_constraints
-            and not (
-                field.ref
-                or field.anyOf
-                or field.oneOf
-                or field.allOf
-                or field.is_object
-                or field.enum
-            )
-        ):
-            constraints: Optional[Mapping[str, Any]] = field.dict()
-        else:
-            constraints = None
         return self.data_model_field_type(
             name=field_name,
             default=field.default,
             data_type=field_type,
             required=required,
             alias=alias,
-            constraints=constraints,
+            constraints=field.dict() if self.is_constraints_field(field) else None,
             nullable=field.nullable
             if self.strict_nullable and (field.has_default or required)
             else None,
@@ -513,6 +528,7 @@ class JsonSchemaParser(Parser):
             use_field_description=self.use_field_description,
             use_default_kwarg=self.use_default_kwarg,
             original_name=original_field_name,
+            has_default=field.has_default,
         )
 
     def get_data_type(self, obj: JsonSchemaObject) -> DataType:
@@ -606,7 +622,6 @@ class JsonSchemaParser(Parser):
         base_classes: List[Reference],
         required: List[str],
     ) -> DataType:
-
         if obj.properties:
             fields.extend(
                 self.parse_object_fields(obj, path, get_module_name(name, None))
@@ -630,7 +645,7 @@ class JsonSchemaParser(Parser):
                             required=True, original_name=required_, data_type=DataType()
                         )
                     )
-        if self.use_title_as_name and obj.title:
+        if self.use_title_as_name and obj.title:  # pragma: no cover
             name = obj.title
         reference = self.model_resolver.add(path, name, class_name=True, loaded=True)
         self.set_additional_properties(reference.name, obj)
@@ -915,10 +930,7 @@ class JsonSchemaParser(Parser):
             )
         elif item.enum:
             if self.should_parse_enum_as_literal(item):
-                enum_literals = item.enum
-                if item.nullable:
-                    enum_literals = [i for i in item.enum if i is not None]
-                return self.data_type(literals=enum_literals)
+                return self.parse_enum_as_literal(item)
             return self.parse_enum(
                 name, item, get_special_path('enum', path), singular_name=singular_name
             )
@@ -1006,6 +1018,7 @@ class JsonSchemaParser(Parser):
             use_annotated=self.use_annotated,
             use_field_description=self.use_field_description,
             original_name=None,
+            has_default=obj.has_default,
         )
 
     def parse_array(
@@ -1042,6 +1055,7 @@ class JsonSchemaParser(Parser):
                 use_annotated=self.use_annotated,
                 use_field_description=self.use_field_description,
                 original_name=None,
+                has_default=field.has_default,
             )
 
         data_model_root = self.data_model_root_type(
@@ -1082,10 +1096,17 @@ class JsonSchemaParser(Parser):
 
             if len(data_types) > 1:
                 data_type = self.data_type(data_types=data_types)
+            elif not data_types:
+                return EmptyDataType()
             else:  # pragma: no cover
                 data_type = data_types[0]
         elif obj.patternProperties:
             data_type = self.parse_pattern_properties(name, obj.patternProperties, path)
+        elif obj.enum:
+            if self.should_parse_enum_as_literal(obj):
+                data_type = self.parse_enum_as_literal(obj)
+            else:  # pragma: no cover
+                data_type = self.parse_enum(name, obj, path)
         elif obj.type:
             data_type = self.get_data_type(obj)
         else:
@@ -1117,6 +1138,7 @@ class JsonSchemaParser(Parser):
                     use_annotated=self.use_annotated,
                     use_field_description=self.use_field_description,
                     original_name=None,
+                    has_default=obj.has_default,
                 )
             ],
             custom_base_class=self.base_class,
@@ -1127,6 +1149,9 @@ class JsonSchemaParser(Parser):
         )
         self.results.append(data_model_root_type)
         return self.data_type(reference=reference)
+
+    def parse_enum_as_literal(self, obj: JsonSchemaObject) -> DataType:
+        return self.data_type(literals=[i for i in obj.enum if i is not None])
 
     def parse_enum(
         self,
@@ -1394,17 +1419,17 @@ class JsonSchemaParser(Parser):
             self.parse_array(name, obj, path)
         elif obj.allOf:
             self.parse_all_of(name, obj, path)
-        elif obj.oneOf:
-            self.parse_root_type(name, obj, path)
-        elif obj.anyOf:
-            self.parse_root_type(name, obj, path)
+        elif obj.oneOf or obj.anyOf:
+            data_type = self.parse_root_type(name, obj, path)
+            if isinstance(data_type, EmptyDataType) and obj.properties:
+                self.parse_object(name, obj, path)
         elif obj.properties:
             self.parse_object(name, obj, path)
         elif obj.patternProperties:
             self.parse_root_type(name, obj, path)
         elif obj.type == 'object':
             self.parse_object(name, obj, path)
-        elif obj.enum:
+        elif obj.enum and not self.should_parse_enum_as_literal(obj):
             self.parse_enum(name, obj, path)
         else:
             self.parse_root_type(name, obj, path)
@@ -1512,7 +1537,6 @@ class JsonSchemaParser(Parser):
                 path, obj_name, unique=False, class_name=True
             ).name
             with self.root_id_context(raw):
-
                 # parse $id before parsing $ref
                 root_obj = JsonSchemaObject.parse_obj(raw)
                 self.parse_id(root_obj, path_parts)
@@ -1543,8 +1567,8 @@ class JsonSchemaParser(Parser):
                         reference = self.model_resolver.get(reserved_path)
                         if not reference or reference.loaded:
                             continue
+                        object_paths = reserved_path.split('#/', 1)[-1].split('/')
                         path = reserved_path.split('/')
-                        _, *object_paths = path
                         models = get_model_by_path(raw, object_paths)
                         model_name = object_paths[-1]
                         self.parse_obj(

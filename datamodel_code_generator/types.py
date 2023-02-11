@@ -143,7 +143,7 @@ class DataType(_BaseModel):
     def replace_reference(self, reference: Optional[Reference]) -> None:
         if not self.reference:  # pragma: no cover
             raise Exception(
-                f'`{self.__class__.__name__}.replace_reference()` can\'t be called'
+                f"`{self.__class__.__name__}.replace_reference()` can't be called"
                 f' when `reference` field is empty.'
             )
         self_id = id(self)
@@ -323,6 +323,10 @@ DataType.update_forward_refs()
 DataTypeT = TypeVar('DataTypeT', bound=DataType)
 
 
+class EmptyDataType(DataType):
+    pass
+
+
 class Types(Enum):
     integer = auto()
     int32 = auto()
@@ -381,17 +385,10 @@ class DataTypeManager(ABC):
             use_generic_container_types and python_version == PythonVersion.PY_36
         ):  # pragma: no cover
             raise Exception(
-                "use_generic_container_types can not be used with target_python_version 3.6.\n"
-                " The version will be not supported in a future version"
+                'use_generic_container_types can not be used with target_python_version 3.6.\n'
+                ' The version will be not supported in a future version'
             )
 
-        if (
-            use_union_operator and not python_version.has_union_operator
-        ):  # pragma: no cover
-            raise Exception(
-                "use_union_operator can not be used with target_python_version 3.9 or earlier.\n"
-                " The version will be not supported in a future version"
-            )
         if TYPE_CHECKING:
             self.data_type: Type[DataType]
         else:

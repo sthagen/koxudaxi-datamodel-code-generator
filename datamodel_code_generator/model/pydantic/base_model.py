@@ -5,6 +5,7 @@ from typing import Any, ClassVar, DefaultDict, Dict, List, Optional, Set, Tuple,
 
 from pydantic import Field
 
+from datamodel_code_generator import cached_property
 from datamodel_code_generator.imports import Import
 from datamodel_code_generator.model import (
     ConstraintsBase,
@@ -68,12 +69,12 @@ class DataModelField(DataModelFieldBase):
     def field(self) -> Optional[str]:
         """for backwards compatibility"""
         result = str(self)
-        if self.use_default_kwarg and not result.startswith("Field(..."):
+        if self.use_default_kwarg and not result.startswith('Field(...'):
             # Use `default=` for fields that have a default value so that type
             # checkers using @dataclass_transform can infer the field as
             # optional in __init__.
-            result = result.replace("Field(", "Field(default=")
-        if result == "":
+            result = result.replace('Field(', 'Field(default=')
+        if result == '':
             return None
 
         return result
@@ -94,6 +95,27 @@ class DataModelField(DataModelFieldBase):
                 value = float(value)
                 break
         return value
+
+    def _get_default_as_pydantic_model(self) -> Optional[str]:
+        for data_type in self.data_type.data_types or (self.data_type,):
+            # TODO: Check nested data_types
+            if data_type.is_dict or self.data_type.is_union:
+                # TODO: Parse Union and dict model for default
+                continue
+            elif data_type.is_list and len(data_type.data_types) == 1:
+                data_type = data_type.data_types[0]
+                data_type.alias
+                if (
+                    data_type.reference
+                    and isinstance(data_type.reference.source, BaseModel)
+                    and isinstance(self.default, list)
+                ):  # pragma: no cover
+                    return f'lambda :[{data_type.alias or data_type.reference.source.class_name}.parse_obj(v) for v in {repr(self.default)}]'
+            elif data_type.reference and isinstance(
+                data_type.reference.source, BaseModel
+            ):  # pragma: no cover
+                return f'lambda :{data_type.alias or data_type.reference.source.class_name}.parse_obj({repr(self.default)})'
+        return None
 
     def __str__(self) -> str:
         data: Dict[str, Any] = {
@@ -127,16 +149,21 @@ class DataModelField(DataModelFieldBase):
             elif isinstance(discriminator, dict):  # pragma: no cover
                 data['discriminator'] = discriminator['propertyName']
 
-        default_factory = data.pop('default_factory', None)
+        if self.required:
+            default_factory = None
+        elif self.default and 'default_factory' not in data:
+            default_factory = self._get_default_as_pydantic_model()
+        else:
+            default_factory = data.pop('default_factory', None)
 
         field_arguments = sorted(
-            f"{k}={repr(v)}" for k, v in data.items() if v is not None
+            f'{k}={repr(v)}' for k, v in data.items() if v is not None
         )
 
         if not field_arguments and not default_factory:
             if self.nullable and self.required:
                 return 'Field(...)'  # Field() is for mypy
-            return ""
+            return ''
 
         if self.use_annotated:
             pass
@@ -175,7 +202,6 @@ class BaseModel(DataModel):
         default: Any = UNDEFINED,
         nullable: bool = False,
     ):
-
         methods: List[str] = [field.method for field in fields if field.method]
 
         super().__init__(
@@ -229,3 +255,16 @@ class BaseModel(DataModel):
         if any(f for f in self.fields if f.field):
             return chain_as_tuple(super().imports, (IMPORT_FIELD,))
         return super().imports
+
+    @cached_property
+    def template_file_path(self) -> Path:
+        # This property is for Backward compatibility
+        # Current version supports '{custom_template_dir}/BaseModel.jinja'
+        # But, Future version will support only '{custom_template_dir}/pydantic/BaseModel.jinja'
+        if self._custom_template_dir is not None:
+            custom_template_file_path = (
+                self._custom_template_dir / Path(self.TEMPLATE_FILE_PATH).name
+            )
+            if custom_template_file_path.exists():
+                return custom_template_file_path
+        return super().template_file_path
