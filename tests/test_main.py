@@ -588,7 +588,7 @@ def test_main_no_file(capsys: CaptureFixture) -> None:
     assert (
         captured.out == (EXPECTED_MAIN_PATH / 'main_no_file' / 'output.py').read_text()
     )
-    assert not captured.err
+    assert captured.err == 'The input file type was determined to be: openapi\n'
 
 
 def test_main_extra_template_data_config(capsys: CaptureFixture) -> None:
@@ -614,7 +614,7 @@ def test_main_extra_template_data_config(capsys: CaptureFixture) -> None:
             EXPECTED_MAIN_PATH / 'main_extra_template_data_config' / 'output.py'
         ).read_text()
     )
-    assert not captured.err
+    assert captured.err == 'The input file type was determined to be: openapi\n'
 
 
 def test_main_custom_template_dir_old_style(capsys: CaptureFixture) -> None:
@@ -641,7 +641,7 @@ def test_main_custom_template_dir_old_style(capsys: CaptureFixture) -> None:
         captured.out
         == (EXPECTED_MAIN_PATH / 'main_custom_template_dir' / 'output.py').read_text()
     )
-    assert not captured.err
+    assert captured.err == 'The input file type was determined to be: openapi\n'
 
 
 def test_main_custom_template_dir(capsys: CaptureFixture) -> None:
@@ -668,7 +668,7 @@ def test_main_custom_template_dir(capsys: CaptureFixture) -> None:
         captured.out
         == (EXPECTED_MAIN_PATH / 'main_custom_template_dir' / 'output.py').read_text()
     )
-    assert not captured.err
+    assert captured.err == 'The input file type was determined to be: openapi\n'
 
 
 @freeze_time('2019-07-26')
@@ -5050,6 +5050,79 @@ def test_main_multiple_required_any_of():
             == (
                 EXPECTED_MAIN_PATH / 'main_multiple_required_any_of' / 'output.py'
             ).read_text()
+        )
+
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_nullable_any_of():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'nullable_any_of.json'),
+                '--output',
+                str(output_file),
+                '--field-constraints',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (EXPECTED_MAIN_PATH / 'main_nullable_any_of' / 'output.py').read_text()
+        )
+
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_nullable_any_of_use_union_operator():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'nullable_any_of.json'),
+                '--output',
+                str(output_file),
+                '--field-constraints',
+                '--use-union-operator',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH
+                / 'main_nullable_any_of_use_union_operator'
+                / 'output.py'
+            ).read_text()
+        )
+
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_nested_all_of_():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'nested_all_of.json'),
+                '--output',
+                str(output_file),
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (EXPECTED_MAIN_PATH / 'main_nested_all_of' / 'output.py').read_text()
         )
 
     with pytest.raises(SystemExit):
