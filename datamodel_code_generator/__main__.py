@@ -316,6 +316,13 @@ arg_parser.add_argument(
 )
 
 arg_parser.add_argument(
+    '--use-one-literal-as-default',
+    help='Use one literal as default value for one literal field',
+    action='store_true',
+    default=None,
+)
+
+arg_parser.add_argument(
     '--set-default-enum-member',
     help='Set enum members as default values for enum field',
     action='store_true',
@@ -365,6 +372,13 @@ arg_parser.add_argument(
 arg_parser.add_argument(
     '--use-title-as-name',
     help='use titles as class names of models',
+    action='store_true',
+    default=None,
+)
+
+arg_parser.add_argument(
+    '--use-operation-id-as-name',
+    help='use operation id of OpenAPI as class names of models',
     action='store_true',
     default=None,
 )
@@ -539,6 +553,7 @@ class Config(BaseModel):
     reuse_model: bool = False
     encoding: str = DEFAULT_ENCODING
     enum_field_as_literal: Optional[LiteralType] = None
+    use_one_literal_as_default: bool = False
     set_default_enum_member: bool = False
     use_subclass_enum: bool = False
     strict_nullable: bool = False
@@ -555,6 +570,7 @@ class Config(BaseModel):
     openapi_scopes: Optional[List[OpenAPIScope]] = [OpenAPIScope.Schemas]
     wrap_string_literal: Optional[bool] = None
     use_title_as_name: bool = False
+    use_operation_id_as_name: bool = False
     http_headers: Optional[Sequence[Tuple[str, str]]] = None
     http_ignore_tls: bool = False
     use_annotated: bool = False
@@ -698,6 +714,7 @@ def main(args: Optional[Sequence[str]] = None) -> Exit:
             reuse_model=config.reuse_model,
             encoding=config.encoding,
             enum_field_as_literal=config.enum_field_as_literal,
+            use_one_literal_as_default=config.use_one_literal_as_default,
             set_default_enum_member=config.set_default_enum_member,
             use_subclass_enum=config.use_subclass_enum,
             strict_nullable=config.strict_nullable,
@@ -712,6 +729,7 @@ def main(args: Optional[Sequence[str]] = None) -> Exit:
             openapi_scopes=config.openapi_scopes,
             wrap_string_literal=config.wrap_string_literal,
             use_title_as_name=config.use_title_as_name,
+            use_operation_id_as_name=config.use_operation_id_as_name,
             http_headers=config.http_headers,
             http_ignore_tls=config.http_ignore_tls,
             use_annotated=config.use_annotated,

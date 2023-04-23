@@ -168,6 +168,37 @@ def is_openapi(text: str) -> bool:
     return 'openapi' in load_yaml(text)
 
 
+JSON_SCHEMA_URLS: Tuple[str, ...] = (
+    'http://json-schema.org/',
+    'https://json-schema.org/',
+)
+
+
+def is_schema(text: str) -> bool:
+    data = load_yaml(text)
+    if not isinstance(data, dict):
+        return False
+    schema = data.get('$schema')
+    if isinstance(schema, str) and any(
+        schema.startswith(u) for u in JSON_SCHEMA_URLS
+    ):  # pragma: no cover
+        return True
+    if isinstance(data.get('type'), str):
+        return True
+    if any(
+        isinstance(data.get(o), list)
+        for o in (
+            'allOf',
+            'anyOf',
+            'oneOf',
+        )
+    ):
+        return True
+    if isinstance(data.get('properties'), dict):
+        return True
+    return False
+
+
 class InputFileType(Enum):
     Auto = 'auto'
     OpenAPI = 'openapi'
@@ -253,6 +284,7 @@ def generate(
     reuse_model: bool = False,
     encoding: str = 'utf-8',
     enum_field_as_literal: Optional[LiteralType] = None,
+    use_one_literal_as_default: bool = False,
     set_default_enum_member: bool = False,
     use_subclass_enum: bool = False,
     strict_nullable: bool = False,
@@ -268,6 +300,7 @@ def generate(
     openapi_scopes: Optional[List[OpenAPIScope]] = None,
     wrap_string_literal: Optional[bool] = None,
     use_title_as_name: bool = False,
+    use_operation_id_as_name: bool = False,
     http_headers: Optional[Sequence[Tuple[str, str]]] = None,
     http_ignore_tls: bool = False,
     use_annotated: bool = False,
@@ -304,13 +337,10 @@ def generate(
                 if isinstance(input_, Path)
                 else input_text
             )
-            input_file_type = (
-                InputFileType.OpenAPI
-                if is_openapi(input_text_)  # type: ignore
-                else InputFileType.JsonSchema
-            )
+            assert isinstance(input_text_, str)
+            input_file_type = infer_input_type(input_text_)
             print(
-                f'The input file type was determined to be: {input_file_type.value}',
+                inferred_message.format(input_file_type.value),
                 file=sys.stderr,
             )
         except:  # noqa
@@ -398,6 +428,7 @@ def generate(
         use_default_kwarg=use_default_kwarg,
         reuse_model=reuse_model,
         enum_field_as_literal=enum_field_as_literal,
+        use_one_literal_as_default=use_one_literal_as_default,
         set_default_enum_member=set_default_enum_member,
         use_subclass_enum=use_subclass_enum,
         strict_nullable=strict_nullable,
@@ -413,6 +444,7 @@ def generate(
         field_extra_keys_without_x_prefix=field_extra_keys_without_x_prefix,
         wrap_string_literal=wrap_string_literal,
         use_title_as_name=use_title_as_name,
+        use_operation_id_as_name=use_operation_id_as_name,
         http_headers=http_headers,
         http_ignore_tls=http_ignore_tls,
         use_annotated=use_annotated,
@@ -482,6 +514,19 @@ def generate(
         if file is not None:
             file.close()
 
+
+def infer_input_type(text: str) -> InputFileType:
+    if is_openapi(text):
+        return InputFileType.OpenAPI
+    elif is_schema(text):
+        return InputFileType.JsonSchema
+    return InputFileType.Json
+
+
+inferred_message = (
+    'The input file type was determined to be: {}\nThis can be specificied explicitly with the '
+    '`--input-file-type` option.'
+)
 
 __all__ = [
     'DefaultPutDict',

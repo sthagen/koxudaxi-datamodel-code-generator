@@ -12,7 +12,7 @@ from _pytest.capture import CaptureFixture
 from freezegun import freeze_time
 from packaging import version
 
-from datamodel_code_generator import InputFileType, chdir, generate
+from datamodel_code_generator import InputFileType, chdir, generate, inferred_message
 from datamodel_code_generator.__main__ import Exit, main
 
 try:
@@ -444,7 +444,7 @@ def test_main_json_failed():
 
 
 @freeze_time('2019-07-26')
-def test_main_json_arrary_include_null():
+def test_main_json_array_include_null():
     with TemporaryDirectory() as output_dir:
         output_file: Path = Path(output_dir) / 'output.py'
         return_code: Exit = main(
@@ -588,7 +588,7 @@ def test_main_no_file(capsys: CaptureFixture) -> None:
     assert (
         captured.out == (EXPECTED_MAIN_PATH / 'main_no_file' / 'output.py').read_text()
     )
-    assert captured.err == 'The input file type was determined to be: openapi\n'
+    assert captured.err == inferred_message.format('openapi') + '\n'
 
 
 def test_main_extra_template_data_config(capsys: CaptureFixture) -> None:
@@ -614,7 +614,7 @@ def test_main_extra_template_data_config(capsys: CaptureFixture) -> None:
             EXPECTED_MAIN_PATH / 'main_extra_template_data_config' / 'output.py'
         ).read_text()
     )
-    assert captured.err == 'The input file type was determined to be: openapi\n'
+    assert captured.err == inferred_message.format('openapi') + '\n'
 
 
 def test_main_custom_template_dir_old_style(capsys: CaptureFixture) -> None:
@@ -641,7 +641,7 @@ def test_main_custom_template_dir_old_style(capsys: CaptureFixture) -> None:
         captured.out
         == (EXPECTED_MAIN_PATH / 'main_custom_template_dir' / 'output.py').read_text()
     )
-    assert captured.err == 'The input file type was determined to be: openapi\n'
+    assert captured.err == inferred_message.format('openapi') + '\n'
 
 
 def test_main_custom_template_dir(capsys: CaptureFixture) -> None:
@@ -668,7 +668,7 @@ def test_main_custom_template_dir(capsys: CaptureFixture) -> None:
         captured.out
         == (EXPECTED_MAIN_PATH / 'main_custom_template_dir' / 'output.py').read_text()
     )
-    assert captured.err == 'The input file type was determined to be: openapi\n'
+    assert captured.err == inferred_message.format('openapi') + '\n'
 
 
 @freeze_time('2019-07-26')
@@ -2186,7 +2186,8 @@ def test_main_jsonschema_multiple_files_json_pointer():
 
 
 @pytest.mark.skipif(
-    pydantic.VERSION < '1.9.0', reason='Require Pydantic version 1.9.0 or later '
+    version.parse(pydantic.VERSION) < version.parse('1.9.0'),
+    reason='Require Pydantic version 1.9.0 or later ',
 )
 @freeze_time('2019-07-26')
 def test_main_openapi_enum_models_as_literal_one():
@@ -2211,6 +2212,42 @@ def test_main_openapi_enum_models_as_literal_one():
             output_file.read_text()
             == (
                 EXPECTED_MAIN_PATH / 'main_openapi_enum_models_one' / 'output.py'
+            ).read_text()
+        )
+    with pytest.raises(SystemExit):
+        main()
+
+
+@pytest.mark.skipif(
+    version.parse(pydantic.VERSION) < version.parse('1.9.0'),
+    reason='Require Pydantic version 1.9.0 or later ',
+)
+@freeze_time('2019-07-26')
+def test_main_openapi_use_one_literal_as_default():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(OPEN_API_DATA_PATH / 'enum_models.yaml'),
+                '--output',
+                str(output_file),
+                '--input-file-type',
+                'openapi',
+                '--enum-field-as-literal',
+                'one',
+                '--target-python-version',
+                '3.8',
+                '--use-one-literal-as-default',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH
+                / 'main_openapi_enum_models_one_literal_as_default'
+                / 'output.py'
             ).read_text()
         )
     with pytest.raises(SystemExit):
@@ -2251,7 +2288,8 @@ def test_main_openapi_enum_models_as_literal_all():
 
 
 @pytest.mark.skipif(
-    pydantic.VERSION < '1.9.0', reason='Require Pydantic version 1.9.0 or later '
+    version.parse(pydantic.VERSION) < version.parse('1.9.0'),
+    reason='Require Pydantic version 1.9.0 or later ',
 )
 @freeze_time('2019-07-26')
 def test_main_openapi_enum_models_as_literal_py37(capsys):
@@ -5108,7 +5146,7 @@ def test_main_nullable_any_of_use_union_operator():
 
 
 @freeze_time('2019-07-26')
-def test_main_nested_all_of_():
+def test_main_nested_all_of():
     with TemporaryDirectory() as output_dir:
         output_file: Path = Path(output_dir) / 'output.py'
         return_code: Exit = main(
@@ -5127,3 +5165,82 @@ def test_main_nested_all_of_():
 
     with pytest.raises(SystemExit):
         main()
+
+
+@freeze_time('2019-07-26')
+def test_main_max_min_openapi():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(OPEN_API_DATA_PATH / 'max_min_number.yaml'),
+                '--output',
+                str(output_file),
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (EXPECTED_MAIN_PATH / 'max_min_number' / 'output.py').read_text()
+        )
+
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_use_operation_id_as_name():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(OPEN_API_DATA_PATH / 'api.yaml'),
+                '--output',
+                str(output_file),
+                '--use-operation-id-as-name',
+                '--openapi-scopes',
+                'paths',
+                'schemas',
+                'parameters',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH / 'main_use_operation_id_as_name' / 'output.py'
+            ).read_text()
+        )
+
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_use_operation_id_as_name_not_found_operation_id(capsys):
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(OPEN_API_DATA_PATH / 'body_and_parameters.yaml'),
+                '--output',
+                str(output_file),
+                '--input-file-type',
+                'openapi',
+                '--use-operation-id-as-name',
+                '--openapi-scopes',
+                'paths',
+                'schemas',
+                'parameters',
+            ]
+        )
+        captured = capsys.readouterr()
+        assert return_code == Exit.ERROR
+        assert (
+            captured.err
+            == 'All operations must have an operationId when --use_operation_id_as_name is set.'
+            'The following path was missing an operationId: pets\n'
+        )

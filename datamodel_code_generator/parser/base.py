@@ -352,6 +352,7 @@ class Parser(ABC):
         field_extra_keys_without_x_prefix: Optional[Set[str]] = None,
         wrap_string_literal: Optional[bool] = None,
         use_title_as_name: bool = False,
+        use_operation_id_as_name: bool = False,
         http_headers: Optional[Sequence[Tuple[str, str]]] = None,
         http_ignore_tls: bool = False,
         use_annotated: bool = False,
@@ -365,7 +366,8 @@ class Parser(ABC):
         remove_special_field_name_prefix: bool = False,
         capitalise_enum_members: bool = False,
         keep_model_order: bool = False,
-    ):
+        use_one_literal_as_default: bool = False,
+    ) -> None:
         self.data_type_manager: DataTypeManager = data_type_manager_type(
             python_version=target_python_version,
             use_standard_collections=use_standard_collections,
@@ -419,6 +421,7 @@ class Parser(ABC):
         )
         self.current_source_path: Optional[Path] = None
         self.use_title_as_name: bool = use_title_as_name
+        self.use_operation_id_as_name: bool = use_operation_id_as_name
 
         if base_path:
             self.base_path = base_path
@@ -474,6 +477,7 @@ class Parser(ABC):
         self.collapse_root_models = collapse_root_models
         self.capitalise_enum_members = capitalise_enum_members
         self.keep_model_order = keep_model_order
+        self.use_one_literal_as_default = use_one_literal_as_default
 
     @property
     def iter_source(self) -> Iterator[Source]:
@@ -936,6 +940,18 @@ class Parser(ABC):
                 models[i], models[i + 1] = models[i + 1], model
                 changed = True
 
+    def __set_one_literal_on_default(self, models: List[DataModel]) -> None:
+        if not self.use_one_literal_as_default:
+            return None
+        for model in models:
+            for model_field in model.fields:
+                if not model_field.required or len(model_field.data_type.literals) != 1:
+                    continue
+                model_field.default = model_field.data_type.literals[0]
+                model_field.required = False
+                if model_field.nullable is not True:  # pragma: no cover
+                    model_field.nullable = False
+
     def parse(
         self,
         with_import: Optional[bool] = True,
@@ -1033,6 +1049,7 @@ class Parser(ABC):
             self.__set_default_enum_member(models)
             self.__override_required_field(models)
             self.__sort_models(models, imports)
+            self.__set_one_literal_on_default(models)
 
             processed_models.append(Processed(module, models, init, imports))
 

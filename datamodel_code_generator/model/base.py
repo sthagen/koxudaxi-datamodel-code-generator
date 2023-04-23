@@ -74,6 +74,7 @@ class DataModelFieldBase(_BaseModel):
     const: bool = False
     original_name: Optional[str] = None
     use_default_kwarg: bool = False
+    use_one_literal_as_default: bool = False
     _exclude_fields: ClassVar[Set[str]] = {'parent'}
     _pass_fields: ClassVar[Set[str]] = {'parent', 'data_type'}
 
@@ -95,6 +96,8 @@ class DataModelFieldBase(_BaseModel):
 
         if not type_hint:
             return NONE
+        elif self.has_default_factory:
+            return type_hint
         elif self.data_type.is_optional and self.data_type.type != ANY:
             return type_hint
         elif self.nullable is not None:
@@ -153,6 +156,10 @@ class DataModelFieldBase(_BaseModel):
     @property
     def annotated(self) -> Optional[str]:
         return None
+
+    @property
+    def has_default_factory(self) -> bool:
+        return 'default_factory' in self.extras
 
 
 @lru_cache()
