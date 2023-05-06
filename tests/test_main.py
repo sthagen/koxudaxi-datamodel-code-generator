@@ -5275,3 +5275,104 @@ def test_main_use_operation_id_as_name_not_found_operation_id(capsys):
             == 'All operations must have an operationId when --use_operation_id_as_name is set.'
             'The following path was missing an operationId: pets\n'
         )
+
+
+@freeze_time('2019-07-26')
+def test_main_unsorted_optional_fields():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(OPEN_API_DATA_PATH / 'unsorted_optional_fields.yaml'),
+                '--output',
+                str(output_file),
+                '--output-model-type',
+                'dataclasses.dataclass',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH / 'unsorted_optional_fields' / 'output.py'
+            ).read_text()
+        )
+
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_all_of_any_of():
+    with TemporaryDirectory() as output_dir:
+        output_path: Path = Path(output_dir)
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'all_of_any_of'),
+                '--output',
+                str(output_path),
+                '--input-file-type',
+                'jsonschema',
+            ]
+        )
+        assert return_code == Exit.OK
+        all_of_any_of_dir = EXPECTED_MAIN_PATH / 'main_all_of_any_of'
+        for path in all_of_any_of_dir.rglob('*.py'):
+            result = output_path.joinpath(
+                path.relative_to(all_of_any_of_dir)
+            ).read_text()
+            assert result == path.read_text()
+
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_all_of_one_of():
+    with TemporaryDirectory() as output_dir:
+        output_path: Path = Path(output_dir)
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'all_of_one_of'),
+                '--output',
+                str(output_path),
+                '--input-file-type',
+                'jsonschema',
+            ]
+        )
+        assert return_code == Exit.OK
+        all_of_any_of_dir = EXPECTED_MAIN_PATH / 'main_all_of_one_of'
+        for path in all_of_any_of_dir.rglob('*.py'):
+            result = output_path.joinpath(
+                path.relative_to(all_of_any_of_dir)
+            ).read_text()
+            assert result == path.read_text()
+
+    with pytest.raises(SystemExit):
+        main()
+
+
+@freeze_time('2019-07-26')
+def test_main_null():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'null.json'),
+                '--output',
+                str(output_file),
+                '--input-file-type',
+                'jsonschema',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (EXPECTED_MAIN_PATH / 'main_null' / 'output.py').read_text()
+        )
+    with pytest.raises(SystemExit):
+        main()
