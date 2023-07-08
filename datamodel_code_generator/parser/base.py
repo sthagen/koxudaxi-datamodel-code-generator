@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from datamodel_code_generator.format import CodeFormatter, PythonVersion
 from datamodel_code_generator.imports import IMPORT_ANNOTATIONS, Import, Imports
 from datamodel_code_generator.model import pydantic as pydantic_model
+from datamodel_code_generator.model import pydantic_v2 as pydantic_v2_model
 from datamodel_code_generator.model.base import (
     ALL_MODEL,
     UNDEFINED,
@@ -353,6 +354,7 @@ class Parser(ABC):
         wrap_string_literal: Optional[bool] = None,
         use_title_as_name: bool = False,
         use_operation_id_as_name: bool = False,
+        use_unique_items_as_set: bool = False,
         http_headers: Optional[Sequence[Tuple[str, str]]] = None,
         http_ignore_tls: bool = False,
         use_annotated: bool = False,
@@ -422,6 +424,7 @@ class Parser(ABC):
         self.current_source_path: Optional[Path] = None
         self.use_title_as_name: bool = use_title_as_name
         self.use_operation_id_as_name: bool = use_operation_id_as_name
+        self.use_unique_items_as_set: bool = use_unique_items_as_set
 
         if base_path:
             self.base_path = base_path
@@ -685,6 +688,42 @@ class Parser(ABC):
                     ),
                 )
                 models.remove(model)
+
+    @classmethod
+    def _create_set_from_list(cls, data_type: DataType) -> Optional[DataType]:
+        if data_type.is_list:
+            new_data_type = data_type.copy()
+            new_data_type.is_list = False
+            new_data_type.is_set = True
+            for data_type_ in new_data_type.data_types:
+                data_type_.parent = new_data_type
+            return new_data_type
+        elif data_type.data_types:  # pragma: no cover
+            for index, nested_data_type in enumerate(data_type.data_types[:]):
+                set_data_type = cls._create_set_from_list(nested_data_type)
+                if set_data_type:  # pragma: no cover
+                    data_type.data_types[index] = set_data_type
+            return data_type
+        return None  # pragma: no cover
+
+    def __replace_unique_list_to_set(self, models: List[DataModel]) -> None:
+        for model in models:
+            for model_field in model.fields:
+                if not (
+                    isinstance(model_field, pydantic_v2_model.DataModelField)
+                    or self.use_unique_items_as_set
+                ):
+                    continue
+
+                if not (
+                    model_field.constraints and model_field.constraints.unique_items
+                ):
+                    continue
+                set_data_type = self._create_set_from_list(model_field.data_type)
+                if set_data_type:  # pragma: no cover
+                    model_field.data_type.parent = None
+                    model_field.data_type = set_data_type
+                    set_data_type.parent = model_field
 
     @classmethod
     def __set_reference_default_value_to_field(cls, models: List[DataModel]) -> None:
@@ -1036,6 +1075,7 @@ class Parser(ABC):
             imports = Imports()
             scoped_model_resolver = ModelResolver()
 
+            self.__replace_unique_list_to_set(models)
             self.__change_from_import(models, imports, scoped_model_resolver, init)
             self.__extract_inherited_enum(models)
             self.__set_reference_default_value_to_field(models)

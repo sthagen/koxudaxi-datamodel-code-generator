@@ -179,6 +179,7 @@ RAW_DATA_TYPES: List[InputFileType] = [
 
 class DataModelType(Enum):
     PydanticBaseModel = 'pydantic.BaseModel'
+    PydanticV2BaseModel = 'pydantic_v2.BaseModel'
     DataclassesDataclass = 'dataclasses.dataclass'
     TypingTypedDict = 'typing.TypedDict'
 
@@ -262,6 +263,7 @@ def generate(
     wrap_string_literal: Optional[bool] = None,
     use_title_as_name: bool = False,
     use_operation_id_as_name: bool = False,
+    use_unique_items_as_set: bool = False,
     http_headers: Optional[Sequence[Tuple[str, str]]] = None,
     http_ignore_tls: bool = False,
     use_annotated: bool = False,
@@ -409,6 +411,7 @@ def generate(
         wrap_string_literal=wrap_string_literal,
         use_title_as_name=use_title_as_name,
         use_operation_id_as_name=use_operation_id_as_name,
+        use_unique_items_as_set=use_unique_items_as_set,
         http_headers=http_headers,
         http_ignore_tls=http_ignore_tls,
         use_annotated=use_annotated,
