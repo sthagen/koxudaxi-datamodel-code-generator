@@ -12,7 +12,13 @@ from _pytest.capture import CaptureFixture
 from freezegun import freeze_time
 from packaging import version
 
-from datamodel_code_generator import InputFileType, chdir, generate, inferred_message
+from datamodel_code_generator import (
+    DataModelType,
+    InputFileType,
+    chdir,
+    generate,
+    inferred_message,
+)
 from datamodel_code_generator.__main__ import Exit, main
 
 try:
@@ -811,10 +817,20 @@ def test_validation_failed():
         ),
         (
             'pydantic_v2.BaseModel',
+            'main_with_field_constraints_pydantic_v2_use_generic_container_types_set',
+            ['--use-generic-container-types', '--use-unique-items-as-set'],
+        ),
+        (
+            'pydantic_v2.BaseModel',
             'main_with_field_constraints_pydantic_v2_use_standard_collections',
             [
                 '--use-standard-collections',
             ],
+        ),
+        (
+            'pydantic_v2.BaseModel',
+            'main_with_field_constraints_pydantic_v2_use_standard_collections_set',
+            ['--use-standard-collections', '--use-unique-items-as-set'],
         ),
     ],
 )
@@ -2695,6 +2711,26 @@ def test_main_generate():
 
 
 @freeze_time('2019-07-26')
+def test_main_generate_non_pydantic_output():
+    """
+    See https://github.com/koxudaxi/datamodel-code-generator/issues/1452.
+    """
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        input_ = (JSON_SCHEMA_DATA_PATH / 'simple_string.json').relative_to(Path.cwd())
+        assert not input_.is_absolute()
+        generate(
+            input_=input_,
+            input_file_type=InputFileType.JsonSchema,
+            output=output_file,
+            output_model_type=DataModelType.DataclassesDataclass,
+        )
+
+        file = EXPECTED_MAIN_PATH / 'main_generate_non_pydantic_output' / 'output.py'
+        assert output_file.read_text() == file.read_text()
+
+
+@freeze_time('2019-07-26')
 def test_main_generate_from_directory():
     with TemporaryDirectory() as output_dir:
         output_path: Path = Path(output_dir)
@@ -4517,6 +4553,43 @@ def test_main_openapi_const(output_model, expected_output):
         )
 
 
+@pytest.mark.parametrize(
+    'output_model,expected_output',
+    [
+        (
+            'pydantic.BaseModel',
+            'main_openapi_const_field',
+        ),
+        (
+            'pydantic_v2.BaseModel',
+            'main_openapi_const_field_pydantic_v2',
+        ),
+    ],
+)
+@freeze_time('2019-07-26')
+def test_main_openapi_const_field(output_model, expected_output):
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(OPEN_API_DATA_PATH / 'const.yaml'),
+                '--output',
+                str(output_file),
+                '--input-file-type',
+                'openapi',
+                '--output-model',
+                output_model,
+                '--collapse-root-models',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (EXPECTED_MAIN_PATH / expected_output / 'output.py').read_text()
+        )
+
+
 @freeze_time('2019-07-26')
 def test_main_openapi_complex_reference():
     with TemporaryDirectory() as output_dir:
@@ -5346,6 +5419,38 @@ def test_main_typed_dict_special_field_name_with_inheritance_model():
     reason='Require Black version 23.3.0 or later ',
 )
 @freeze_time('2019-07-26')
+def test_main_typed_dict_not_required_nullable():
+    """Test main function writing to TypedDict, with combos of Optional/NotRequired."""
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'not_required_nullable.json'),
+                '--output',
+                str(output_file),
+                '--output-model-type',
+                'typing.TypedDict',
+                '--target-python-version',
+                '3.11',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH
+                / 'main_typed_dict_not_required_nullable'
+                / 'output.py'
+            ).read_text()
+        )
+
+
+@pytest.mark.skipif(
+    version.parse(black.__version__) < version.parse('23.3.0'),
+    reason='Require Black version 23.3.0 or later ',
+)
+@freeze_time('2019-07-26')
 def test_main_typed_dict_nullable():
     with TemporaryDirectory() as output_dir:
         output_file: Path = Path(output_dir) / 'output.py'
@@ -5468,4 +5573,83 @@ def test_main_pydantic_v2():
         assert (
             output_file.read_text()
             == (EXPECTED_MAIN_PATH / 'main_pydantic_v2' / 'output.py').read_text()
+        )
+
+
+@freeze_time('2019-07-26')
+def test_main_openapi_custom_id_pydantic_v2():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(OPEN_API_DATA_PATH / 'custom_id.yaml'),
+                '--output',
+                str(output_file),
+                '--output-model-type',
+                'pydantic_v2.BaseModel',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH / 'main_openapi_custom_id_pydantic_v2' / 'output.py'
+            ).read_text()
+        )
+
+
+@pytest.mark.skipif(
+    not isort.__version__.startswith('4.'),
+    reason="isort 5.x don't sort pydantic modules",
+)
+@freeze_time('2019-07-26')
+def test_main_openapi_custom_id_pydantic_v2_custom_base():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(OPEN_API_DATA_PATH / 'custom_id.yaml'),
+                '--output',
+                str(output_file),
+                '--output-model-type',
+                'pydantic_v2.BaseModel',
+                '--base-class',
+                'custom_base.Base',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH
+                / 'main_openapi_custom_id_pydantic_v2_custom_base'
+                / 'output.py'
+            ).read_text()
+        )
+
+
+@freeze_time('2019-07-26')
+def test_main_jsonschema_discriminator_literals():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'discriminator_literals.json'),
+                '--output',
+                str(output_file),
+                '--output-model-type',
+                'pydantic_v2.BaseModel',
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH
+                / 'main_jsonschema_discriminator_literals'
+                / 'output.py'
+            ).read_text()
         )
