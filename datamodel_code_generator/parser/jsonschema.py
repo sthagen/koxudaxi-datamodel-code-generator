@@ -331,10 +331,7 @@ def _get_type(type_: str, format__: Optional[str] = None) -> Types:
     if data_formats is not None:
         return data_formats
 
-    warn(
-        'format of {!r} not understood for {!r} - using default'
-        ''.format(format__, type_)
-    )
+    warn(f'format of {format__!r} not understood for {type_!r} - using default' '')
     return json_schema_data_formats[type_]['default']
 
 
@@ -672,8 +669,11 @@ class JsonSchemaParser(Parser):
             )
         # ignore an undetected object
         if ignore_duplicate_model and not fields and len(base_classes) == 1:
-            self.model_resolver.delete(path)
-            return self.data_type(reference=base_classes[0])
+            with self.model_resolver.current_base_path_context(
+                self.model_resolver._base_path
+            ):
+                self.model_resolver.delete(path)
+                return self.data_type(reference=base_classes[0])
         if required:
             for field in fields:
                 if (field.original_name or field.name) in required:
