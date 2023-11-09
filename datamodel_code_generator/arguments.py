@@ -410,7 +410,8 @@ openapi_options.add_argument(
 )
 openapi_options.add_argument(
     '--validation',
-    help='Enable validation (Only OpenAPI)',
+    help='Deprecated: Enable validation (Only OpenAPI). this option is deprecated. it will be removed in future '
+    'releases',
     action='store_true',
     default=None,
 )
@@ -420,7 +421,7 @@ openapi_options.add_argument(
 # ======================================================================================
 general_options.add_argument(
     '--debug',
-    help='show debug message',
+    help="show debug message (require \"debug\". `$ pip install 'datamodel-code-generator[debug]'`)",
     action='store_true',
     default=None,
 )

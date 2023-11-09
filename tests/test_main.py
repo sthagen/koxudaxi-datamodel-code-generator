@@ -18,6 +18,7 @@ from datamodel_code_generator import (
     chdir,
     generate,
     inferred_message,
+    snooper_to_methods,
 )
 from datamodel_code_generator.__main__ import Exit, main
 
@@ -47,6 +48,22 @@ def reset_namespace(monkeypatch: MonkeyPatch):
     namespace_ = Namespace(no_color=False)
     monkeypatch.setattr('datamodel_code_generator.__main__.namespace', namespace_)
     monkeypatch.setattr('datamodel_code_generator.arguments.namespace', namespace_)
+
+
+def test_debug(mocker) -> None:
+    with pytest.raises(expected_exception=SystemExit):
+        main(['--debug', '--help'])
+
+    mocker.patch('datamodel_code_generator.pysnooper', None)
+    with pytest.raises(expected_exception=SystemExit):
+        main(['--debug', '--help'])
+
+
+@freeze_time('2019-07-26')
+def test_snooper_to_methods_without_pysnooper(mocker) -> None:
+    mocker.patch('datamodel_code_generator.pysnooper', None)
+    mock = mocker.Mock()
+    assert snooper_to_methods()(mock) == mock
 
 
 @freeze_time('2019-07-26')
@@ -784,7 +801,9 @@ def test_show_help_when_no_input(mocker):
 
 
 @freeze_time('2019-07-26')
-def test_validation():
+def test_validation(mocker):
+    mock_prance = mocker.patch('prance.BaseParser')
+
     with TemporaryDirectory() as output_dir:
         output_file: Path = Path(output_dir) / 'output.py'
         return_code: Exit = main(
@@ -801,10 +820,12 @@ def test_validation():
             output_file.read_text()
             == (EXPECTED_MAIN_PATH / 'validation' / 'output.py').read_text()
         )
+        mock_prance.assert_called_once()
 
 
 @freeze_time('2019-07-26')
-def test_validation_failed():
+def test_validation_failed(mocker):
+    mock_prance = mocker.patch('prance.BaseParser', side_effect=Exception('error'))
     with TemporaryDirectory() as output_dir:
         output_file: Path = Path(output_dir) / 'output.py'
         assert (
@@ -821,6 +842,7 @@ def test_validation_failed():
             )
             == Exit.ERROR
         )
+        mock_prance.assert_called_once()
 
 
 @pytest.mark.parametrize(
@@ -4221,7 +4243,9 @@ def test_main_jsonschema_has_default_value():
 
 
 @freeze_time('2019-07-26')
-def test_openapi_special_yaml_keywords():
+def test_openapi_special_yaml_keywords(mocker):
+    mock_prance = mocker.patch('prance.BaseParser')
+
     with TemporaryDirectory() as output_dir:
         output_file: Path = Path(output_dir) / 'output.py'
         return_code: Exit = main(
@@ -4240,6 +4264,7 @@ def test_openapi_special_yaml_keywords():
                 EXPECTED_MAIN_PATH / 'main_special_yaml_keywords' / 'output.py'
             ).read_text()
         )
+    mock_prance.assert_called_once()
 
 
 @freeze_time('2019-07-26')
