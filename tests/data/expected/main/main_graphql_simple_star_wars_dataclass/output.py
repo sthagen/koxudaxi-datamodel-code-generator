@@ -4,9 +4,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import List, Optional, TypeAlias
 
-from pydantic import BaseModel, Field
 from typing_extensions import Literal
 
 Boolean: TypeAlias = bool
@@ -33,7 +33,8 @@ The `String` scalar type represents textual data, represented as UTF-8 character
 """
 
 
-class Film(BaseModel):
+@dataclass
+class Film:
     characters: List[Person]
     characters_ids: List[ID]
     director: String
@@ -42,7 +43,6 @@ class Film(BaseModel):
     opening_crawl: String
     planets: List[Planet]
     planets_ids: List[ID]
-    producer: Optional[String] = None
     release_date: String
     species: List[Species]
     species_ids: List[ID]
@@ -51,105 +51,111 @@ class Film(BaseModel):
     title: String
     vehicles: List[Vehicle]
     vehicles_ids: List[ID]
-    typename__: Optional[Literal['Film']] = Field('Film', alias='__typename')
+    producer: Optional[String] = None
+    typename__: Optional[Literal['Film']] = 'Film'
 
 
-class Person(BaseModel):
-    birth_year: Optional[String] = None
-    eye_color: Optional[String] = None
+@dataclass
+class Person:
     films: List[Film]
     films_ids: List[ID]
-    gender: Optional[String] = None
-    hair_color: Optional[String] = None
-    height: Optional[Int] = None
-    homeworld: Optional[Planet] = None
-    homeworld_id: Optional[ID] = None
     id: ID
-    mass: Optional[Int] = None
     name: String
-    skin_color: Optional[String] = None
     species: List[Species]
     species_ids: List[ID]
     starships: List[Starship]
     starships_ids: List[ID]
     vehicles: List[Vehicle]
     vehicles_ids: List[ID]
-    typename__: Optional[Literal['Person']] = Field('Person', alias='__typename')
+    birth_year: Optional[String] = None
+    eye_color: Optional[String] = None
+    gender: Optional[String] = None
+    hair_color: Optional[String] = None
+    height: Optional[Int] = None
+    homeworld: Optional[Planet] = None
+    homeworld_id: Optional[ID] = None
+    mass: Optional[Int] = None
+    skin_color: Optional[String] = None
+    typename__: Optional[Literal['Person']] = 'Person'
 
 
-class Planet(BaseModel):
-    climate: Optional[String] = None
-    diameter: Optional[String] = None
+@dataclass
+class Planet:
     films: List[Film]
     films_ids: List[ID]
-    gravity: Optional[String] = None
     id: ID
     name: String
-    orbital_period: Optional[String] = None
-    population: Optional[String] = None
     residents: List[Person]
     residents_ids: List[ID]
+    climate: Optional[String] = None
+    diameter: Optional[String] = None
+    gravity: Optional[String] = None
+    orbital_period: Optional[String] = None
+    population: Optional[String] = None
     rotation_period: Optional[String] = None
     surface_water: Optional[String] = None
     terrain: Optional[String] = None
-    typename__: Optional[Literal['Planet']] = Field('Planet', alias='__typename')
+    typename__: Optional[Literal['Planet']] = 'Planet'
 
 
-class Species(BaseModel):
+@dataclass
+class Species:
+    films: List[Film]
+    films_ids: List[ID]
+    id: ID
+    name: String
+    people: List[Person]
+    people_ids: List[ID]
     average_height: Optional[String] = None
     average_lifespan: Optional[String] = None
     classification: Optional[String] = None
     designation: Optional[String] = None
     eye_colors: Optional[String] = None
+    hair_colors: Optional[String] = None
+    language: Optional[String] = None
+    skin_colors: Optional[String] = None
+    typename__: Optional[Literal['Species']] = 'Species'
+
+
+@dataclass
+class Starship:
     films: List[Film]
     films_ids: List[ID]
-    hair_colors: Optional[String] = None
     id: ID
-    language: Optional[String] = None
     name: String
-    people: List[Person]
-    people_ids: List[ID]
-    skin_colors: Optional[String] = None
-    typename__: Optional[Literal['Species']] = Field('Species', alias='__typename')
-
-
-class Starship(BaseModel):
+    pilots: List[Person]
+    pilots_ids: List[ID]
     MGLT: Optional[String] = None
     cargo_capacity: Optional[String] = None
     consumables: Optional[String] = None
     cost_in_credits: Optional[String] = None
     crew: Optional[String] = None
-    films: List[Film]
-    films_ids: List[ID]
     hyperdrive_rating: Optional[String] = None
-    id: ID
     length: Optional[String] = None
     manufacturer: Optional[String] = None
     max_atmosphering_speed: Optional[String] = None
     model: Optional[String] = None
-    name: String
     passengers: Optional[String] = None
+    starship_class: Optional[String] = None
+    typename__: Optional[Literal['Starship']] = 'Starship'
+
+
+@dataclass
+class Vehicle:
+    films: List[Film]
+    films_ids: List[ID]
+    id: ID
+    name: String
     pilots: List[Person]
     pilots_ids: List[ID]
-    starship_class: Optional[String] = None
-    typename__: Optional[Literal['Starship']] = Field('Starship', alias='__typename')
-
-
-class Vehicle(BaseModel):
     cargo_capacity: Optional[String] = None
     consumables: Optional[String] = None
     cost_in_credits: Optional[String] = None
     crew: Optional[String] = None
-    films: List[Film]
-    films_ids: List[ID]
-    id: ID
     length: Optional[String] = None
     manufacturer: Optional[String] = None
     max_atmosphering_speed: Optional[String] = None
     model: Optional[String] = None
-    name: String
     passengers: Optional[String] = None
-    pilots: List[Person]
-    pilots_ids: List[ID]
     vehicle_class: Optional[String] = None
-    typename__: Optional[Literal['Vehicle']] = Field('Vehicle', alias='__typename')
+    typename__: Optional[Literal['Vehicle']] = 'Vehicle'
