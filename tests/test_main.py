@@ -2067,7 +2067,20 @@ def test_main_json_capitalise_enum_members_without_enum():
 
 
 @freeze_time('2019-07-26')
-def test_main_openapi_datetime():
+@pytest.mark.parametrize(
+    'output_model,expected_output',
+    [
+        (
+            'pydantic.BaseModel',
+            'main_openapi_datetime',
+        ),
+        (
+            'pydantic_v2.BaseModel',
+            'main_openapi_datetime_pydantic_v2',
+        ),
+    ],
+)
+def test_main_openapi_datetime(output_model, expected_output):
     with TemporaryDirectory() as output_dir:
         output_file: Path = Path(output_dir) / 'output.py'
         return_code: Exit = main(
@@ -2078,12 +2091,14 @@ def test_main_openapi_datetime():
                 str(output_file),
                 '--input-file-type',
                 'openapi',
+                '--output-model',
+                output_model,
             ]
         )
         assert return_code == Exit.OK
         assert (
             output_file.read_text()
-            == (EXPECTED_MAIN_PATH / 'main_openapi_datetime' / 'output.py').read_text()
+            == (EXPECTED_MAIN_PATH / expected_output / 'output.py').read_text()
         )
 
 
@@ -4236,7 +4251,17 @@ def test_jsonschema_without_titles_use_title_as_name():
 
 
 @freeze_time('2019-07-26')
-def test_main_use_annotated_with_field_constraints():
+@pytest.mark.parametrize(
+    'output_model,expected_output',
+    [
+        ('pydantic.BaseModel', 'main_use_annotated_with_field_constraints'),
+        (
+            'pydantic_v2.BaseModel',
+            'main_use_annotated_with_field_constraints_pydantic_v2',
+        ),
+    ],
+)
+def test_main_use_annotated_with_field_constraints(output_model, expected_output):
     with TemporaryDirectory() as output_dir:
         output_file: Path = Path(output_dir) / 'output.py'
         return_code: Exit = main(
@@ -4249,16 +4274,14 @@ def test_main_use_annotated_with_field_constraints():
                 '--use-annotated',
                 '--target-python-version',
                 '3.9',
+                '--output-model',
+                output_model,
             ]
         )
         assert return_code == Exit.OK
         assert (
             output_file.read_text()
-            == (
-                EXPECTED_MAIN_PATH
-                / 'main_use_annotated_with_field_constraints'
-                / 'output.py'
-            ).read_text()
+            == (EXPECTED_MAIN_PATH / expected_output / 'output.py').read_text()
         )
 
 
@@ -5021,6 +5044,49 @@ def test_main_openapi_discriminator(input, output):
             output_file.read_text()
             == (EXPECTED_MAIN_PATH / output / 'output.py').read_text()
         )
+
+
+@freeze_time('2023-07-27')
+@pytest.mark.parametrize(
+    'kind,option, expected',
+    [
+        (
+            'anyOf',
+            '--collapse-root-models',
+            'main_openapi_discriminator_in_array_collapse_root_models',
+        ),
+        (
+            'oneOf',
+            '--collapse-root-models',
+            'main_openapi_discriminator_in_array_collapse_root_models',
+        ),
+        ('anyOf', None, 'main_openapi_discriminator_in_array'),
+        ('oneOf', None, 'main_openapi_discriminator_in_array'),
+    ],
+)
+def test_main_openapi_discriminator_in_array(kind, option, expected):
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        input_file = f'discriminator_in_array_{kind.lower()}.yaml'
+        return_code: Exit = main(
+            [
+                a
+                for a in [
+                    '--input',
+                    str(OPEN_API_DATA_PATH / input_file),
+                    '--output',
+                    str(output_file),
+                    '--input-file-type',
+                    'openapi',
+                    option,
+                ]
+                if a
+            ]
+        )
+        assert return_code == Exit.OK
+        assert output_file.read_text() == (
+            EXPECTED_MAIN_PATH / expected / 'output.py'
+        ).read_text().replace('discriminator_in_array.yaml', input_file)
 
 
 @freeze_time('2019-07-26')
