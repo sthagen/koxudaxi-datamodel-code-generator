@@ -1,3 +1,4 @@
+import json
 import platform
 import shutil
 from argparse import Namespace
@@ -3766,6 +3767,29 @@ def test_main_jsonschema_special_field_name():
 
 
 @freeze_time('2019-07-26')
+def test_main_imports_correct():
+    with TemporaryDirectory() as output_dir:
+        output_path: Path = Path(output_dir)
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'imports_correct'),
+                '--output',
+                str(output_path),
+                '--output-model-type',
+                'pydantic_v2.BaseModel',
+            ]
+        )
+        assert return_code == Exit.OK
+        main_modular_dir = EXPECTED_MAIN_PATH / 'main_imports_correct'
+        for path in main_modular_dir.rglob('*.py'):
+            result = output_path.joinpath(
+                path.relative_to(main_modular_dir)
+            ).read_text()
+            assert result == path.read_text()
+
+
+@freeze_time('2019-07-26')
 def test_main_jsonschema_complex_one_of():
     with TemporaryDirectory() as output_dir:
         output_file: Path = Path(output_dir) / 'output.py'
@@ -6913,6 +6937,44 @@ def test_one_of_with_sub_schema_array_item():
             == (
                 EXPECTED_MAIN_PATH
                 / 'main_one_of_with_sub_schema_array_item'
+                / 'output.py'
+            ).read_text()
+        )
+
+
+@freeze_time('2019-07-26')
+def test_main_jsonschema_with_custom_formatters():
+    with TemporaryDirectory() as output_dir:
+        output_file: Path = Path(output_dir) / 'output.py'
+        formatter_config = {
+            'license_file': str(
+                Path(__file__).parent
+                / 'data/python/custom_formatters/license_example.txt'
+            )
+        }
+        formatter_config_path = Path(output_dir, 'formatter_config')
+        with formatter_config_path.open('w') as f:
+            json.dump(formatter_config, f)
+        return_code: Exit = main(
+            [
+                '--input',
+                str(JSON_SCHEMA_DATA_PATH / 'person.json'),
+                '--output',
+                str(output_file),
+                '--input-file-type',
+                'jsonschema',
+                '--custom-formatters',
+                'tests.data.python.custom_formatters.add_license',
+                '--custom-formatters-kwargs',
+                str(formatter_config_path),
+            ]
+        )
+        assert return_code == Exit.OK
+        assert (
+            output_file.read_text()
+            == (
+                EXPECTED_MAIN_PATH
+                / 'main_jsonschema_with_custom_formatters'
                 / 'output.py'
             ).read_text()
         )
