@@ -151,13 +151,13 @@ model_options.add_argument(
 )
 model_options.add_argument(
     '--reuse-model',
-    help='Re-use models on the field when a module has the model with the same content',
+    help='Reuse models on the field when a module has the model with the same content',
     action='store_true',
     default=None,
 )
 model_options.add_argument(
     '--target-python-version',
-    help='target python version (default: 3.7)',
+    help='target python version (default: 3.8)',
     choices=[v.value for v in PythonVersion],
 )
 model_options.add_argument(
