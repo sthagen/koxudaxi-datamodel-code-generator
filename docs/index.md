@@ -418,6 +418,8 @@ Field customization:
                         Set field name prefix when first character can''t be used as Python
                         field name (default: `field`)
   --strip-default-none  Strip default None on fields
+  --union-mode {smart,left_to_right}
+                        Union mode for only pydantic v2 field
   --use-default         Use default value even if a field is required
   --use-default-kwarg   Use `default=` instead of a positional argument for Fields that have
                         default values.
