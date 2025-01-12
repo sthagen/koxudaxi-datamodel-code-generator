@@ -7,6 +7,7 @@ from datamodel_code_generator.model import DataModel, DataModelFieldBase
 from datamodel_code_generator.model.pydantic import BaseModel, DataModelField
 from datamodel_code_generator.parser.base import (
     Parser,
+    escape_characters,
     exact_import,
     relative,
     sort_data_models,
@@ -284,3 +285,165 @@ def test_no_additional_imports():
 def test_postprocess_result_modules(input_data, expected):
     result = Parser._Parser__postprocess_result_modules(input_data)
     assert result == expected
+
+
+def test_find_member_with_integer_enum():
+    """Test find_member method with integer enum values"""
+    from datamodel_code_generator.model.enum import Enum
+    from datamodel_code_generator.model.pydantic.base_model import DataModelField
+    from datamodel_code_generator.reference import Reference
+    from datamodel_code_generator.types import DataType
+
+    # Create test Enum with integer values
+    enum = Enum(
+        reference=Reference(
+            path='test_path', original_name='TestEnum', name='TestEnum'
+        ),
+        fields=[
+            DataModelField(
+                name='VALUE_1000',
+                default='1000',
+                data_type=DataType(type='int'),
+                required=True,
+            ),
+            DataModelField(
+                name='VALUE_100',
+                default='100',
+                data_type=DataType(type='int'),
+                required=True,
+            ),
+            DataModelField(
+                name='VALUE_0',
+                default='0',
+                data_type=DataType(type='int'),
+                required=True,
+            ),
+        ],
+    )
+
+    # Test finding members with integer values
+    assert enum.find_member(1000).field.name == 'VALUE_1000'
+    assert enum.find_member(100).field.name == 'VALUE_100'
+    assert enum.find_member(0).field.name == 'VALUE_0'
+
+    # Test with string representations
+    assert enum.find_member('1000').field.name == 'VALUE_1000'
+    assert enum.find_member('100').field.name == 'VALUE_100'
+    assert enum.find_member('0').field.name == 'VALUE_0'
+
+    # Test with non-existent values
+    assert enum.find_member(999) is None
+    assert enum.find_member('999') is None
+
+
+def test_find_member_with_string_enum():
+    from datamodel_code_generator.model.enum import Enum
+    from datamodel_code_generator.model.pydantic.base_model import DataModelField
+    from datamodel_code_generator.reference import Reference
+    from datamodel_code_generator.types import DataType
+
+    enum = Enum(
+        reference=Reference(
+            path='test_path', original_name='TestEnum', name='TestEnum'
+        ),
+        fields=[
+            DataModelField(
+                name='VALUE_A',
+                default="'value_a'",
+                data_type=DataType(type='str'),
+                required=True,
+            ),
+            DataModelField(
+                name='VALUE_B',
+                default="'value_b'",
+                data_type=DataType(type='str'),
+                required=True,
+            ),
+        ],
+    )
+
+    member = enum.find_member('value_a')
+    assert member is not None
+    assert member.field.name == 'VALUE_A'
+
+    member = enum.find_member('value_b')
+    assert member is not None
+    assert member.field.name == 'VALUE_B'
+
+    member = enum.find_member("'value_a'")
+    assert member is not None
+    assert member.field.name == 'VALUE_A'
+
+
+def test_find_member_with_mixed_enum():
+    from datamodel_code_generator.model.enum import Enum
+    from datamodel_code_generator.model.pydantic.base_model import DataModelField
+    from datamodel_code_generator.reference import Reference
+    from datamodel_code_generator.types import DataType
+
+    enum = Enum(
+        reference=Reference(
+            path='test_path', original_name='TestEnum', name='TestEnum'
+        ),
+        fields=[
+            DataModelField(
+                name='INT_VALUE',
+                default='100',
+                data_type=DataType(type='int'),
+                required=True,
+            ),
+            DataModelField(
+                name='STR_VALUE',
+                default="'value_a'",
+                data_type=DataType(type='str'),
+                required=True,
+            ),
+        ],
+    )
+
+    member = enum.find_member(100)
+    assert member is not None
+    assert member.field.name == 'INT_VALUE'
+
+    member = enum.find_member('100')
+    assert member is not None
+    assert member.field.name == 'INT_VALUE'
+
+    member = enum.find_member('value_a')
+    assert member is not None
+    assert member.field.name == 'STR_VALUE'
+
+    member = enum.find_member("'value_a'")
+    assert member is not None
+    assert member.field.name == 'STR_VALUE'
+
+
+@pytest.fixture
+def escape_map() -> Dict[str, str]:
+    return {
+        '\u0000': r'\x00',  # Null byte
+        "'": r'\'',
+        '\b': r'\b',
+        '\f': r'\f',
+        '\n': r'\n',
+        '\r': r'\r',
+        '\t': r'\t',
+        '\\': r'\\',
+    }
+
+
+@pytest.mark.parametrize(
+    'input_str,expected',
+    [
+        ('\u0000', r'\x00'),  # Test null byte
+        ("'", r'\''),  # Test single quote
+        ('\b', r'\b'),  # Test backspace
+        ('\f', r'\f'),  # Test form feed
+        ('\n', r'\n'),  # Test newline
+        ('\r', r'\r'),  # Test carriage return
+        ('\t', r'\t'),  # Test tab
+        ('\\', r'\\'),  # Test backslash
+    ],
+)
+def test_character_escaping(input_str: str, expected: str) -> None:
+    assert input_str.translate(escape_characters) == expected
