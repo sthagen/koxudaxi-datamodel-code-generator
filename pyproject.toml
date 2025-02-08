@@ -29,28 +29,37 @@ classifiers = [
 dynamic = [
   "version",
 ]
-
 dependencies = [
   "argcomplete>=2.10.1,<4",
   "black>=19.10b0",
   "genson>=1.2.1,<2",
-  "graphql-core>=3.2.3",
-  "httpx>=0.24.1",
   "inflect>=4.1,<6",
   "isort>=4.3.21,<7",
   "jinja2>=2.10.1,<4",
-  "openapi-spec-validator>=0.2.8,<0.7",
   "packaging",
-  "prance>=0.18.2",
   "pydantic>=1.5",
-  "pysnooper>=0.4.1,<2",
   "pyyaml>=6.0.1",
   "tomli>=2.2.1,<3; python_version<='3.11'",
 ]
-optional-dependencies.debug = [ "pysnooper" ]
-optional-dependencies.graphql = [ "graphql-core" ]
-optional-dependencies.http = [ "httpx" ]
-optional-dependencies.validation = [ "openapi-spec-validator", "prance" ]
+optional-dependencies.all = [
+  "datamodel-code-generator[debug]",
+  "datamodel-code-generator[graphql]",
+  "datamodel-code-generator[http]",
+  "datamodel-code-generator[validation]",
+]
+optional-dependencies.debug = [
+  "pysnooper>=0.4.1,<2",
+]
+optional-dependencies.graphql = [
+  "graphql-core>=3.2.3",
+]
+optional-dependencies.http = [
+  "httpx>=0.24.1",
+]
+optional-dependencies.validation = [
+  "openapi-spec-validator>=0.2.8,<0.7",
+  "prance>=0.18.2",
+]
 urls.Homepage = "https://github.com/koxudaxi/datamodel-code-generator"
 urls.Source = "https://github.com/koxudaxi/datamodel-code-generator"
 scripts.datamodel-codegen = "datamodel_code_generator.__main__:main"
@@ -65,7 +74,6 @@ dev = [
   { include-group = "type" },
 ]
 test = [
-  "diff-cover>=7.7",
   "freezegun",
   "pytest>=6.1",
   "pytest>=8.3.4",
@@ -76,6 +84,7 @@ test = [
   "pytest-mock>=3.14",
   "pytest-xdist>=3.3.1",
   "setuptools; python_version<'3.9'",
+  { include-group = "coverage" },
 ]
 type = [
   "pyright>=1.1.393",
@@ -98,20 +107,21 @@ isort4-pydantic15 = [ "isort[pyproject]==4.3.21", "pydantic==1.5.1" ]
 fix = [ "pre-commit>=3.5" ]
 pkg-meta = [ "check-wheel-contents>=0.6.1", "twine>=6.1", "uv>=0.5.22" ]
 coverage = [
+  "covdefaults>=2.3",
   "coverage[toml]>=7.6.1",
   "diff-cover>=7.7",
 ]
 
 [tool.hatch]
-build.dev-mode-dirs = [ "." ]
+build.dev-mode-dirs = [ "src" ]
 build.targets.sdist.include = [
-  "/datamodel_code_generator",
+  "/src",
   "/tests",
 ]
 version.source = "vcs"
 
 [tool.ruff]
-line-length = 88
+line-length = 120
 extend-exclude = [ "tests/data" ]
 format.indent-style = "space"
 format.quote-style = "single"
@@ -142,25 +152,28 @@ filterwarnings = [
 norecursedirs = "tests/data/*"
 
 [tool.coverage]
-run.source = [ "datamodel_code_generator" ]
-run.branch = true
-run.omit = [ "scripts/*", "tests/*" ]
-report.ignore_errors = true
-report.exclude_lines = [
-  "if self.debug:",
-  "pragma: no cover",
-  "raise NotImplementedError",
-  "if __name__ == .__main__.:",
-  "if TYPE_CHECKING:",
-  "if not TYPE_CHECKING:",
-]
+html.skip_covered = false
+html.show_contexts = false
 paths.source = [
-  "datamodel_code_generator",
-  ".tox*/*/lib/python*/site-packages/datamodel_code_generator",
-  ".tox*\\*\\Lib\\site-packages/datamodel_code_generator",
-  "*/datamodel_code_generator",
-  "*\\datamodel_code_generator",
+  "src",
+  ".tox*/*/lib/python*/site-packages",
+  ".tox*\\*\\Lib\\site-packages",
+  "*/src",
+  "*\\src",
 ]
+paths.other = [
+  ".",
+  "*/datamodel-code-generator",
+  "*\\datamodel-code-generator",
+]
+run.dynamic_context = "none"
+run.omit = [ "tests/data/*" ]
+report.fail_under = 94
+run.parallel = true
+run.plugins = [
+  "covdefaults",
+]
+covdefaults.subtract_omit = "*/__main__.py"
 
 [tool.pyright]
 reportPrivateImportUsage = false
