@@ -5,10 +5,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
-    Iterable,
-    Iterator,
-    Mapping,
-    Sequence,
 )
 from urllib.parse import ParseResult
 
@@ -16,6 +12,7 @@ from datamodel_code_generator import (
     DefaultPutDict,
     LiteralType,
     PythonVersion,
+    PythonVersionMin,
     snooper_to_methods,
 )
 from datamodel_code_generator.model import DataModel, DataModelFieldBase
@@ -43,6 +40,7 @@ from datamodel_code_generator.format import DatetimeClassType
 
 if TYPE_CHECKING:
     from collections import defaultdict
+    from collections.abc import Iterable, Iterator, Mapping, Sequence
 
 graphql_resolver = graphql.type.introspection.TypeResolvers()
 
@@ -93,7 +91,7 @@ class GraphQLParser(Parser):
         additional_imports: list[str] | None = None,
         custom_template_dir: Path | None = None,
         extra_template_data: defaultdict[str, dict[str, Any]] | None = None,
-        target_python_version: PythonVersion = PythonVersion.PY_38,
+        target_python_version: PythonVersion = PythonVersionMin,
         dump_resolve_reference_action: Callable[[Iterable[str]], str] | None = None,
         validation: bool = False,
         field_constraints: bool = False,
@@ -254,9 +252,10 @@ class GraphQLParser(Parser):
                 path_parts = list(source.path.parts)
             if self.current_source_path is not None:  # pragma: no cover
                 self.current_source_path = source.path
-            with self.model_resolver.current_base_path_context(
-                source.path.parent
-            ), self.model_resolver.current_root_context(path_parts):
+            with (
+                self.model_resolver.current_base_path_context(source.path.parent),
+                self.model_resolver.current_root_context(path_parts),
+            ):
                 yield source, path_parts
 
     def _resolve_types(self, paths: list[str], schema: graphql.GraphQLSchema) -> None:
@@ -387,9 +386,15 @@ class GraphQLParser(Parser):
             elif graphql.is_non_null_type(obj):  # pragma: no cover
                 data_type.is_optional = False
 
-            obj = obj.of_type  # pyright: ignore[reportAttributeAccessIssue]
+            obj = graphql.assert_wrapping_type(obj)
+            obj = obj.of_type
 
-        data_type.type = obj.name  # pyright: ignore[reportAttributeAccessIssue]
+        if graphql.is_enum_type(obj):
+            obj = graphql.assert_enum_type(obj)
+            data_type.reference = self.references[obj.name]
+
+        obj = graphql.assert_named_type(obj)
+        data_type.type = obj.name
 
         required = (not self.force_optional_for_required_fields) and (not final_data_type.is_optional)
 
