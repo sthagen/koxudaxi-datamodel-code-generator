@@ -42,7 +42,12 @@ if TYPE_CHECKING:
     from collections import defaultdict
     from collections.abc import Iterable, Iterator, Mapping, Sequence
 
-graphql_resolver = graphql.type.introspection.TypeResolvers()
+# graphql-core >=3.2.7 removed TypeResolvers in favor of TypeFields.kind.
+# Normalize to a single callable for resolving type kinds.
+try:  # graphql-core < 3.2.7
+    graphql_resolver_kind = graphql.type.introspection.TypeResolvers().kind  # pyright: ignore[reportAttributeAccessIssue]
+except AttributeError:  # pragma: no cover - executed on newer graphql-core
+    graphql_resolver_kind = graphql.type.introspection.TypeFields.kind  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def build_graphql_schema(schema_str: str) -> graphql.GraphQLSchema:
@@ -108,6 +113,7 @@ class GraphQLParser(Parser):
         base_path: Path | None = None,
         use_schema_description: bool = False,
         use_field_description: bool = False,
+        use_inline_field_description: bool = False,
         use_default_kwarg: bool = False,
         reuse_model: bool = False,
         encoding: str = "utf-8",
@@ -187,6 +193,7 @@ class GraphQLParser(Parser):
             base_path=base_path,
             use_schema_description=use_schema_description,
             use_field_description=use_field_description,
+            use_inline_field_description=use_inline_field_description,
             use_default_kwarg=use_default_kwarg,
             reuse_model=reuse_model,
             encoding=encoding,
@@ -278,7 +285,7 @@ class GraphQLParser(Parser):
             if type_name in {"Query", "Mutation"}:
                 continue
 
-            resolved_type = graphql_resolver.kind(type_, None)
+            resolved_type = graphql_resolver_kind(type_, None)
 
             if resolved_type in self.support_graphql_types:  # pragma: no cover
                 self.all_graphql_objects[type_.name] = type_
@@ -444,6 +451,7 @@ class GraphQLParser(Parser):
             strip_default_none=self.strip_default_none,
             use_annotated=self.use_annotated,
             use_field_description=self.use_field_description,
+            use_inline_field_description=self.use_inline_field_description,
             use_default_kwarg=self.use_default_kwarg,
             original_name=field_name,
             has_default=default is not None,
