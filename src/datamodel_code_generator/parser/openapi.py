@@ -16,12 +16,14 @@ from warnings import warn
 from pydantic import Field
 
 from datamodel_code_generator import (
+    DEFAULT_SHARED_MODULE_NAME,
     DataclassArguments,
     Error,
     LiteralType,
     OpenAPIScope,
     PythonVersion,
     PythonVersionMin,
+    ReuseScope,
     YamlValue,
     load_yaml_dict,
     snooper_to_methods,
@@ -201,9 +203,12 @@ class OpenAPIParser(JsonSchemaParser):
         base_path: Path | None = None,
         use_schema_description: bool = False,
         use_field_description: bool = False,
+        use_attribute_docstrings: bool = False,
         use_inline_field_description: bool = False,
         use_default_kwarg: bool = False,
         reuse_model: bool = False,
+        reuse_scope: ReuseScope | None = None,
+        shared_module_name: str = DEFAULT_SHARED_MODULE_NAME,
         encoding: str = "utf-8",
         enum_field_as_literal: LiteralType | None = None,
         use_one_literal_as_default: bool = False,
@@ -236,6 +241,7 @@ class OpenAPIParser(JsonSchemaParser):
         use_union_operator: bool = False,
         allow_responses_without_content: bool = False,
         collapse_root_models: bool = False,
+        skip_root_model: bool = False,
         use_type_alias: bool = False,
         special_field_name_prefix: str | None = None,
         remove_special_field_name_prefix: bool = False,
@@ -287,9 +293,12 @@ class OpenAPIParser(JsonSchemaParser):
             base_path=base_path,
             use_schema_description=use_schema_description,
             use_field_description=use_field_description,
+            use_attribute_docstrings=use_attribute_docstrings,
             use_inline_field_description=use_inline_field_description,
             use_default_kwarg=use_default_kwarg,
             reuse_model=reuse_model,
+            reuse_scope=reuse_scope,
+            shared_module_name=shared_module_name,
             encoding=encoding,
             enum_field_as_literal=enum_field_as_literal,
             use_one_literal_as_default=use_one_literal_as_default,
@@ -320,6 +329,7 @@ class OpenAPIParser(JsonSchemaParser):
             use_union_operator=use_union_operator,
             allow_responses_without_content=allow_responses_without_content,
             collapse_root_models=collapse_root_models,
+            skip_root_model=skip_root_model,
             use_type_alias=use_type_alias,
             special_field_name_prefix=special_field_name_prefix,
             remove_special_field_name_prefix=remove_special_field_name_prefix,
@@ -455,6 +465,7 @@ class OpenAPIParser(JsonSchemaParser):
             if isinstance(media_obj.schema_, JsonSchemaObject):
                 data_types[media_type] = self.parse_schema(name, media_obj.schema_, [*path, media_type])
             elif media_obj.schema_ is not None:
+                self.resolve_ref(media_obj.schema_.ref)
                 data_types[media_type] = self.get_ref_data_type(media_obj.schema_.ref)
         return data_types
 
@@ -489,6 +500,7 @@ class OpenAPIParser(JsonSchemaParser):
                         [*path, str(status_code), content_type],  # pyright: ignore[reportArgumentType]
                     )
                 else:
+                    self.resolve_ref(object_schema.ref)
                     data_types[status_code][content_type] = self.get_ref_data_type(  # pyright: ignore[reportArgumentType]
                         object_schema.ref
                     )

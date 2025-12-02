@@ -431,6 +431,8 @@ Field customization:
   --strip-default-none  Strip default None on fields
   --union-mode {smart,left_to_right}
                         Union mode for only pydantic v2 field
+  --use-attribute-docstrings
+                        Set use_attribute_docstrings=True in Pydantic v2 ConfigDict
   --use-default         Use default value even if a field is required
   --use-default-kwarg   Use `default=` instead of a positional argument for Fields that have
                         default values.
@@ -441,6 +443,15 @@ Field customization:
                         docstring
 
 Model customization:
+  --all-exports-collision-strategy {error,minimal-prefix,full-prefix}
+                        Strategy for name collisions when using --all-exports-
+                        scope=recursive. ''error'': raise an error (default). ''minimal-
+                        prefix'': add module prefix only to colliding names. ''full-prefix'':
+                        add full module path prefix to colliding names.
+  --all-exports-scope {children,recursive}
+                        Generate __all__ in __init__.py with re-exports. ''children'': export
+                        from direct child modules only. ''recursive'': export from all
+                        descendant modules.
   --allow-extra-fields  Deprecated: Allow passing extra fields. This flag is deprecated. Use
                         `--extra-fields=allow` instead.
   --allow-population-by-field-name
@@ -476,6 +487,14 @@ Model customization:
                         Set name of models defined inline from the parent model
   --reuse-model         Reuse models on the field when a module has the model with the same
                         content
+  --reuse-scope {module,tree}
+                        Scope for model reuse deduplication: module (per-file, default) or
+                        tree (cross-file with shared module). Only effective when --reuse-
+                        model is set.
+  --shared-module-name SHARED_MODULE_NAME
+                        Name of the shared module for --reuse-scope=tree (default:
+                        "shared"). Use this option if your schema has a file named "shared".
+  --skip-root-model     Skip generating the model for the root schema element
   --target-python-version {3.9,3.10,3.11,3.12,3.13,3.14}
                         target python version
   --treat-dot-as-module
@@ -525,9 +544,14 @@ OpenAPI-only options:
                         deprecated. it will be removed in future releases
 
 General options:
+  --check               Verify generated files are up-to-date without modifying them. Exits
+                        with code 1 if differences found, 0 if up-to-date. Useful for CI to
+                        ensure generated code is committed.
   --debug               show debug message (require "debug". `$ pip install ''datamodel-code-
                         generator[debug]''`)
   --disable-warnings    disable warnings
+  --generate-cli-command
+                        Generate CLI command from pyproject.toml configuration and exit
   --generate-pyproject-config
                         Generate pyproject.toml configuration from the provided CLI
                         arguments and exit

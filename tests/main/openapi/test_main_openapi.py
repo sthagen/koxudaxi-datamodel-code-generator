@@ -1312,6 +1312,18 @@ def test_external_relative_ref(tmp_path: Path) -> None:
     )
 
 
+def test_paths_external_ref(output_file: Path) -> None:
+    """Test OpenAPI generation with external refs in paths without components/schemas."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "paths_external_ref" / "openapi.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file="paths_external_ref.py",
+        extra_args=["--openapi-scopes", "paths"],
+    )
+
+
 @pytest.mark.benchmark
 def test_main_collapse_root_models(output_file: Path) -> None:
     """Test OpenAPI generation with collapsed root models."""
@@ -2170,6 +2182,72 @@ def test_main_openapi_type_alias_py312(output_file: Path) -> None:
 
 @pytest.mark.skipif(
     int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the target python version",
+)
+def test_main_openapi_type_alias_mutual_recursive_py311(output_file: Path) -> None:  # pragma: no cover
+    """Test mutual recursive type aliases render with quoted forward refs on Python 3.11."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "type_alias_mutual_recursive.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file="type_alias_mutual_recursive.py",
+        extra_args=[
+            "--use-type-alias",
+            "--target-python-version",
+            "3.11",
+            "--output-model-type",
+            "pydantic.BaseModel",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the target python version",
+)
+def test_main_openapi_type_alias_mutual_recursive_typealiastype_py311(output_file: Path) -> None:  # pragma: no cover
+    """Test mutual recursive type aliases render with quoted forward refs for TypeAliasType on Python 3.11."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "type_alias_mutual_recursive.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file="msgspec_mutual_type_alias.py",
+        extra_args=[
+            "--use-type-alias",
+            "--target-python-version",
+            "3.11",
+            "--output-model-type",
+            "msgspec.Struct",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the target python version",
+)
+def test_main_openapi_type_alias_recursive_py311(output_file: Path) -> None:  # pragma: no cover
+    """Test recursive type aliases render with quoted self references on Python 3.11."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "type_alias_recursive.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file="type_alias_recursive_py311.py",
+        extra_args=[
+            "--use-type-alias",
+            "--target-python-version",
+            "3.11",
+            "--output-model-type",
+            "pydantic.BaseModel",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
     reason="Installed black doesn't support the new 'type' statement",
 )
 def test_main_openapi_type_alias_recursive_py312(output_file: Path) -> None:
@@ -2192,6 +2270,66 @@ def test_main_openapi_type_alias_recursive_py312(output_file: Path) -> None:
             "--use-union-operator",
             "--output-model-type",
             "pydantic_v2.BaseModel",
+        ],
+    )
+
+
+def test_main_openapi_type_alias_recursive(output_file: Path) -> None:
+    """Test recursive type aliases with proper forward reference quoting."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "type_alias_recursive.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file="type_alias_recursive.py",
+        extra_args=["--use-type-alias"],
+    )
+
+
+def test_main_openapi_type_alias_cross_module_collision_a(output_file: Path) -> None:
+    """Test TypeAlias generation for module A in cross-module collision scenario."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "type_alias_cross_module_collision" / "a.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file="type_alias_cross_module_collision_a.py",
+        extra_args=[
+            "--use-type-alias",
+            "--target-python-version",
+            "3.10",
+        ],
+    )
+
+
+def test_main_openapi_type_alias_cross_module_collision_b(output_file: Path) -> None:
+    """Test TypeAlias generation for module B with self-referential forward reference."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "type_alias_cross_module_collision" / "b.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file="type_alias_cross_module_collision_b.py",
+        extra_args=[
+            "--use-type-alias",
+            "--target-python-version",
+            "3.10",
+        ],
+    )
+
+
+def test_main_openapi_type_alias_forward_ref_multiple(output_file: Path) -> None:
+    """Test TypeAlias with multiple forward references that require quoting."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "type_alias_forward_ref_multiple.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file="type_alias_forward_ref_multiple.py",
+        extra_args=[
+            "--use-type-alias",
+            "--target-python-version",
+            "3.10",
         ],
     )
 
@@ -2251,3 +2389,31 @@ def test_main_openapi_webhooks_with_parameters(output_file: Path) -> None:
         assert_func=assert_file_content,
         extra_args=["--openapi-scopes", "schemas", "webhooks", "parameters"],
     )
+
+
+def test_main_openapi_external_ref_with_transitive_local_ref(output_file: Path) -> None:
+    """Test OpenAPI generation with external ref that has transitive local refs."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "external_ref_with_transitive_local_ref" / "openapi.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file="external_ref_with_transitive_local_ref/output.py",
+        extra_args=["--output-model-type", "pydantic_v2.BaseModel"],
+    )
+
+
+def test_main_openapi_namespace_subns_ref(output_dir: Path) -> None:
+    """Test OpenAPI generation with namespaced schema referencing subnamespace.
+
+    Regression test for issue #2366: When a schema with a dot-delimited name
+    (e.g., ns.wrapper) references another schema in a subnamespace
+    (e.g., ns.subns.item), the generated import should be "from . import subns"
+    (same package) instead of "from .. import subns" (parent package).
+    """
+    with freeze_time(TIMESTAMP):
+        run_main_and_assert(
+            input_path=OPEN_API_DATA_PATH / "namespace_subns_ref.json",
+            output_path=output_dir,
+            expected_directory=EXPECTED_OPENAPI_PATH / "namespace_subns_ref",
+        )

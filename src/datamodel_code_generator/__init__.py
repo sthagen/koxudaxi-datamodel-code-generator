@@ -53,6 +53,7 @@ if TYPE_CHECKING:
 
 MIN_VERSION: Final[int] = 9
 MAX_VERSION: Final[int] = 13
+DEFAULT_SHARED_MODULE_NAME: Final[str] = "shared"
 
 T = TypeVar("T")
 
@@ -224,6 +225,17 @@ class DataModelType(Enum):
     MsgspecStruct = "msgspec.Struct"
 
 
+class ReuseScope(Enum):
+    """Scope for model reuse deduplication.
+
+    module: Deduplicate identical models within each module (default).
+    tree: Deduplicate identical models across all modules, placing shared models in shared.py.
+    """
+
+    Module = "module"
+    Tree = "tree"
+
+
 class OpenAPIScope(Enum):
     """Scopes for OpenAPI model generation."""
 
@@ -232,6 +244,30 @@ class OpenAPIScope(Enum):
     Tags = "tags"
     Parameters = "parameters"
     Webhooks = "webhooks"
+
+
+class AllExportsScope(Enum):
+    """Scope for __all__ exports in __init__.py.
+
+    children: Export models from direct child modules only.
+    recursive: Export models from all descendant modules recursively.
+    """
+
+    Children = "children"
+    Recursive = "recursive"
+
+
+class AllExportsCollisionStrategy(Enum):
+    """Strategy for handling name collisions in recursive exports.
+
+    error: Raise an error when name collision is detected.
+    minimal_prefix: Add module prefix only to colliding names.
+    full_prefix: Add full module path prefix to all colliding names.
+    """
+
+    Error = "error"
+    MinimalPrefix = "minimal-prefix"
+    FullPrefix = "full-prefix"
 
 
 class GraphQLScope(Enum):
@@ -302,9 +338,12 @@ def generate(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     use_standard_collections: bool = False,
     use_schema_description: bool = False,
     use_field_description: bool = False,
+    use_attribute_docstrings: bool = False,
     use_inline_field_description: bool = False,
     use_default_kwarg: bool = False,
     reuse_model: bool = False,
+    reuse_scope: ReuseScope = ReuseScope.Module,
+    shared_module_name: str = DEFAULT_SHARED_MODULE_NAME,
     encoding: str = "utf-8",
     enum_field_as_literal: LiteralType | None = None,
     use_one_literal_as_default: bool = False,
@@ -336,6 +375,7 @@ def generate(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     use_double_quotes: bool = False,
     use_union_operator: bool = False,
     collapse_root_models: bool = False,
+    skip_root_model: bool = False,
     use_type_alias: bool = False,
     special_field_name_prefix: str | None = None,
     remove_special_field_name_prefix: bool = False,
@@ -359,6 +399,8 @@ def generate(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     dataclass_arguments: DataclassArguments | None = None,
     disable_future_imports: bool = False,
     type_mappings: list[str] | None = None,
+    all_exports_scope: AllExportsScope | None = None,
+    all_exports_collision_strategy: AllExportsCollisionStrategy | None = None,
 ) -> None:
     """Generate Python data models from schema definitions or structured data.
 
@@ -531,9 +573,12 @@ def generate(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
         base_path=input_.parent if isinstance(input_, Path) and input_.is_file() else None,
         use_schema_description=use_schema_description,
         use_field_description=use_field_description,
+        use_attribute_docstrings=use_attribute_docstrings,
         use_inline_field_description=use_inline_field_description,
         use_default_kwarg=use_default_kwarg,
         reuse_model=reuse_model,
+        reuse_scope=reuse_scope,
+        shared_module_name=shared_module_name,
         enum_field_as_literal=LiteralType.All
         if output_model_type == DataModelType.TypingTypedDict
         else enum_field_as_literal,
@@ -566,6 +611,7 @@ def generate(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
         use_double_quotes=use_double_quotes,
         use_union_operator=use_union_operator,
         collapse_root_models=collapse_root_models,
+        skip_root_model=skip_root_model,
         use_type_alias=use_type_alias,
         special_field_name_prefix=special_field_name_prefix,
         remove_special_field_name_prefix=remove_special_field_name_prefix,
@@ -592,7 +638,11 @@ def generate(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     )
 
     with chdir(output):
-        results = parser.parse(disable_future_imports=disable_future_imports)
+        results = parser.parse(
+            disable_future_imports=disable_future_imports,
+            all_exports_scope=all_exports_scope,
+            all_exports_collision_strategy=all_exports_collision_strategy,
+        )
     if not input_filename:  # pragma: no cover
         if isinstance(input_, str):
             input_filename = "<stdin>"
@@ -608,7 +658,7 @@ def generate(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
         msg = "Models not found in the input data"
         raise Error(msg)
     if isinstance(results, str):
-        modules = {output: (results, input_filename)}
+        modules: dict[Path | None, tuple[str, str | None]] = {output: (results, input_filename)}
     else:
         if output is None:
             msg = "Modular references require an output directory"
@@ -683,6 +733,8 @@ inferred_message = (
 __all__ = [
     "MAX_VERSION",
     "MIN_VERSION",
+    "AllExportsCollisionStrategy",
+    "AllExportsScope",
     "DatetimeClassType",
     "DefaultPutDict",
     "Error",

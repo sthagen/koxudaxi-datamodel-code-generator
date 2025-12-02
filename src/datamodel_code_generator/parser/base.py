@@ -12,7 +12,7 @@ import re
 import sys
 from abc import ABC, abstractmethod
 from collections import OrderedDict, defaultdict
-from collections.abc import Hashable
+from collections.abc import Hashable, Sequence
 from itertools import groupby
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, NamedTuple, Optional, Protocol, TypeVar, cast, runtime_checkable
@@ -20,6 +20,13 @@ from urllib.parse import ParseResult
 
 from pydantic import BaseModel
 
+from datamodel_code_generator import (
+    DEFAULT_SHARED_MODULE_NAME,
+    AllExportsCollisionStrategy,
+    AllExportsScope,
+    Error,
+    ReuseScope,
+)
 from datamodel_code_generator.format import (
     DEFAULT_FORMATTERS,
     CodeFormatter,
@@ -47,7 +54,7 @@ from datamodel_code_generator.model.base import (
     DataModelFieldBase,
 )
 from datamodel_code_generator.model.enum import Enum, Member
-from datamodel_code_generator.model.type_alias import TypeAliasBase
+from datamodel_code_generator.model.type_alias import TypeAliasBase, TypeStatement
 from datamodel_code_generator.parser import DefaultPutDict, LiteralType
 from datamodel_code_generator.reference import ModelResolver, Reference
 from datamodel_code_generator.types import DataType, DataTypeManager, StrictTypes
@@ -401,9 +408,12 @@ class Parser(ABC):
         base_path: Path | None = None,
         use_schema_description: bool = False,
         use_field_description: bool = False,
+        use_attribute_docstrings: bool = False,
         use_inline_field_description: bool = False,
         use_default_kwarg: bool = False,
         reuse_model: bool = False,
+        reuse_scope: ReuseScope | None = None,
+        shared_module_name: str = DEFAULT_SHARED_MODULE_NAME,
         encoding: str = "utf-8",
         enum_field_as_literal: LiteralType | None = None,
         set_default_enum_member: bool = False,
@@ -433,6 +443,7 @@ class Parser(ABC):
         use_union_operator: bool = False,
         allow_responses_without_content: bool = False,
         collapse_root_models: bool = False,
+        skip_root_model: bool = False,
         use_type_alias: bool = False,
         special_field_name_prefix: str | None = None,
         remove_special_field_name_prefix: bool = False,
@@ -493,6 +504,8 @@ class Parser(ABC):
         self.use_inline_field_description: bool = use_inline_field_description
         self.use_default_kwarg: bool = use_default_kwarg
         self.reuse_model: bool = reuse_model
+        self.reuse_scope: ReuseScope | None = reuse_scope
+        self.shared_module_name: str = shared_module_name
         self.encoding: str = encoding
         self.enum_field_as_literal: LiteralType | None = enum_field_as_literal
         self.set_default_enum_member: bool = set_default_enum_member
@@ -537,6 +550,9 @@ class Parser(ABC):
         if enable_faux_immutability:
             self.extra_template_data[ALL_MODEL]["allow_mutation"] = False
 
+        if use_attribute_docstrings:
+            self.extra_template_data[ALL_MODEL]["use_attribute_docstrings"] = True
+
         self.model_resolver = ModelResolver(
             base_url=source.geturl() if isinstance(source, ParseResult) else None,
             singular_name_suffix="" if disable_appending_item_suffix else None,
@@ -565,6 +581,7 @@ class Parser(ABC):
         self.use_double_quotes = use_double_quotes
         self.allow_responses_without_content = allow_responses_without_content
         self.collapse_root_models = collapse_root_models
+        self.skip_root_model = skip_root_model
         self.use_type_alias = use_type_alias
         self.capitalise_enum_members = capitalise_enum_members
         self.keep_model_order = keep_model_order
@@ -804,7 +821,7 @@ class Parser(ABC):
                 if from_ and import_ and alias != name:
                     data_type.alias = alias if data_type.reference.short_name == import_ else f"{alias}.{name}"
 
-                if init:
+                if init and not data_type.full_name.startswith(model.module_name + "."):
                     from_ = "." + from_
                 imports.append(
                     Import(
@@ -996,7 +1013,7 @@ class Parser(ABC):
                     model_field.default = model_field.data_type.reference.source.default
 
     def __reuse_model(self, models: list[DataModel], require_update_action_models: list[str]) -> None:
-        if not self.reuse_model:
+        if not self.reuse_model or self.reuse_scope == ReuseScope.Tree:
             return
         model_cache: dict[tuple[HashableComparable, ...], Reference] = {}
         duplicates = []
@@ -1034,6 +1051,133 @@ class Parser(ABC):
 
         for duplicate in duplicates:
             models.remove(duplicate)
+
+    def __find_duplicate_models_across_modules(  # noqa: PLR6301
+        self,
+        module_models: list[tuple[tuple[str, ...], list[DataModel]]],
+    ) -> list[tuple[tuple[str, ...], DataModel, tuple[str, ...], DataModel]]:
+        """Find duplicate models across all modules by comparing render output and imports."""
+        all_models: list[tuple[tuple[str, ...], DataModel]] = []
+        for module, models in module_models:
+            all_models.extend((module, model) for model in models)
+
+        model_cache: dict[tuple[HashableComparable, ...], tuple[tuple[str, ...], DataModel]] = {}
+        duplicates: list[tuple[tuple[str, ...], DataModel, tuple[str, ...], DataModel]] = []
+
+        for module, model in all_models:
+            model_key = tuple(to_hashable(v) for v in (model.render(class_name="M"), model.imports))
+            cached = model_cache.get(model_key)
+            if cached:
+                canonical_module, canonical_model = cached
+                duplicates.append((module, model, canonical_module, canonical_model))
+            else:
+                model_cache[model_key] = (module, model)
+
+        return duplicates
+
+    def __validate_shared_module_name(
+        self,
+        module_models: list[tuple[tuple[str, ...], list[DataModel]]],
+    ) -> None:
+        """Validate that the shared module name doesn't conflict with existing modules."""
+        shared_module = self.shared_module_name
+        existing_module_names = {module[0] for module, _ in module_models}
+        if shared_module in existing_module_names:
+            msg = (
+                f"Schema file or directory '{shared_module}' conflicts with the shared module name. "
+                f"Use --shared-module-name to specify a different name."
+            )
+            raise Error(msg)
+
+    def __create_shared_module_from_duplicates(  # noqa: PLR0912
+        self,
+        module_models: list[tuple[tuple[str, ...], list[DataModel]]],
+        duplicates: list[tuple[tuple[str, ...], DataModel, tuple[str, ...], DataModel]],
+        require_update_action_models: list[str],
+    ) -> tuple[tuple[str, ...], list[DataModel]]:
+        """Create shared module with canonical models and replace duplicates with inherited models."""
+        shared_module = self.shared_module_name
+
+        shared_models: list[DataModel] = []
+        canonical_to_shared_ref: dict[DataModel, Reference] = {}
+        canonical_models_seen: set[DataModel] = set()
+
+        # Process in order of first appearance in duplicates to ensure stable ordering
+        for _, _, _, canonical in duplicates:
+            if canonical in canonical_models_seen:
+                continue
+            canonical_models_seen.add(canonical)
+            canonical.file_path = Path(f"{shared_module}.py")
+            canonical_to_shared_ref[canonical] = canonical.reference
+            shared_models.append(canonical)
+
+        supports_inheritance = issubclass(
+            self.data_model_type,
+            (
+                pydantic_model.BaseModel,
+                pydantic_model_v2.BaseModel,
+                dataclass_model.DataClass,
+            ),
+        )
+
+        for duplicate_module, duplicate_model, _, canonical_model in duplicates:
+            shared_ref = canonical_to_shared_ref[canonical_model]
+            for module, models in module_models:
+                if module != duplicate_module or duplicate_model not in models:
+                    continue
+                if isinstance(duplicate_model, Enum) or not supports_inheritance:
+                    for child in duplicate_model.reference.children[:]:
+                        data_model = get_most_of_parent(child)
+                        if data_model in models and isinstance(child, DataType):
+                            child.replace_reference(shared_ref)
+                    models.remove(duplicate_model)
+                else:
+                    index = models.index(duplicate_model)
+                    inherited_model = duplicate_model.__class__(
+                        fields=[],
+                        base_classes=[shared_ref],
+                        description=duplicate_model.description,
+                        reference=Reference(
+                            name=duplicate_model.name,
+                            path=duplicate_model.reference.path + "/reuse",
+                        ),
+                        custom_template_dir=duplicate_model._custom_template_dir,  # noqa: SLF001
+                    )
+                    if shared_ref.path in require_update_action_models:
+                        add_model_path_to_list(require_update_action_models, inherited_model)
+                    models.insert(index, inherited_model)
+                    models.remove(duplicate_model)
+                break
+            else:  # pragma: no cover
+                msg = f"Duplicate model {duplicate_model.name} not found in module {duplicate_module}"
+                raise RuntimeError(msg)
+
+        for canonical in canonical_models_seen:
+            for _module, models in module_models:
+                if canonical in models:
+                    models.remove(canonical)
+                    break
+            else:  # pragma: no cover
+                msg = f"Canonical model {canonical.name} not found in any module"
+                raise RuntimeError(msg)
+
+        return (shared_module,), shared_models
+
+    def __reuse_model_tree_scope(
+        self,
+        module_models: list[tuple[tuple[str, ...], list[DataModel]]],
+        require_update_action_models: list[str],
+    ) -> tuple[tuple[str, ...], list[DataModel]] | None:
+        """Deduplicate models across all modules, placing shared models in shared.py."""
+        if not self.reuse_model or self.reuse_scope != ReuseScope.Tree:
+            return None
+
+        duplicates = self.__find_duplicate_models_across_modules(module_models)
+        if not duplicates:
+            return None
+
+        self.__validate_shared_module_name(module_models)
+        return self.__create_shared_module_from_duplicates(module_models, duplicates, require_update_action_models)
 
     def __collapse_root_models(  # noqa: PLR0912
         self,
@@ -1295,6 +1439,34 @@ class Parser(ABC):
                     model_field.nullable = False
 
     @classmethod
+    def __update_type_aliases(cls, models: list[DataModel]) -> None:
+        """Update type aliases to properly handle forward references per PEP 484."""
+        rendered_aliases: set[str] = set()
+
+        for model in models:
+            if not isinstance(model, TypeAliasBase):
+                continue
+
+            if isinstance(model, TypeStatement):
+                rendered_aliases.add(model.class_name)
+                continue
+
+            for field in model.fields:
+                for data_type in field.data_type.all_data_types:
+                    if not data_type.reference:
+                        continue
+                    source = data_type.reference.source
+                    if not isinstance(source, TypeAliasBase):
+                        continue
+                    if isinstance(source, TypeStatement):  # pragma: no cover
+                        continue
+                    name = data_type.reference.short_name
+                    if name not in rendered_aliases:
+                        data_type.alias = f'"{name}"'
+
+            rendered_aliases.add(model.class_name)
+
+    @classmethod
     def __postprocess_result_modules(cls, results: dict[tuple[str, ...], Result]) -> dict[tuple[str, ...], Result]:
         def process(input_tuple: tuple[str, ...]) -> tuple[str, ...]:
             r = []
@@ -1364,6 +1536,113 @@ class Parser(ABC):
                         )
 
     @classmethod
+    def _collect_exports_for_init(
+        cls,
+        module: tuple[str, ...],
+        processed_models: Sequence[tuple[tuple[str, ...], Sequence[DataModel], bool, Imports, ModelResolver]],
+        scope: AllExportsScope,
+    ) -> list[tuple[str, tuple[str, ...], str]]:
+        """Collect exports for __init__.py based on scope."""
+        exports: list[tuple[str, tuple[str, ...], str]] = []
+        base = module[:-1] if module[-1] == "__init__.py" else module
+        base_len = len(base)
+
+        for proc_module, proc_models, _, _, _ in processed_models:
+            if not proc_models or proc_module == module:
+                continue
+            last = proc_module[-1]
+            prefix = proc_module[:-1] if last == "__init__.py" else (*proc_module[:-1], last[:-3])
+            if prefix[:base_len] != base or (depth := len(prefix) - base_len) < 1:
+                continue
+            if scope == AllExportsScope.Children and depth != 1:
+                continue
+            rel = prefix[base_len:]
+            exports.extend(
+                (ref.short_name, rel, ".".join(rel))
+                for m in proc_models
+                if (ref := m.reference) and not ref.short_name.startswith("_")
+            )
+        return exports
+
+    @classmethod
+    def _resolve_export_collisions(
+        cls,
+        exports: list[tuple[str, tuple[str, ...], str]],
+        strategy: AllExportsCollisionStrategy | None,
+        reserved: set[str] | None = None,
+    ) -> dict[str, list[tuple[str, tuple[str, ...], str]]]:
+        """Resolve name collisions in exports based on strategy."""
+        reserved = reserved or set()
+        by_name: dict[str, list[tuple[str, tuple[str, ...], str]]] = {}
+        for item in exports:
+            by_name.setdefault(item[0], []).append(item)
+
+        if not (colliding := {n for n, items in by_name.items() if len(items) > 1 or n in reserved}):
+            return dict(by_name)
+        if (effective := strategy or AllExportsCollisionStrategy.Error) == AllExportsCollisionStrategy.Error:
+            cls._raise_collision_error(by_name, colliding)
+
+        used: set[str] = {n for n in by_name if n not in colliding} | reserved
+        result = {n: items for n, items in by_name.items() if n not in colliding}
+
+        for name in sorted(colliding):
+            for item in sorted(by_name[name], key=lambda x: len(x[1])):
+                new_name = cls._make_prefixed_name(
+                    item[0], item[1], used, minimal=effective == AllExportsCollisionStrategy.MinimalPrefix
+                )
+                if new_name in reserved:
+                    msg = (
+                        f"Cannot resolve collision: '{new_name}' conflicts with __init__.py model. "
+                        "Please rename one of the models."
+                    )
+                    raise Error(msg)
+                result[new_name] = [item]
+                used.add(new_name)
+        return result
+
+    @classmethod
+    def _raise_collision_error(
+        cls,
+        by_name: dict[str, list[tuple[str, tuple[str, ...], str]]],
+        colliding: set[str],
+    ) -> None:
+        """Raise an error with collision details."""
+        details = []
+        for n in colliding:
+            if len(items := by_name[n]) > 1:
+                details.append(f"  '{n}' is defined in: {', '.join(f'.{s}' for _, _, s in items)}")
+            else:
+                details.append(f"  '{n}' conflicts with a model in __init__.py")
+        raise Error(
+            "Name collision detected with --all-exports-scope:\n"
+            + "\n".join(details)
+            + "\n\nUse --all-exports-collision-strategy to specify how to handle collisions."
+        )
+
+    @staticmethod
+    def _make_prefixed_name(name: str, path: tuple[str, ...], used: set[str], *, minimal: bool) -> str:
+        """Generate a prefixed name, using minimal or full prefix."""
+        if minimal:
+            for depth in range(1, len(path) + 1):
+                if (candidate := "".join(p.title().replace("_", "") for p in path[-depth:]) + name) not in used:
+                    return candidate
+        return "".join(p.title().replace("_", "") for p in path) + name
+
+    @classmethod
+    def _build_all_exports_code(
+        cls,
+        resolved: dict[str, list[tuple[str, tuple[str, ...], str]]],
+    ) -> tuple[Imports, list[str]]:
+        """Build import statements and __all__ list from resolved exports."""
+        export_imports = Imports()
+        for export_name, items in resolved.items():
+            for orig, _, short in items:
+                export_imports.append(
+                    Import(from_=f".{short}", import_=orig, alias=export_name if export_name != orig else None)
+                )
+        return export_imports, sorted(resolved.keys())
+
+    @classmethod
     def _collect_used_names_from_models(cls, models: list[DataModel]) -> set[str]:
         """Collect identifiers referenced by models before rendering."""
         names: set[str] = set()
@@ -1396,12 +1675,14 @@ class Parser(ABC):
                 walk_data_type(field.data_type)
         return names
 
-    def parse(  # noqa: PLR0912, PLR0914, PLR0915
+    def parse(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, PLR0917
         self,
         with_import: bool | None = True,  # noqa: FBT001, FBT002
         format_: bool | None = True,  # noqa: FBT001, FBT002
         settings_path: Path | None = None,
         disable_future_imports: bool = False,  # noqa: FBT001, FBT002
+        all_exports_scope: AllExportsScope | None = None,
+        all_exports_collision_strategy: AllExportsCollisionStrategy | None = None,
     ) -> str | dict[tuple[str, ...], Result]:
         """Parse schema and generate code, returning single file or module dict."""
         self.parse_raw()
@@ -1464,6 +1745,10 @@ class Parser(ABC):
                 models,
             ))
             previous_module = module
+
+        shared_module_entry = self.__reuse_model_tree_scope(module_models, require_update_action_models)
+        if shared_module_entry:
+            module_models.insert(0, shared_module_entry)
 
         class Processed(NamedTuple):
             module: tuple[str, ...]
@@ -1539,10 +1824,40 @@ class Parser(ABC):
 
         for module, models, init, imports, scoped_model_resolver in processed_models:  # noqa: B007
             result: list[str] = []
+            export_imports: Imports | None = None
+            export_names: list[str] = []
+
+            if all_exports_scope is not None and module[-1] == "__init__.py":
+                child_exports = self._collect_exports_for_init(module, processed_models, all_exports_scope)
+                if child_exports:
+                    local_model_names = {
+                        m.reference.short_name
+                        for m in models
+                        if m.reference and not m.reference.short_name.startswith("_")
+                    }
+                    resolved_exports = self._resolve_export_collisions(
+                        child_exports, all_exports_collision_strategy, local_model_names
+                    )
+                    export_imports, export_names = self._build_all_exports_code(resolved_exports)
+
             if models:
                 if with_import:
                     result += [str(self.imports), str(imports), "\n"]
 
+                if export_imports:
+                    result += [str(export_imports), ""]
+
+                if export_names:
+                    local_exports = [
+                        m.reference.short_name
+                        for m in models
+                        if m.reference and not m.reference.short_name.startswith("_")
+                    ]
+                    all_export_names = sorted(set(export_names + local_exports))
+                    all_items = ",\n    ".join(f'"{name}"' for name in all_export_names)
+                    result += [f"__all__ = [\n    {all_items},\n]\n"]
+
+                self.__update_type_aliases(models)
                 code = dump_templates(models)
                 result += [code]
 
@@ -1553,6 +1868,7 @@ class Parser(ABC):
                             m.reference.short_name for m in models if m.path in require_update_action_models
                         ),
                     ]
+
             if not result and not init:
                 continue
             body = "\n".join(result)
@@ -1560,6 +1876,22 @@ class Parser(ABC):
                 body = code_formatter.format_code(body)
 
             results[module] = Result(body=body, source=models[0].file_path if models else None)
+
+        if all_exports_scope is not None:
+            processed_init_modules = {m for m, _, _, _, _ in processed_models if m[-1] == "__init__.py"}
+            for init_module, init_result in list(results.items()):
+                if init_module[-1] != "__init__.py" or init_module in processed_init_modules or init_result.body:
+                    continue
+                if child_exports := self._collect_exports_for_init(
+                    init_module, processed_models, all_exports_scope
+                ):  # pragma: no branch
+                    resolved = self._resolve_export_collisions(child_exports, all_exports_collision_strategy, set())
+                    export_imports, export_names = self._build_all_exports_code(resolved)
+                    all_items = ",\n    ".join(f'"{name}"' for name in export_names)
+                    parts = [str(self.imports), "\n"] if with_import else []
+                    parts += [str(export_imports), "", f"__all__ = [\n    {all_items},\n]"]
+                    body = "\n".join(parts)
+                    results[init_module] = Result(body=code_formatter.format_code(body) if code_formatter else body)
 
         # retain existing behaviour
         if [*results] == [("__init__.py",)]:

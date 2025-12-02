@@ -14,7 +14,16 @@ from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from datamodel_code_generator import DataclassArguments, DataModelType, InputFileType, OpenAPIScope
+from datamodel_code_generator import (
+    DEFAULT_SHARED_MODULE_NAME,
+    AllExportsCollisionStrategy,
+    AllExportsScope,
+    DataclassArguments,
+    DataModelType,
+    InputFileType,
+    OpenAPIScope,
+    ReuseScope,
+)
 from datamodel_code_generator.format import DatetimeClassType, Formatter, PythonVersion
 from datamodel_code_generator.model.pydantic_v2 import UnionMode
 from datamodel_code_generator.parser import LiteralType
@@ -155,6 +164,12 @@ model_options.add_argument(
     help="Models generated with a root-type field will be merged into the models using that root-type model",
 )
 model_options.add_argument(
+    "--skip-root-model",
+    action="store_true",
+    default=None,
+    help="Skip generating the model for the root schema element",
+)
+model_options.add_argument(
     "--disable-appending-item-suffix",
     help="Disable appending `Item` suffix to model name in an array",
     action="store_true",
@@ -219,6 +234,19 @@ model_options.add_argument(
     default=None,
 )
 model_options.add_argument(
+    "--reuse-scope",
+    help="Scope for model reuse deduplication: module (per-file, default) or tree (cross-file with shared module). "
+    "Only effective when --reuse-model is set.",
+    choices=[s.value for s in ReuseScope],
+    default=None,
+)
+model_options.add_argument(
+    "--shared-module-name",
+    help=f'Name of the shared module for --reuse-scope=tree (default: "{DEFAULT_SHARED_MODULE_NAME}"). '
+    f'Use this option if your schema has a file named "{DEFAULT_SHARED_MODULE_NAME}".',
+    default=None,
+)
+model_options.add_argument(
     "--target-python-version",
     help="target python version",
     choices=[v.value for v in PythonVersion],
@@ -265,6 +293,23 @@ model_options.add_argument(
     "--parent-scoped-naming",
     help="Set name of models defined inline from the parent model",
     action="store_true",
+    default=None,
+)
+model_options.add_argument(
+    "--all-exports-scope",
+    help="Generate __all__ in __init__.py with re-exports. "
+    "'children': export from direct child modules only. "
+    "'recursive': export from all descendant modules.",
+    choices=[s.value for s in AllExportsScope],
+    default=None,
+)
+model_options.add_argument(
+    "--all-exports-collision-strategy",
+    help="Strategy for name collisions when using --all-exports-scope=recursive. "
+    "'error': raise an error (default). "
+    "'minimal-prefix': add module prefix only to colliding names. "
+    "'full-prefix': add full module path prefix to colliding names.",
+    choices=[s.value for s in AllExportsCollisionStrategy],
     default=None,
 )
 
@@ -466,6 +511,12 @@ field_options.add_argument(
     default=None,
 )
 field_options.add_argument(
+    "--use-attribute-docstrings",
+    help="Set use_attribute_docstrings=True in Pydantic v2 ConfigDict",
+    action="store_true",
+    default=None,
+)
+field_options.add_argument(
     "--use-inline-field-description",
     help="Use schema description to populate field docstring as inline docstring",
     action="store_true",
@@ -602,6 +653,14 @@ openapi_options.add_argument(
 # General options
 # ======================================================================================
 general_options.add_argument(
+    "--check",
+    action="store_true",
+    default=None,
+    help="Verify generated files are up-to-date without modifying them. "
+    "Exits with code 1 if differences found, 0 if up-to-date. "
+    "Useful for CI to ensure generated code is committed.",
+)
+general_options.add_argument(
     "--debug",
     help="show debug message (require \"debug\". `$ pip install 'datamodel-code-generator[debug]'`)",
     action="store_true",
@@ -631,6 +690,12 @@ general_options.add_argument(
     action="store_true",
     default=None,
     help="Generate pyproject.toml configuration from the provided CLI arguments and exit",
+)
+general_options.add_argument(
+    "--generate-cli-command",
+    action="store_true",
+    default=None,
+    help="Generate CLI command from pyproject.toml configuration and exit",
 )
 general_options.add_argument(
     "--version",
