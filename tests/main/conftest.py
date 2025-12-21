@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import importlib.util
 import inspect
 import shutil
 import sys
+import time
 from argparse import Namespace
 from collections.abc import Callable, Generator, Sequence
 from pathlib import Path
@@ -14,8 +16,18 @@ import black
 import pytest
 from packaging import version
 
+from datamodel_code_generator import DataModelType
 from datamodel_code_generator.__main__ import Exit, main
-from tests.conftest import AssertFileContent, assert_directory_content, assert_output, freeze_time
+from datamodel_code_generator.arguments import arg_parser
+from datamodel_code_generator.util import PYDANTIC_V2
+from tests.conftest import (
+    AssertFileContent,
+    _validation_stats,
+    assert_directory_content,
+    assert_output,
+    freeze_time,
+    validate_generated_code,
+)
 
 InputFileTypeLiteral = Literal["auto", "openapi", "jsonschema", "json", "yaml", "dict", "csv", "graphql"]
 CopyFilesMapping = Sequence[tuple[Path, Path]]
@@ -24,6 +36,26 @@ MSGSPEC_LEGACY_BLACK_SKIP = pytest.mark.skipif(
     sys.version_info[:2] == (3, 12) and version.parse(black.__version__) < version.parse("24.0.0"),
     reason="msgspec.Struct formatting differs with python3.12 + black < 24",
 )
+
+LEGACY_BLACK_SKIP = pytest.mark.skipif(
+    version.parse(black.__version__) < version.parse("24.0.0"),
+    reason="Type annotation formatting differs with black < 24",
+)
+
+from datamodel_code_generator.format import PythonVersion, is_supported_in_black  # noqa: E402
+
+BLACK_PY313_SKIP = pytest.mark.skipif(
+    not is_supported_in_black(PythonVersion.PY_313),
+    reason=f"Installed black ({black.__version__}) doesn't support Python 3.13",
+)
+
+BLACK_PY314_SKIP = pytest.mark.skipif(
+    not is_supported_in_black(PythonVersion.PY_314),
+    reason=f"Installed black ({black.__version__}) doesn't support Python 3.14",
+)
+
+CURRENT_PYTHON_VERSION = f"{sys.version_info[0]}.{sys.version_info[1]}"
+"""Current Python version as string (e.g., '3.13')."""
 
 DATA_PATH: Path = Path(__file__).parent.parent / "data"
 EXPECTED_MAIN_PATH: Path = DATA_PATH / "expected" / "main"
@@ -35,6 +67,7 @@ GRAPHQL_DATA_PATH: Path = DATA_PATH / "graphql"
 JSON_DATA_PATH: Path = DATA_PATH / "json"
 CSV_DATA_PATH: Path = DATA_PATH / "csv"
 YAML_DATA_PATH: Path = DATA_PATH / "yaml"
+ALIASES_DATA_PATH: Path = DATA_PATH / "aliases"
 
 EXPECTED_OPENAPI_PATH: Path = EXPECTED_MAIN_PATH / "openapi"
 EXPECTED_JSON_SCHEMA_PATH: Path = EXPECTED_MAIN_PATH / "jsonschema"
@@ -73,6 +106,21 @@ def output_dir(tmp_path: Path) -> Path:
     return tmp_path / "model"
 
 
+def get_current_version_args(*extra_args: str) -> list[str]:
+    """Create CLI args list with --target-python-version set to current version.
+
+    This is a convenience function for tests that want to use the current
+    Python version to enable exec() validation.
+
+    Example:
+        run_main_and_assert(
+            ...,
+            extra_args=get_current_version_args("--use-field-description"),
+        )
+    """
+    return ["--target-python-version", CURRENT_PYTHON_VERSION, *extra_args]
+
+
 def _copy_files(copy_files: CopyFilesMapping | None) -> None:
     """Copy files from source to destination paths."""
     if copy_files is not None:
@@ -84,6 +132,34 @@ def _assert_exit_code(return_code: Exit, expected_exit: Exit, context: str) -> N
     """Assert exit code matches expected value."""
     if return_code != expected_exit:  # pragma: no cover
         pytest.fail(f"Expected exit code {expected_exit!r}, got {return_code!r}\n{context}")
+
+
+def _get_valid_cli_options() -> frozenset[str]:
+    """Get all valid CLI option names from arg_parser."""
+    valid_options: set[str] = set()
+    for action in arg_parser._actions:
+        valid_options.update(action.option_strings)
+    return frozenset(valid_options)
+
+
+_VALID_CLI_OPTIONS = _get_valid_cli_options()
+
+
+def _validate_extra_args(extra_args: Sequence[str] | None) -> None:
+    """Validate that all option-like arguments in extra_args are valid CLI options."""
+    if extra_args is None:
+        return
+    invalid_args: list[str] = [
+        arg
+        for arg in extra_args
+        if (
+            (arg.startswith("--") and "=" not in arg)
+            or (arg.startswith("-") and not arg.startswith("--") and len(arg) == 2)
+        )
+        and arg not in _VALID_CLI_OPTIONS
+    ]
+    if invalid_args:  # pragma: no cover
+        pytest.fail(f"Invalid CLI options in extra_args: {invalid_args}. Valid options: {sorted(_VALID_CLI_OPTIONS)}")
 
 
 def _extend_args(
@@ -101,6 +177,7 @@ def _extend_args(
         args.extend(["--output", str(output_path)])
     if input_file_type is not None:
         args.extend(["--input-file-type", input_file_type])
+    _validate_extra_args(extra_args)
     if extra_args is not None:
         args.extend(extra_args)
 
@@ -192,6 +269,9 @@ def run_main_and_assert(  # noqa: PLR0912
     # stdin options
     stdin_path: Path | None = None,
     monkeypatch: pytest.MonkeyPatch | None = None,
+    # Code validation options
+    skip_code_validation: bool = False,
+    force_exec_validation: bool = False,
 ) -> None:
     """Execute main() and assert output.
 
@@ -228,6 +308,13 @@ def run_main_and_assert(  # noqa: PLR0912
         expected_stderr: Assert exact stderr match
         expected_stderr_contains: Assert stderr contains string
         assert_no_stderr: Assert stderr is empty
+
+    Code validation options:
+        skip_code_validation: Skip all code validation (compile and exec)
+        force_exec_validation: Run exec() even when target Python version differs from
+            the test environment (only effective when target <= runtime). This catches
+            runtime errors that would otherwise be missed. Has no effect when target >
+            runtime since compile is skipped in that case.
     """
     __tracebackhide__ = True
 
@@ -317,6 +404,140 @@ def run_main_and_assert(  # noqa: PLR0912
             expected_file = f"{func_name}.py"
         assert_func(output_path, expected_file, transform=transform)
 
+    if output_path is not None and not skip_code_validation:
+        _validate_output_files(output_path, extra_args, force_exec_validation=force_exec_validation)
+
+
+def _get_argument_value(arguments: Sequence[str] | None, argument_name: str) -> str | None:
+    """Extract argument value from arguments."""
+    if arguments is None:
+        return None
+    argument_list = list(arguments)
+    for index, argument in enumerate(argument_list):
+        if argument == argument_name and index + 1 < len(argument_list):
+            return argument_list[index + 1]
+    return None
+
+
+def _parse_target_version(extra_arguments: Sequence[str] | None) -> tuple[int, int] | None:
+    """Parse target Python version from arguments."""
+    if (target_version := _get_argument_value(extra_arguments, "--target-python-version")) is None:
+        return None
+    try:
+        return tuple(int(part) for part in target_version.split("."))  # type: ignore[return-value]
+    except ValueError:  # pragma: no cover
+        return None
+
+
+def _should_skip_compile(extra_arguments: Sequence[str] | None) -> bool:
+    """Check if compile should be skipped when target version > runtime version."""
+    if (target_version := _parse_target_version(extra_arguments)) is None:
+        return False
+    return target_version > sys.version_info[:2]
+
+
+def _should_skip_exec(extra_arguments: Sequence[str] | None, *, force_exec: bool = False) -> bool:
+    """Check if exec should be skipped based on model type, pydantic version, and Python version.
+
+    Args:
+        extra_arguments: CLI arguments passed to the test.
+        force_exec: If True, skip version mismatch check and allow exec on current Python version.
+            This only works when target version <= runtime version (older target on newer runtime).
+            When target > runtime, compile will be skipped entirely regardless of this flag.
+    """
+    output_model_type = _get_argument_value(extra_arguments, "--output-model-type")
+    is_pydantic_v1 = output_model_type is None or output_model_type == DataModelType.PydanticBaseModel.value
+    if (is_pydantic_v1 and PYDANTIC_V2) or (
+        output_model_type == DataModelType.PydanticV2BaseModel.value and not PYDANTIC_V2
+    ):
+        return True
+    if (target_version := _parse_target_version(extra_arguments)) is None:
+        return True
+    if not force_exec and target_version != sys.version_info[:2]:
+        return True
+    return _get_argument_value(extra_arguments, "--base-class") is not None
+
+
+def _validate_output_files(
+    output_path: Path,
+    extra_arguments: Sequence[str] | None = None,
+    *,
+    force_exec_validation: bool = False,
+) -> None:
+    """Validate generated Python files by compiling/executing them.
+
+    Args:
+        output_path: Path to output file or directory to validate.
+        extra_arguments: CLI arguments passed to the test.
+        force_exec_validation: If True, run exec even when target Python version differs from
+            the test environment (only when target <= runtime). This helps catch runtime errors
+            that would otherwise be missed. Has no effect when target > runtime since compile
+            is skipped in that case.
+    """
+    if _should_skip_compile(extra_arguments):
+        return
+    should_exec = not _should_skip_exec(extra_arguments, force_exec=force_exec_validation)
+    if output_path.is_file() and output_path.suffix == ".py":
+        validate_generated_code(output_path.read_text(encoding="utf-8"), str(output_path), do_exec=should_exec)
+    elif output_path.is_dir():  # pragma: no cover
+        for python_file in output_path.rglob("*.py"):
+            validate_generated_code(python_file.read_text(encoding="utf-8"), str(python_file), do_exec=False)
+        if should_exec:  # pragma: no cover
+            _import_package(output_path)
+
+
+def _import_package(output_path: Path) -> None:  # pragma: no cover  # noqa: PLR0912
+    """Import generated packages to validate they can be loaded."""
+    if (output_path / "__init__.py").exists():
+        packages = [(output_path.parent, output_path.name)]
+    else:
+        packages = [
+            (output_path, directory.name)
+            for directory in output_path.iterdir()
+            if directory.is_dir() and (directory / "__init__.py").exists()
+        ]
+    if not packages:
+        return
+
+    imported_modules: list[str] = []
+    start_time = time.perf_counter()
+    try:
+        for parent_directory, package_name in packages:
+            package_path = parent_directory / package_name
+            sys.path.insert(0, str(parent_directory))
+            spec = importlib.util.spec_from_file_location(
+                package_name, package_path / "__init__.py", submodule_search_locations=[str(package_path)]
+            )
+            if spec is None or spec.loader is None:
+                continue
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[package_name] = module
+            imported_modules.append(package_name)
+            spec.loader.exec_module(module)
+
+            for python_file in package_path.rglob("*.py"):
+                if python_file.name == "__init__.py":
+                    continue
+                relative_path = python_file.relative_to(package_path)
+                module_name = f"{package_name}.{'.'.join(relative_path.with_suffix('').parts)}"
+                submodule_spec = importlib.util.spec_from_file_location(module_name, python_file)
+                if submodule_spec is None or submodule_spec.loader is None:
+                    continue
+                submodule = importlib.util.module_from_spec(submodule_spec)
+                sys.modules[module_name] = submodule
+                imported_modules.append(module_name)
+                submodule_spec.loader.exec_module(submodule)
+        _validation_stats.record_exec(time.perf_counter() - start_time)
+    except Exception as exception:
+        _validation_stats.record_error(str(output_path), f"{type(exception).__name__}: {exception}")
+        raise
+    finally:
+        for parent_directory, _ in packages:
+            if str(parent_directory) in sys.path:
+                sys.path.remove(str(parent_directory))
+        for module_name in imported_modules:
+            sys.modules.pop(module_name, None)
+
 
 def run_main_url_and_assert(
     *,
@@ -327,6 +548,7 @@ def run_main_url_and_assert(
     expected_file: str | Path,
     extra_args: Sequence[str] | None = None,
     transform: Callable[[str], str] | None = None,
+    force_exec_validation: bool = False,
 ) -> None:
     """Execute main() with URL input and assert output.
 
@@ -338,8 +560,12 @@ def run_main_url_and_assert(
         expected_file: Expected output filename
         extra_args: Additional CLI arguments
         transform: Optional function to transform output before comparison
+        force_exec_validation: Run exec() even when target Python version differs from
+            the test environment (only effective when target <= runtime).
     """
     __tracebackhide__ = True
     return_code = _run_main_url(url, output_path, input_file_type, extra_args=extra_args)
     _assert_exit_code(return_code, Exit.OK, f"URL: {url}")
     assert_func(output_path, expected_file, transform=transform)
+
+    _validate_output_files(output_path, extra_args, force_exec_validation=force_exec_validation)

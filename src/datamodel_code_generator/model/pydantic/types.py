@@ -158,11 +158,17 @@ escape_characters = str.maketrans({
     "\t": r"\t",
 })
 
+HOSTNAME_REGEX = (  # Pydantic v1 requires \Z anchor (not $) to avoid matching trailing newline
+    r"^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])\.)*"
+    r"([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\-]{0,61}[A-Za-z0-9])\Z"
+)
+
 
 class DataTypeManager(_DataTypeManager):
     """Manage data type mappings for Pydantic v1 models."""
 
     PATTERN_KEY: ClassVar[str] = "regex"
+    HOSTNAME_REGEX: ClassVar[str] = HOSTNAME_REGEX
 
     def __init__(  # noqa: PLR0913, PLR0917
         self,
@@ -171,10 +177,12 @@ class DataTypeManager(_DataTypeManager):
         use_generic_container_types: bool = False,  # noqa: FBT001, FBT002
         strict_types: Sequence[StrictTypes] | None = None,
         use_non_positive_negative_number_constrained_types: bool = False,  # noqa: FBT001, FBT002
+        use_decimal_for_multiple_of: bool = False,  # noqa: FBT001, FBT002
         use_union_operator: bool = False,  # noqa: FBT001, FBT002
         use_pendulum: bool = False,  # noqa: FBT001, FBT002
         target_datetime_class: DatetimeClassType | None = None,
         treat_dot_as_module: bool = False,  # noqa: FBT001, FBT002
+        use_serialize_as_any: bool = False,  # noqa: FBT001, FBT002
     ) -> None:
         """Initialize the DataTypeManager with Pydantic v1 type mappings."""
         super().__init__(
@@ -183,10 +191,12 @@ class DataTypeManager(_DataTypeManager):
             use_generic_container_types,
             strict_types,
             use_non_positive_negative_number_constrained_types,
+            use_decimal_for_multiple_of,
             use_union_operator,
             use_pendulum,
             target_datetime_class,
             treat_dot_as_module,
+            use_serialize_as_any,
         )
 
         self.type_map: dict[Types, DataType] = self.type_map_factory(
@@ -266,6 +276,12 @@ class DataTypeManager(_DataTypeManager):
         data_type_kwargs = self.transform_kwargs(kwargs, number_kwargs)
         strict = StrictTypes.float in self.strict_types
         if data_type_kwargs:
+            # Use Decimal instead of float when multipleOf is present to avoid floating-point precision issues
+            if self.use_decimal_for_multiple_of and "multiple_of" in data_type_kwargs:
+                return self.data_type.from_import(
+                    IMPORT_CONDECIMAL,
+                    kwargs={k: Decimal(str(v)) for k, v in data_type_kwargs.items()},
+                )
             if not strict:
                 if data_type_kwargs == {"gt": 0}:
                     return self.data_type.from_import(IMPORT_POSITIVE_FLOAT)
@@ -324,6 +340,8 @@ class DataTypeManager(_DataTypeManager):
     def get_data_type(  # noqa: PLR0911
         self,
         types: Types,
+        *,
+        field_constraints: bool = False,
         **kwargs: Any,
     ) -> DataType:
         """Get data type with appropriate constraints for the given type."""
@@ -339,5 +357,10 @@ class DataTypeManager(_DataTypeManager):
             return self.get_data_bytes_type(types, **kwargs)
         if types == Types.boolean and StrictTypes.bool in self.strict_types:
             return self.strict_type_map[StrictTypes.bool]
+        if types == Types.hostname and field_constraints:
+            strict = StrictTypes.str in self.strict_types
+            if strict:
+                return self.strict_type_map[StrictTypes.str]
+            return self.data_type(type="str")
 
         return self.type_map[types]

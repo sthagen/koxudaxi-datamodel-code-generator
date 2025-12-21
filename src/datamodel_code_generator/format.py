@@ -56,7 +56,6 @@ class DatetimeClassType(Enum):
 class PythonVersion(Enum):
     """Supported Python version targets for code generation."""
 
-    PY_39 = "3.9"
     PY_310 = "3.10"
     PY_311 = "3.11"
     PY_312 = "3.12"
@@ -65,15 +64,24 @@ class PythonVersion(Enum):
 
     @cached_property
     def _is_py_310_or_later(self) -> bool:  # pragma: no cover
-        return self.value != self.PY_39.value
+        return True  # 3.10+ always true since minimum is PY_310
 
     @cached_property
     def _is_py_311_or_later(self) -> bool:  # pragma: no cover
-        return self.value not in {self.PY_39.value, self.PY_310.value}
+        return self.value != self.PY_310.value
 
     @cached_property
     def _is_py_312_or_later(self) -> bool:  # pragma: no cover
-        return self.value not in {self.PY_39.value, self.PY_310.value, self.PY_311.value}
+        return self.value not in {self.PY_310.value, self.PY_311.value}
+
+    @cached_property
+    def _is_py_314_or_later(self) -> bool:
+        return self.value not in {
+            self.PY_310.value,
+            self.PY_311.value,
+            self.PY_312.value,
+            self.PY_313.value,
+        }
 
     @property
     def has_union_operator(self) -> bool:  # pragma: no cover
@@ -101,12 +109,17 @@ class PythonVersion(Enum):
         return self._is_py_312_or_later
 
     @property
+    def has_native_deferred_annotations(self) -> bool:
+        """Check if Python version has native deferred annotations (Python 3.14+)."""
+        return self._is_py_314_or_later
+
+    @property
     def has_strenum(self) -> bool:
         """Check if Python version supports StrEnum."""
         return self._is_py_311_or_later
 
 
-PythonVersionMin = PythonVersion.PY_39
+PythonVersionMin = PythonVersion.PY_310
 
 
 @lru_cache(maxsize=1)
@@ -164,6 +177,15 @@ class CodeFormatter:
         """Initialize code formatter with configuration for black, isort, ruff, and custom formatters."""
         if not settings_path:
             settings_path = Path.cwd()
+        elif settings_path.is_file():
+            settings_path = settings_path.parent
+        elif not settings_path.exists():
+            for parent in settings_path.parents:
+                if parent.exists():
+                    settings_path = parent
+                    break
+            else:
+                settings_path = Path.cwd()  # pragma: no cover
 
         root = black_find_project_root((settings_path,))
         path = root / "pyproject.toml"
@@ -283,6 +305,7 @@ class CodeFormatter:
             input=code.encode(self.encoding),
             capture_output=True,
             check=False,
+            cwd=self.settings_path,
         )
         return result.stdout.decode(self.encoding)
 
@@ -293,6 +316,7 @@ class CodeFormatter:
             input=code.encode(self.encoding),
             capture_output=True,
             check=False,
+            cwd=self.settings_path,
         )
         return result.stdout.decode(self.encoding)
 

@@ -16,7 +16,6 @@ from re import Pattern
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     ClassVar,
     Optional,
     Protocol,
@@ -28,6 +27,7 @@ from typing import (
 import pydantic
 from packaging import version
 from pydantic import StrictBool, StrictInt, StrictStr, create_model
+from typing_extensions import TypeIs
 
 from datamodel_code_generator.format import (
     DatetimeClassType,
@@ -37,7 +37,7 @@ from datamodel_code_generator.format import (
 from datamodel_code_generator.imports import (
     IMPORT_ABC_MAPPING,
     IMPORT_ABC_SEQUENCE,
-    IMPORT_ABC_SET,
+    IMPORT_ANY,
     IMPORT_DICT,
     IMPORT_FROZEN_SET,
     IMPORT_LIST,
@@ -46,23 +46,15 @@ from datamodel_code_generator.imports import (
     IMPORT_OPTIONAL,
     IMPORT_SEQUENCE,
     IMPORT_SET,
+    IMPORT_TUPLE,
     IMPORT_UNION,
     Import,
 )
 from datamodel_code_generator.reference import Reference, _BaseModel
 from datamodel_code_generator.util import PYDANTIC_V2, ConfigDict
 
-if TYPE_CHECKING:
-    import builtins
-    from collections.abc import Iterable, Iterator, Sequence
-
-    from datamodel_code_generator.model.base import DataModelFieldBase
-
-if PYDANTIC_V2:
-    from pydantic import GetCoreSchemaHandler
-    from pydantic_core import core_schema
-
 T = TypeVar("T")
+SourceT = TypeVar("SourceT")
 
 OPTIONAL = "Optional"
 OPTIONAL_PREFIX = f"{OPTIONAL}["
@@ -82,13 +74,28 @@ MAPPING = "Mapping"
 DICT = "Dict"
 SET = "Set"
 LIST = "List"
+TUPLE = "Tuple"
 STANDARD_DICT = "dict"
 STANDARD_LIST = "list"
 STANDARD_SET = "set"
+STANDARD_TUPLE = "tuple"
+STANDARD_FROZEN_SET = "frozenset"
 STR = "str"
 
 NOT_REQUIRED = "NotRequired"
 NOT_REQUIRED_PREFIX = f"{NOT_REQUIRED}["
+
+if TYPE_CHECKING:
+    import builtins
+    from collections.abc import Callable, Iterable, Iterator, Sequence
+
+    from pydantic_core import core_schema
+
+    from datamodel_code_generator.model.base import DataModelFieldBase
+
+if PYDANTIC_V2:
+    from pydantic import GetCoreSchemaHandler
+    from pydantic_core import core_schema
 
 
 class StrictTypes(Enum):
@@ -130,27 +137,19 @@ class UnionIntFloat:
         cls, _source_type: Any, _handler: GetCoreSchemaHandler
     ) -> core_schema.CoreSchema:
         """Return Pydantic v2 core schema."""
-        from_int_schema = core_schema.chain_schema(  # pyright: ignore[reportPossiblyUnboundVariable]
-            [
-                core_schema.union_schema(  # pyright: ignore[reportPossiblyUnboundVariable]
-                    [core_schema.int_schema(), core_schema.float_schema()]  # pyright: ignore[reportPossiblyUnboundVariable]
-                ),
-                core_schema.no_info_plain_validator_function(cls.validate),  # pyright: ignore[reportPossiblyUnboundVariable]
-            ]
-        )
+        from_int_schema = core_schema.chain_schema([
+            core_schema.union_schema([core_schema.int_schema(), core_schema.float_schema()]),
+            core_schema.no_info_plain_validator_function(cls.validate),
+        ])
 
-        return core_schema.json_or_python_schema(  # pyright: ignore[reportPossiblyUnboundVariable]
+        return core_schema.json_or_python_schema(
             json_schema=from_int_schema,
-            python_schema=core_schema.union_schema(  # pyright: ignore[reportPossiblyUnboundVariable]
-                [
-                    # check if it's an instance first before doing any further work
-                    core_schema.is_instance_schema(UnionIntFloat),  # pyright: ignore[reportPossiblyUnboundVariable]
-                    from_int_schema,
-                ]
-            ),
-            serialization=core_schema.plain_serializer_function_ser_schema(  # pyright: ignore[reportPossiblyUnboundVariable]
-                lambda instance: instance.value
-            ),
+            python_schema=core_schema.union_schema([
+                # check if it's an instance first before doing any further work
+                core_schema.is_instance_schema(UnionIntFloat),
+                from_int_schema,
+            ]),
+            serialization=core_schema.plain_serializer_function_ser_schema(lambda instance: instance.value),
         )
 
     @classmethod
@@ -211,12 +210,10 @@ def _remove_none_from_union(type_: str, *, use_union_operator: bool) -> str:  # 
         elif char == "]" and in_constr == 0:
             inner_count -= 1
         elif char == "(":
-            if current_part.strip().startswith("constr(") and current_part[-2] != "\\":
-                # non-escaped opening round bracket found inside constraint string expression
+            if current_part.strip().startswith("constr(") and (len(current_part) < 2 or current_part[-2] != "\\"):  # noqa: PLR2004
                 in_constr += 1
         elif char == ")":
-            if in_constr > 0 and current_part[-2] != "\\":
-                # non-escaped closing round bracket found inside constraint string expression
+            if in_constr > 0 and (len(current_part) < 2 or current_part[-2] != "\\"):  # noqa: PLR2004
                 in_constr -= 1
         elif char == separator and inner_count == 0 and in_constr == 0:
             part = current_part[:-1].strip()
@@ -256,6 +253,13 @@ def get_optional_type(type_: str, use_union_operator: bool) -> str:  # noqa: FBT
     if use_union_operator:
         return f"{type_} | {NONE}"
     return f"{OPTIONAL_PREFIX}{type_}]"
+
+
+def is_data_model_field(obj: object) -> TypeIs[DataModelFieldBase]:
+    """Check if an object is a DataModelFieldBase instance."""
+    from datamodel_code_generator.model.base import DataModelFieldBase  # noqa: PLC0415
+
+    return isinstance(obj, DataModelFieldBase)
 
 
 @runtime_checkable
@@ -318,8 +322,10 @@ class DataType(_BaseModel):
     is_dict: bool = False
     is_list: bool = False
     is_set: bool = False
+    is_tuple: bool = False
     is_custom_type: bool = False
     literals: list[Union[StrictBool, StrictInt, StrictStr]] = []  # noqa: RUF012, UP007
+    enum_member_literals: list[tuple[str, str]] = []  # noqa: RUF012  # [(EnumClassName, member_name), ...]
     use_standard_collections: bool = False
     use_generic_container: bool = False
     use_union_operator: bool = False
@@ -329,6 +335,7 @@ class DataType(_BaseModel):
     strict: bool = False
     dict_key: Optional[DataType] = None  # noqa: UP045
     treat_dot_as_module: bool = False
+    use_serialize_as_any: bool = False
 
     _exclude_fields: ClassVar[set[str]] = {"parent", "children"}
     _pass_fields: ClassVar[set[str]] = {"parent", "children", "data_types", "reference"}
@@ -383,6 +390,21 @@ class DataType(_BaseModel):
         """Remove the reference from this DataType."""
         self.replace_reference(None)
 
+    def swap_with(self, new_data_type: DataType) -> None:
+        """Detach self and attach new_data_type to the same parent.
+
+        Replaces this DataType with new_data_type in the parent container.
+        Works with both field parents and nested DataType parents.
+        """
+        parent = self.parent
+        self.parent = None
+        if parent is not None:  # pragma: no cover
+            new_data_type.parent = parent
+            if is_data_model_field(parent):
+                parent.data_type = new_data_type
+            elif isinstance(parent, DataType):  # pragma: no cover
+                parent.data_types = [new_data_type if d is self else d for d in parent.data_types]
+
     @property
     def module_name(self) -> str | None:
         """Return the module name from the reference source."""
@@ -400,10 +422,22 @@ class DataType(_BaseModel):
 
     @property
     def all_data_types(self) -> Iterator[DataType]:
-        """Recursively yield all nested DataTypes including self."""
+        """Recursively yield all nested DataTypes including self and dict_key."""
         for data_type in self.data_types:
             yield from data_type.all_data_types
+        if self.dict_key:
+            yield from self.dict_key.all_data_types
         yield self
+
+    def find_source(self, source_type: type[SourceT]) -> SourceT | None:
+        """Find the first reference source matching the given type from all nested data types."""
+        for data_type in self.all_data_types:  # pragma: no branch
+            if not data_type.reference:  # pragma: no cover
+                continue
+            source = data_type.reference.source
+            if isinstance(source, source_type):  # pragma: no cover
+                return source
+        return None  # pragma: no cover
 
     @property
     def all_imports(self) -> Iterator[Import]:
@@ -423,15 +457,15 @@ class DataType(_BaseModel):
         imports: tuple[tuple[bool, Import], ...] = (
             (self.is_optional and not self.use_union_operator, IMPORT_OPTIONAL),
             (len(self.data_types) > 1 and not self.use_union_operator, IMPORT_UNION),
-            (bool(self.literals), IMPORT_LITERAL),
+            (bool(self.literals) or bool(self.enum_member_literals), IMPORT_LITERAL),
         )
 
         if self.use_generic_container:
             if self.use_standard_collections:
+                # frozenset is builtin, no import needed for is_set
                 imports = (
                     *imports,
                     (self.is_list, IMPORT_ABC_SEQUENCE),
-                    (self.is_set, IMPORT_ABC_SET),
                     (self.is_dict, IMPORT_ABC_MAPPING),
                 )
             else:
@@ -440,6 +474,7 @@ class DataType(_BaseModel):
                     (self.is_list, IMPORT_SEQUENCE),
                     (self.is_set, IMPORT_FROZEN_SET),
                     (self.is_dict, IMPORT_MAPPING),
+                    (self.is_tuple, IMPORT_TUPLE),
                 )
         elif not self.use_standard_collections:
             imports = (
@@ -447,6 +482,7 @@ class DataType(_BaseModel):
                 (self.is_list, IMPORT_LIST),
                 (self.is_set, IMPORT_SET),
                 (self.is_dict, IMPORT_DICT),
+                (self.is_tuple, IMPORT_TUPLE),
             )
 
         # Yield imports based on conditions
@@ -477,16 +513,31 @@ class DataType(_BaseModel):
         if self.reference:
             self.reference.children.append(self)
 
+    def _get_wrapped_reference_type_hint(self, type_: str) -> str:  # noqa: PLR6301
+        """Wrap reference type name if needed (override in subclasses, e.g., for SerializeAsAny).
+
+        Args:
+            type_: The reference type name (e.g., "User")
+
+        Returns:
+            The potentially wrapped type name
+        """
+        return type_
+
     @property
     def type_hint(self) -> str:  # noqa: PLR0912, PLR0915
         """Generate the Python type hint string for this DataType."""
         type_: str | None = self.alias or self.type
         if not type_:
-            if self.is_union:
+            if self.is_tuple:
+                tuple_type = STANDARD_TUPLE if self.use_standard_collections else TUPLE
+                inner_types = [item.type_hint or ANY for item in self.data_types]
+                type_ = f"{tuple_type}[{', '.join(inner_types)}]" if inner_types else f"{tuple_type}[()]"
+            elif self.is_union:
                 data_types: list[str] = []
                 for data_type in self.data_types:
                     data_type_type = data_type.type_hint
-                    if data_type_type in data_types:  # pragma: no cover
+                    if not data_type_type or data_type_type in data_types:
                         continue
 
                     if data_type_type == NONE:
@@ -501,7 +552,10 @@ class DataType(_BaseModel):
                         self.is_optional = True
 
                     data_types.append(non_optional_data_type_type)
-                if len(data_types) == 1:
+                if not data_types:
+                    type_ = ANY
+                    self.import_ = self.import_ or IMPORT_ANY
+                elif len(data_types) == 1:
                     type_ = data_types[0]
                 elif self.use_union_operator:
                     type_ = UNION_OPERATOR_DELIMITER.join(data_types)
@@ -509,10 +563,14 @@ class DataType(_BaseModel):
                     type_ = f"{UNION_PREFIX}{UNION_DELIMITER.join(data_types)}]"
             elif len(self.data_types) == 1:
                 type_ = self.data_types[0].type_hint
+            elif self.enum_member_literals:
+                parts = [f"{enum_class}.{member}" for enum_class, member in self.enum_member_literals]
+                type_ = f"{LITERAL}[{', '.join(parts)}]"
             elif self.literals:
                 type_ = f"{LITERAL}[{', '.join(repr(literal) for literal in self.literals)}]"
             elif self.reference:
                 type_ = self.reference.short_name
+                type_ = self._get_wrapped_reference_type_hint(type_)
             else:
                 # TODO support strict Any
                 type_ = ""
@@ -530,7 +588,7 @@ class DataType(_BaseModel):
             type_ = f"{list_}[{type_}]" if type_ else list_
         elif self.is_set:
             if self.use_generic_container:
-                set_ = FROZEN_SET
+                set_ = STANDARD_FROZEN_SET if self.use_standard_collections else FROZEN_SET
             elif self.use_standard_collections:
                 set_ = STANDARD_SET
             else:
@@ -561,6 +619,124 @@ class DataType(_BaseModel):
     def is_union(self) -> bool:
         """Return whether this DataType represents a union of multiple types."""
         return len(self.data_types) > 1
+
+    # Mapping from constrained type functions to their base Python types.
+    # Only constr is included because it's the only type with a 'pattern' parameter
+    # that can trigger lookaround regex detection. Other constrained types (conint,
+    # confloat, condecimal, conbytes) don't have pattern constraints, so they will
+    # never need base_type_hint conversion in the regex_engine context.
+    _CONSTRAINED_TYPE_TO_BASE: ClassVar[dict[str, str]] = {
+        "constr": "str",
+    }
+
+    @property
+    def base_type_hint(self) -> str:  # noqa: PLR0912, PLR0915
+        """Return the base type hint without constrained type kwargs.
+
+        For types like constr(pattern=..., min_length=...), this returns just 'str'.
+        This works recursively for nested types like list[constr(pattern=...)] -> list[str].
+
+        This is useful when the pattern contains lookaround assertions that require
+        regex_engine="python-re", which must be set in model_config. In such cases,
+        the RootModel generic cannot use the constrained type because it would be
+        evaluated at class definition time before model_config is processed.
+        """
+        if self.is_func and self.kwargs:
+            type_: str | None = self.alias or self.type
+            if type_:  # pragma: no branch
+                base_type = self._CONSTRAINED_TYPE_TO_BASE.get(type_)
+                if base_type is None:
+                    # Not a constrained type we convert (e.g., conint, confloat)
+                    # Return the full type_hint with kwargs to avoid returning bare function name
+                    return self.type_hint
+                if self.is_optional and base_type != ANY:  # pragma: no cover
+                    return get_optional_type(base_type, self.use_union_operator)
+                return base_type
+
+        type_: str | None = self.alias or self.type
+        if not type_:
+            if self.is_tuple:  # pragma: no cover
+                tuple_type = STANDARD_TUPLE if self.use_standard_collections else TUPLE
+                inner_types = [item.base_type_hint or ANY for item in self.data_types]
+                type_ = f"{tuple_type}[{', '.join(inner_types)}]" if inner_types else f"{tuple_type}[()]"
+            elif self.is_union:
+                data_types: list[str] = []
+                for data_type in self.data_types:
+                    data_type_type = data_type.base_type_hint
+                    if not data_type_type or data_type_type in data_types:  # pragma: no cover
+                        continue
+
+                    if data_type_type == NONE:
+                        self.is_optional = True
+                        continue
+
+                    non_optional_data_type_type = _remove_none_from_union(
+                        data_type_type, use_union_operator=self.use_union_operator
+                    )
+
+                    if non_optional_data_type_type != data_type_type:  # pragma: no cover
+                        self.is_optional = True
+
+                    data_types.append(non_optional_data_type_type)
+                if not data_types:  # pragma: no cover
+                    type_ = ANY
+                    self.import_ = self.import_ or IMPORT_ANY
+                elif len(data_types) == 1:
+                    type_ = data_types[0]
+                elif self.use_union_operator:
+                    type_ = UNION_OPERATOR_DELIMITER.join(data_types)
+                else:  # pragma: no cover
+                    type_ = f"{UNION_PREFIX}{UNION_DELIMITER.join(data_types)}]"
+            elif len(self.data_types) == 1:
+                type_ = self.data_types[0].base_type_hint
+            elif self.enum_member_literals:  # pragma: no cover
+                parts = [f"{enum_class}.{member}" for enum_class, member in self.enum_member_literals]
+                type_ = f"{LITERAL}[{', '.join(parts)}]"
+            elif self.literals:  # pragma: no cover
+                type_ = f"{LITERAL}[{', '.join(repr(literal) for literal in self.literals)}]"
+            elif self.reference:  # pragma: no cover
+                type_ = self.reference.short_name
+                type_ = self._get_wrapped_reference_type_hint(type_)
+            else:  # pragma: no cover
+                type_ = ""
+        if self.reference:  # pragma: no cover
+            source = self.reference.source
+            if isinstance(source, Nullable) and source.nullable:
+                self.is_optional = True
+        if self.is_list:
+            if self.use_generic_container:
+                list_ = SEQUENCE
+            elif self.use_standard_collections:
+                list_ = STANDARD_LIST
+            else:  # pragma: no cover
+                list_ = LIST
+            type_ = f"{list_}[{type_}]" if type_ else list_
+        elif self.is_set:  # pragma: no cover
+            if self.use_generic_container:
+                set_ = STANDARD_FROZEN_SET if self.use_standard_collections else FROZEN_SET
+            elif self.use_standard_collections:
+                set_ = STANDARD_SET
+            else:
+                set_ = SET
+            type_ = f"{set_}[{type_}]" if type_ else set_
+        elif self.is_dict:
+            if self.use_generic_container:
+                dict_ = MAPPING
+            elif self.use_standard_collections:
+                dict_ = STANDARD_DICT
+            else:  # pragma: no cover
+                dict_ = DICT
+            if self.dict_key or type_:
+                key = self.dict_key.base_type_hint if self.dict_key else STR
+                type_ = f"{dict_}[{key}, {type_ or ANY}]"
+            else:  # pragma: no cover
+                type_ = dict_
+
+        if self.is_optional and type_ != ANY:
+            return get_optional_type(type_, self.use_union_operator)
+        if self.is_func:  # pragma: no cover
+            return f"{type_}()"
+        return type_
 
 
 DataTypeT = TypeVar("DataTypeT", bound=DataType)
@@ -615,6 +791,11 @@ class DataTypeManager(ABC):
     Subclasses implement get_data_type() to map schema types to DataType objects.
     """
 
+    HOSTNAME_REGEX: ClassVar[str] = (
+        r"^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])\.)*"
+        r"([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\-]{0,61}[A-Za-z0-9])$"
+    )
+
     def __init__(  # noqa: PLR0913, PLR0917
         self,
         python_version: PythonVersion = PythonVersionMin,
@@ -622,10 +803,12 @@ class DataTypeManager(ABC):
         use_generic_container_types: bool = False,  # noqa: FBT001, FBT002
         strict_types: Sequence[StrictTypes] | None = None,
         use_non_positive_negative_number_constrained_types: bool = False,  # noqa: FBT001, FBT002
+        use_decimal_for_multiple_of: bool = False,  # noqa: FBT001, FBT002
         use_union_operator: bool = False,  # noqa: FBT001, FBT002
         use_pendulum: bool = False,  # noqa: FBT001, FBT002
         target_datetime_class: DatetimeClassType | None = None,
         treat_dot_as_module: bool = False,  # noqa: FBT001, FBT002
+        use_serialize_as_any: bool = False,  # noqa: FBT001, FBT002
     ) -> None:
         """Initialize DataTypeManager with code generation options."""
         self.python_version = python_version
@@ -635,10 +818,12 @@ class DataTypeManager(ABC):
         self.use_non_positive_negative_number_constrained_types: bool = (
             use_non_positive_negative_number_constrained_types
         )
+        self.use_decimal_for_multiple_of: bool = use_decimal_for_multiple_of
         self.use_union_operator: bool = use_union_operator
         self.use_pendulum: bool = use_pendulum
         self.target_datetime_class: DatetimeClassType | None = target_datetime_class
         self.treat_dot_as_module: bool = treat_dot_as_module
+        self.use_serialize_as_any: bool = use_serialize_as_any
 
         self.data_type: type[DataType] = create_model(
             "ContextDataType",
@@ -647,6 +832,7 @@ class DataTypeManager(ABC):
             use_generic_container=(bool, use_generic_container_types),
             use_union_operator=(bool, use_union_operator),
             treat_dot_as_module=(bool, treat_dot_as_module),
+            use_serialize_as_any=(bool, use_serialize_as_any),
             __base__=DataType,
         )
 
@@ -659,21 +845,19 @@ class DataTypeManager(ABC):
         """Create a DataType from a fully qualified Python path."""
         return self.data_type.from_import(Import.from_full_path(full_path), is_custom_type=is_custom_type)
 
-    def get_data_type_from_value(self, value: Any) -> DataType:
+    def get_data_type_from_value(self, value: Any) -> DataType:  # noqa: PLR0911
         """Infer a DataType from a Python value."""
-        type_: Types | None = None
-        if isinstance(value, str):
-            type_ = Types.string
-        elif isinstance(value, bool):
-            type_ = Types.boolean
-        elif isinstance(value, int):
-            type_ = Types.integer
-        elif isinstance(value, float):
-            type_ = Types.float
-        elif isinstance(value, dict):
-            return self.data_type.from_import(IMPORT_DICT)
-        elif isinstance(value, list):
-            return self.data_type.from_import(IMPORT_LIST)
-        else:
-            type_ = Types.any
-        return self.get_data_type(type_)
+        match value:
+            case str():
+                return self.get_data_type(Types.string)
+            case bool():  # bool must come before int (bool is subclass of int)
+                return self.get_data_type(Types.boolean)
+            case int():
+                return self.get_data_type(Types.integer)
+            case float():
+                return self.get_data_type(Types.float)
+            case dict():
+                return self.data_type.from_import(IMPORT_DICT)
+            case list():
+                return self.data_type.from_import(IMPORT_LIST)
+        return self.get_data_type(Types.any)

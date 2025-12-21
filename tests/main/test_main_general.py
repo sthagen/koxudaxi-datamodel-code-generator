@@ -5,6 +5,7 @@ from __future__ import annotations
 from argparse import ArgumentTypeError, Namespace
 from typing import TYPE_CHECKING
 
+import black
 import pytest
 
 from datamodel_code_generator import (
@@ -119,7 +120,7 @@ def test_direct_input_dict(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("keyword_only", "target_python_version", "expected_file"),
     [
-        (False, PythonVersion.PY_39, "frozen_dataclasses.py"),
+        (False, PythonVersion.PY_310, "frozen_dataclasses.py"),
         (True, PythonVersion.PY_310, "frozen_dataclasses_keyword_only.py"),
     ],
 )
@@ -143,6 +144,13 @@ def test_frozen_dataclasses(
     assert_file_content(output_file, expected_file)
 
 
+@pytest.mark.cli_doc(
+    options=["--frozen-dataclasses"],
+    input_schema="jsonschema/simple_frozen_test.json",
+    cli_args=["--output-model-type", "dataclasses.dataclass", "--frozen-dataclasses"],
+    golden_output="frozen_dataclasses.py",
+    related_options=["--keyword-only", "--output-model-type"],
+)
 @freeze_time(TIMESTAMP)
 @pytest.mark.parametrize(
     ("extra_args", "expected_file"),
@@ -162,7 +170,12 @@ def test_frozen_dataclasses(
     ],
 )
 def test_frozen_dataclasses_command_line(output_file: Path, extra_args: list[str], expected_file: str) -> None:
-    """Test --frozen-dataclasses flag via command line."""
+    """Generate frozen dataclasses with optional keyword-only fields.
+
+    The `--frozen-dataclasses` flag generates dataclass instances that are immutable
+    (frozen=True). Combined with `--keyword-only` (Python 3.10+), all fields become
+    keyword-only arguments.
+    """
     run_main_and_assert(
         input_path=DATA_PATH / "jsonschema" / "simple_frozen_test.json",
         output_path=output_file,
@@ -189,8 +202,26 @@ def test_use_attribute_docstrings(tmp_path: Path) -> None:
 
 
 @freeze_time(TIMESTAMP)
+@pytest.mark.cli_doc(
+    options=["--use-attribute-docstrings"],
+    input_schema="jsonschema/use_attribute_docstrings_test.json",
+    cli_args=[
+        "--output-model-type",
+        "pydantic_v2.BaseModel",
+        "--use-field-description",
+        "--use-attribute-docstrings",
+    ],
+    golden_output="use_attribute_docstrings.py",
+    related_options=["--use-field-description"],
+)
 def test_use_attribute_docstrings_command_line(output_file: Path) -> None:
-    """Test --use-attribute-docstrings flag via command line."""
+    """Generate field descriptions as attribute docstrings instead of Field descriptions.
+
+    The `--use-attribute-docstrings` flag places field descriptions in Python docstring
+    format (PEP 224 attribute docstrings) rather than in Field(..., description=...).
+    This provides better IDE support for hovering over attributes. Requires
+    `--use-field-description` to be enabled.
+    """
     run_main_and_assert(
         input_path=DATA_PATH / "jsonschema" / "use_attribute_docstrings_test.json",
         output_path=output_file,
@@ -416,8 +447,19 @@ def test_skip_root_model(tmp_path: Path) -> None:
     assert_file_content(output_file, "skip_root_model.py")
 
 
+@pytest.mark.cli_doc(
+    options=["--skip-root-model"],
+    input_schema="jsonschema/skip_root_model_test.json",
+    cli_args=["--output-model-type", "pydantic_v2.BaseModel", "--skip-root-model"],
+    golden_output="skip_root_model.py",
+)
 def test_skip_root_model_command_line(output_file: Path) -> None:
-    """Test --skip-root-model flag via command line."""
+    """Skip generation of root model when schema contains nested definitions.
+
+    The `--skip-root-model` flag prevents generating a model for the root schema object
+    when the schema primarily contains reusable definitions. This is useful when the root
+    object is just a container for $defs and not a meaningful model itself.
+    """
     run_main_and_assert(
         input_path=DATA_PATH / "jsonschema" / "skip_root_model_test.json",
         output_path=output_file,
@@ -428,8 +470,19 @@ def test_skip_root_model_command_line(output_file: Path) -> None:
     )
 
 
+@pytest.mark.cli_doc(
+    options=["--check"],
+    input_schema="jsonschema/person.json",
+    cli_args=["--disable-timestamp", "--check"],
+    golden_output="person.py",
+)
 def test_check_file_matches(output_file: Path) -> None:
-    """Test --check returns OK when file matches."""
+    """Verify generated code matches existing output without modifying files.
+
+    The `--check` flag compares the generated output with existing files and exits with
+    a non-zero status if they differ. Useful for CI/CD validation to ensure schemas
+    and generated code stay in sync. Works with both single files and directory outputs.
+    """
     input_path = DATA_PATH / "jsonschema" / "person.json"
     run_main_and_assert(
         input_path=input_path,
@@ -652,8 +705,20 @@ def test_check_with_invalid_file_format(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.cli_doc(
+    options=["--all-exports-scope"],
+    input_schema="openapi/modular.yaml",
+    cli_args=["--all-exports-scope", "children"],
+    golden_output="openapi/modular_all_exports_children",
+    related_options=["--all-exports-collision-strategy"],
+)
 def test_all_exports_scope_children(output_dir: Path) -> None:
-    """Test --all-exports-scope=children generates __all__ with child module exports."""
+    """Generate __all__ exports for child modules in __init__.py files.
+
+    The `--all-exports-scope=children` flag adds __all__ to each __init__.py containing
+    exports from direct child modules. This improves IDE autocomplete and explicit exports.
+    Use 'recursive' to include all descendant exports with collision handling.
+    """
     run_main_and_assert(
         input_path=OPEN_API_DATA_PATH / "modular.yaml",
         output_path=output_dir,
@@ -663,8 +728,21 @@ def test_all_exports_scope_children(output_dir: Path) -> None:
     )
 
 
+@pytest.mark.cli_doc(
+    options=["--all-exports-collision-strategy"],
+    input_schema="openapi/modular.yaml",
+    cli_args=["--all-exports-scope", "recursive", "--all-exports-collision-strategy", "minimal-prefix"],
+    golden_output="openapi/modular_all_exports_recursive",
+    related_options=["--all-exports-scope"],
+)
 def test_all_exports_scope_recursive_with_collision(output_dir: Path) -> None:
-    """Test --all-exports-scope=recursive with --all-exports-collision-strategy=minimal-prefix."""
+    """Handle name collisions when exporting recursive module hierarchies.
+
+    The `--all-exports-collision-strategy` flag determines how to resolve naming conflicts
+    when using `--all-exports-scope=recursive`. The 'minimal-prefix' strategy adds the
+    minimum module path prefix needed to disambiguate colliding names, while 'full-prefix'
+    uses the complete module path. Requires `--all-exports-scope=recursive`.
+    """
     run_main_and_assert(
         input_path=OPEN_API_DATA_PATH / "modular.yaml",
         output_path=output_dir,
@@ -696,16 +774,23 @@ def test_all_exports_scope_children_with_docstring_header(output_dir: Path) -> N
     )
 
 
-def test_all_exports_scope_recursive_collision_error(output_dir: Path) -> None:
-    """Test --all-exports-scope=recursive raises error on collision without strategy."""
+def test_all_exports_scope_recursive_collision_avoided_by_renaming(output_dir: Path) -> None:
+    """Test --all-exports-scope=recursive avoids collision through automatic class renaming.
+
+    With circular import resolution, conflicting class names (e.g., foo.Tea and nested.foo.Tea)
+    are automatically renamed (e.g., Tea and Tea_1) in _internal.py, so no collision error occurs.
+    """
     run_main_and_assert(
         input_path=OPEN_API_DATA_PATH / "modular.yaml",
         output_path=output_dir,
         input_file_type="openapi",
         extra_args=["--disable-timestamp", "--all-exports-scope", "recursive"],
-        expected_exit=Exit.ERROR,
-        expected_stderr_contains="Name collision detected",
     )
+
+    # Verify both Tea and Tea_1 exist in _internal.py (collision avoided through renaming)
+    internal_content = (output_dir / "_internal.py").read_text()
+    assert "class Tea(BaseModel):" in internal_content, "Tea class should exist in _internal.py"
+    assert "class Tea_1(BaseModel):" in internal_content, "Tea_1 class should exist in _internal.py"
 
 
 def test_all_exports_collision_strategy_requires_recursive(output_dir: Path) -> None:
@@ -806,4 +891,169 @@ def test_all_exports_scope_children_no_child_exports(output_dir: Path) -> None:
             "children",
         ],
         expected_directory=EXPECTED_MAIN_PATH / "openapi" / "all_exports_no_child",
+    )
+
+
+def test_all_exports_scope_children_with_local_models(output_dir: Path) -> None:
+    """Test --all-exports-scope=children when __init__.py has both local models and child exports."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "all_exports_with_local_models.yaml",
+        output_path=output_dir,
+        input_file_type="openapi",
+        extra_args=[
+            "--disable-timestamp",
+            "--all-exports-scope",
+            "children",
+        ],
+        expected_directory=EXPECTED_MAIN_PATH / "openapi" / "all_exports_with_local_models",
+    )
+
+
+def test_check_respects_pyproject_toml_settings(tmp_path: Path) -> None:
+    """Test --check uses pyproject.toml formatter settings from output path."""
+    pyproject_toml = tmp_path / "pyproject.toml"
+    pyproject_toml.write_text("[tool.black]\nline-length = 60\n", encoding="utf-8")
+
+    input_json = tmp_path / "input.json"
+    input_json.write_text(
+        """{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Person",
+  "type": "object",
+  "properties": {
+    "firstName": {"type": "string", "description": "The person's first name description that is very long."}
+  }
+}""",
+        encoding="utf-8",
+    )
+
+    output_file = tmp_path / "output.py"
+    run_main_and_assert(
+        input_path=input_json,
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=["--disable-timestamp"],
+    )
+
+    run_main_and_assert(
+        input_path=input_json,
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=["--disable-timestamp", "--check"],
+        expected_exit=Exit.OK,
+    )
+
+
+def test_use_specialized_enum_requires_python_311(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test --use-specialized-enum requires --target-python-version 3.11+."""
+    input_json = tmp_path / "input.json"
+    input_json.write_text(
+        '{"type": "string", "enum": ["A", "B"]}',
+        encoding="utf-8",
+    )
+
+    run_main_and_assert(
+        input_path=input_json,
+        output_path=tmp_path / "output.py",
+        input_file_type="jsonschema",
+        extra_args=["--use-specialized-enum"],
+        expected_exit=Exit.ERROR,
+        capsys=capsys,
+        expected_stderr_contains="--use-specialized-enum requires --target-python-version 3.11 or later",
+    )
+
+
+@pytest.mark.skipif(
+    black.__version__.split(".")[0] == "22",
+    reason="Installed black doesn't support StrEnum formatting",
+)
+def test_use_specialized_enum_with_python_311_ok(output_file: Path) -> None:
+    """Test --use-specialized-enum works with --target-python-version 3.11."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "string_enum.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=["--use-specialized-enum", "--target-python-version", "3.11"],
+        assert_func=assert_file_content,
+        expected_file="use_specialized_enum_py311.py",
+    )
+
+
+def test_use_specialized_enum_pyproject_requires_python_311(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test use_specialized_enum in pyproject.toml requires target_python_version 3.11+."""
+    pyproject_toml = tmp_path / "pyproject.toml"
+    pyproject_toml.write_text(
+        "[tool.datamodel-codegen]\nuse_specialized_enum = true\n",
+        encoding="utf-8",
+    )
+
+    input_json = tmp_path / "input.json"
+    input_json.write_text(
+        '{"type": "string", "enum": ["A", "B"]}',
+        encoding="utf-8",
+    )
+
+    with chdir(tmp_path):
+        run_main_and_assert(
+            input_path=input_json,
+            output_path=tmp_path / "output.py",
+            input_file_type="jsonschema",
+            expected_exit=Exit.ERROR,
+            capsys=capsys,
+            expected_stderr_contains="--use-specialized-enum requires --target-python-version 3.11 or later",
+        )
+
+
+def test_use_specialized_enum_pyproject_override_with_cli(output_file: Path, tmp_path: Path) -> None:
+    """Test --no-use-specialized-enum CLI can override pyproject.toml use_specialized_enum=true."""
+    pyproject_toml = tmp_path / "pyproject.toml"
+    pyproject_toml.write_text(
+        "[tool.datamodel-codegen]\nuse_specialized_enum = true\n",
+        encoding="utf-8",
+    )
+
+    with chdir(tmp_path):
+        run_main_and_assert(
+            input_path=JSON_SCHEMA_DATA_PATH / "string_enum.json",
+            output_path=output_file,
+            input_file_type="jsonschema",
+            extra_args=["--no-use-specialized-enum"],
+            assert_func=assert_file_content,
+            expected_file="no_use_specialized_enum.py",
+        )
+
+
+@pytest.mark.cli_doc(
+    options=["--module-split-mode"],
+    input_schema="jsonschema/module_split_single/input.json",
+    cli_args=["--module-split-mode", "single", "--all-exports-scope", "recursive", "--use-exact-imports"],
+    golden_output="jsonschema/module_split_single",
+    related_options=["--all-exports-scope", "--use-exact-imports"],
+)
+def test_module_split_mode_single(output_dir: Path) -> None:
+    """Split generated models into separate files, one per model class.
+
+    The `--module-split-mode=single` flag generates each model class in its own file,
+    named after the class in snake_case. Use with `--all-exports-scope=recursive` to
+    create an __init__.py that re-exports all models for convenient imports.
+    """
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "module_split_single" / "input.json",
+        output_path=output_dir,
+        input_file_type="jsonschema",
+        extra_args=[
+            "--disable-timestamp",
+            "--module-split-mode",
+            "single",
+            "--all-exports-scope",
+            "recursive",
+            "--use-exact-imports",
+        ],
+        expected_directory=EXPECTED_MAIN_PATH / "jsonschema" / "module_split_single",
     )

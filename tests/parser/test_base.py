@@ -4,19 +4,22 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
 from datamodel_code_generator.model import DataModel, DataModelFieldBase
 from datamodel_code_generator.model.pydantic import BaseModel, DataModelField
-from datamodel_code_generator.model.type_alias import TypeAlias, TypeAliasBackport, TypeAliasTypeBackport, TypeStatement
+from datamodel_code_generator.model.type_alias import TypeAlias, TypeAliasTypeBackport, TypeStatement
 from datamodel_code_generator.parser.base import (
     Parser,
     add_model_path_to_list,
     escape_characters,
     exact_import,
+    get_module_directory,
     relative,
     sort_data_models,
+    to_hashable,
 )
 from datamodel_code_generator.reference import Reference, snake_to_upper_camel
 from datamodel_code_generator.types import DataType
@@ -36,7 +39,7 @@ class C(Parser):
     def parse_raw(self, name: str, raw: dict[str, Any]) -> None:
         """Parse raw data into models."""
 
-    def parse(self) -> str:  # noqa: PLR6301
+    def parse(self) -> str:
         """Parse and return results."""
         return "parsed"
 
@@ -65,7 +68,7 @@ def test_add_model_path_to_list() -> None:
     reference_5 = Reference(path="Alias5", original_name="B", name="B")
     model1 = BaseModel(fields=[], reference=reference_1)
     model2 = TypeAlias(fields=[], reference=reference_2)
-    model3 = TypeAliasBackport(fields=[], reference=reference_3)
+    model3 = TypeAlias(fields=[], reference=reference_3)
     model4 = TypeAliasTypeBackport(fields=[], reference=reference_4)
     model5 = TypeStatement(fields=[], reference=reference_5)
 
@@ -294,6 +297,18 @@ class D(DataModel):
         return self._data
 
 
+@pytest.fixture
+def parser_fixture() -> C:
+    """Create a test parser instance for unit tests."""
+    return C(
+        data_model_type=D,
+        data_model_root_type=B,
+        data_model_field_type=DataModelFieldBase,
+        base_class="Base",
+        source="",
+    )
+
+
 def test_additional_imports() -> None:
     """Test that additional imports are inside imports container."""
     new_parser = C(
@@ -348,10 +363,10 @@ def test_postprocess_result_modules(input_data: Any, expected: Any) -> None:
 
 def test_find_member_with_integer_enum() -> None:
     """Test find_member method with integer enum values."""
-    from datamodel_code_generator.model.enum import Enum  # noqa: PLC0415
-    from datamodel_code_generator.model.pydantic.base_model import DataModelField  # noqa: PLC0415
-    from datamodel_code_generator.reference import Reference  # noqa: PLC0415
-    from datamodel_code_generator.types import DataType  # noqa: PLC0415
+    from datamodel_code_generator.model.enum import Enum
+    from datamodel_code_generator.model.pydantic.base_model import DataModelField
+    from datamodel_code_generator.reference import Reference
+    from datamodel_code_generator.types import DataType
 
     # Create test Enum with integer values
     enum = Enum(
@@ -395,10 +410,10 @@ def test_find_member_with_integer_enum() -> None:
 
 def test_find_member_with_string_enum() -> None:
     """Test find_member method with string enum values."""
-    from datamodel_code_generator.model.enum import Enum  # noqa: PLC0415
-    from datamodel_code_generator.model.pydantic.base_model import DataModelField  # noqa: PLC0415
-    from datamodel_code_generator.reference import Reference  # noqa: PLC0415
-    from datamodel_code_generator.types import DataType  # noqa: PLC0415
+    from datamodel_code_generator.model.enum import Enum
+    from datamodel_code_generator.model.pydantic.base_model import DataModelField
+    from datamodel_code_generator.reference import Reference
+    from datamodel_code_generator.types import DataType
 
     enum = Enum(
         reference=Reference(path="test_path", original_name="TestEnum", name="TestEnum"),
@@ -433,10 +448,10 @@ def test_find_member_with_string_enum() -> None:
 
 def test_find_member_with_mixed_enum() -> None:
     """Test find_member method with mixed type enum values."""
-    from datamodel_code_generator.model.enum import Enum  # noqa: PLC0415
-    from datamodel_code_generator.model.pydantic.base_model import DataModelField  # noqa: PLC0415
-    from datamodel_code_generator.reference import Reference  # noqa: PLC0415
-    from datamodel_code_generator.types import DataType  # noqa: PLC0415
+    from datamodel_code_generator.model.enum import Enum
+    from datamodel_code_generator.model.pydantic.base_model import DataModelField
+    from datamodel_code_generator.reference import Reference
+    from datamodel_code_generator.types import DataType
 
     enum = Enum(
         reference=Reference(path="test_path", original_name="TestEnum", name="TestEnum"),
@@ -512,3 +527,136 @@ def test_use_non_positive_negative_number_constrained_types(flag: bool) -> None:
     instance = C(source="", use_non_positive_negative_number_constrained_types=flag)
 
     assert instance.data_type_manager.use_non_positive_negative_number_constrained_types == flag
+
+
+def test_to_hashable_simple_values() -> None:
+    """Test to_hashable with simple values."""
+    assert to_hashable("string") == "string"
+    assert to_hashable(123) == 123
+    assert to_hashable(None) == ""  # noqa: PLC1901
+
+
+def test_to_hashable_list_and_tuple() -> None:
+    """Test to_hashable with list and tuple."""
+    result = to_hashable([3, 1, 2])
+    assert isinstance(result, tuple)
+    assert result == (1, 2, 3)  # sorted
+
+    result = to_hashable((3, 1, 2))
+    assert isinstance(result, tuple)
+    assert result == (1, 2, 3)  # sorted
+
+
+def test_to_hashable_dict() -> None:
+    """Test to_hashable with dict."""
+    result = to_hashable({"b": 2, "a": 1})
+    assert isinstance(result, tuple)
+    # sorted by key
+    assert result == (("a", 1), ("b", 2))
+
+
+def test_to_hashable_mixed_types_fallback() -> None:
+    """Test to_hashable with mixed types that cannot be compared."""
+    mixed_list = [complex(1, 2), complex(3, 4)]
+    result = to_hashable(mixed_list)
+    assert isinstance(result, tuple)
+    # Should preserve order since sorting fails
+    assert result == (complex(1, 2), complex(3, 4))
+
+
+def test_to_hashable_nested_structures() -> None:
+    """Test to_hashable with nested structures."""
+    nested = {"outer": [{"inner": 1}]}
+    result = to_hashable(nested)
+    assert isinstance(result, tuple)
+
+
+def test_postprocess_result_modules_single_element_tuple() -> None:
+    """Test postprocessing with single element tuple (len < 2)."""
+    input_data = {
+        ("__init__.py",): "init_content",
+    }
+    result = Parser._Parser__postprocess_result_modules(input_data)
+    # Single element tuple should remain unchanged
+    assert ("__init__.py",) in result
+
+
+def test_postprocess_result_modules_single_file_no_dot() -> None:
+    """Test postprocessing with single file without dot in name."""
+    input_data = {
+        ("module.py",): "content",
+        ("__init__.py",): "init_content",
+    }
+    result = Parser._Parser__postprocess_result_modules(input_data)
+    assert ("module.py",) in result
+
+
+def test_postprocess_result_modules_single_element_no_dot() -> None:
+    """Test postprocessing with single element without dot (len(r) < 2 branch)."""
+    input_data = {
+        ("__init__.py",): "init_content",
+        ("file",): "content",  # Single element without dot, so len(r) = 1
+    }
+    result = Parser._Parser__postprocess_result_modules(input_data)
+    assert ("file",) in result
+
+
+@pytest.mark.parametrize(
+    ("module", "expected"),
+    [
+        ((), ()),  # empty
+        (("pkg",), ("pkg",)),  # single
+        (("pkg", "issuing"), ("pkg",)),  # submodule
+        (("foo", "bar", "baz"), ("foo", "bar")),  # deeply nested
+    ],
+    ids=["empty", "single", "submodule", "deeply_nested"],
+)
+def test_get_module_directory(module: tuple[str, ...], expected: tuple[str, ...]) -> None:
+    """Test get_module_directory with various inputs."""
+    assert get_module_directory(module) == expected
+
+
+@pytest.mark.parametrize(
+    ("scc_modules", "existing_modules", "expected"),
+    [
+        # name conflict: _internal already exists
+        ({(), ("sub",)}, {("_internal",)}, ("_internal_1",)),
+        # multiple conflicts: _internal and _internal_1 exist
+        ({(), ("sub",)}, {("_internal",), ("_internal_1",)}, ("_internal_2",)),
+        # different prefix break: LCP computation hits break
+        ({("common", "a"), ("common", "b"), ("other", "x")}, set(), ("_internal",)),
+    ],
+    ids=["name_conflict", "multiple_conflicts", "different_prefix_break"],
+)
+def test_compute_internal_module_path(
+    parser_fixture: C,
+    scc_modules: set[tuple[str, ...]],
+    existing_modules: set[tuple[str, ...]],
+    expected: tuple[str, ...],
+) -> None:
+    """Test __compute_internal_module_path with various conflict scenarios."""
+    result = parser_fixture._Parser__compute_internal_module_path(scc_modules, existing_modules)
+    assert result == expected
+
+
+def test_build_module_dependency_graph_with_missing_ref(parser_fixture: C) -> None:
+    """Test __build_module_dependency_graph when reference path is not in path_to_module."""
+    ref_source = MagicMock()
+    ref_source.source = True
+    ref_source.path = "nonexistent.Model"
+
+    data_type = MagicMock()
+    data_type.reference = ref_source
+
+    model1 = MagicMock()
+    model1.path = "pkg.Model1"
+    model1.all_data_types = [data_type]
+    model1.base_classes = []
+
+    module_models_list = [
+        (("pkg",), [model1]),
+    ]
+
+    graph = parser_fixture._Parser__build_module_dependency_graph(module_models_list)
+
+    assert graph == {("pkg",): set()}

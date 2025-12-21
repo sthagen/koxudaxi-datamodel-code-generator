@@ -17,13 +17,14 @@ from datamodel_code_generator.model import (
     DataModel,
     DataModelFieldBase,
 )
+from datamodel_code_generator.model._types import WrappedDefault
 from datamodel_code_generator.model.base import UNDEFINED
 from datamodel_code_generator.model.pydantic.imports import (
     IMPORT_ANYURL,
     IMPORT_EXTRA,
     IMPORT_FIELD,
 )
-from datamodel_code_generator.types import UnionIntFloat, chain_as_tuple
+from datamodel_code_generator.types import STANDARD_LIST, UnionIntFloat, chain_as_tuple
 
 if TYPE_CHECKING:
     from collections import defaultdict
@@ -70,6 +71,11 @@ class DataModelField(DataModelFieldBase):
     _PARSE_METHOD: ClassVar[str] = "parse_obj"
 
     @property
+    def has_default_factory_in_field(self) -> bool:
+        """Check if this field has a default_factory in Field() including computed ones."""
+        return "default_factory" in self.extras or self.__dict__.get("_computed_default_factory") is not None
+
+    @property
     def method(self) -> str | None:
         """Get the validation method name."""
         return self.validator
@@ -97,25 +103,32 @@ class DataModelField(DataModelFieldBase):
             return None
         return result
 
-    def self_reference(self) -> bool:
-        """Check if this field references its parent model."""
-        return isinstance(self.parent, BaseModelBase) and self.parent.reference.path in {
-            d.reference.path for d in self.data_type.all_data_types if d.reference
-        }
-
     def _get_strict_field_constraint_value(self, constraint: str, value: Any) -> Any:
         if value is None or constraint not in self._COMPARE_EXPRESSIONS:
             return value
 
-        if any(data_type.type == "float" for data_type in self.data_type.all_data_types):
+        is_float_type = any(
+            data_type.type == "float"
+            or (data_type.strict and data_type.import_ and "Float" in data_type.import_.import_)
+            for data_type in self.data_type.all_data_types
+        )
+        if is_float_type:
             return float(value)
+        str_value = str(value)
+        if "e" in str_value.lower():  # pragma: no cover
+            # Scientific notation like 1e-08 - keep as float
+            return float(value)
+        if isinstance(value, int) and not isinstance(value, bool):  # pragma: no branch
+            return value
         return int(value)
 
     def _get_default_as_pydantic_model(self) -> str | None:
+        if isinstance(self.default, WrappedDefault):
+            return f"lambda :{self.default!r}"
         for data_type in self.data_type.data_types or (self.data_type,):
             # TODO: Check nested data_types
-            if data_type.is_dict or self.data_type.is_union:
-                # TODO: Parse Union and dict model for default
+            if data_type.is_dict:
+                # TODO: Parse dict model for default
                 continue
             if data_type.is_list and len(data_type.data_types) == 1:
                 data_type_child = data_type.data_types[0]
@@ -124,20 +137,46 @@ class DataModelField(DataModelFieldBase):
                     and isinstance(data_type_child.reference.source, BaseModelBase)
                     and isinstance(self.default, list)
                 ):  # pragma: no cover
+                    if not self.default:
+                        return STANDARD_LIST
                     return (
                         f"lambda :[{data_type_child.alias or data_type_child.reference.source.class_name}."
                         f"{self._PARSE_METHOD}(v) for v in {self.default!r}]"
                     )
-            elif data_type.reference and isinstance(data_type.reference.source, BaseModelBase):  # pragma: no cover
-                return (
-                    f"lambda :{data_type.alias or data_type.reference.source.class_name}."
-                    f"{self._PARSE_METHOD}({self.default!r})"
-                )
+            elif data_type.reference and isinstance(data_type.reference.source, BaseModelBase):
+                source = data_type.reference.source
+                is_root_model = hasattr(source, "BASE_CLASS") and source.BASE_CLASS == "pydantic.RootModel"
+                if self.data_type.is_union:
+                    if not isinstance(self.default, (dict, list)):
+                        if not is_root_model:
+                            continue
+                    elif isinstance(self.default, dict) and any(dt.is_dict for dt in self.data_type.data_types):
+                        continue
+                class_name = data_type.alias or source.class_name
+                if is_root_model:
+                    return f"lambda :{class_name}({self.default!r})"
+                return f"lambda :{class_name}.{self._PARSE_METHOD}({self.default!r})"
+        return None
+
+    def _get_default_factory_for_optional_nested_model(self) -> str | None:
+        """Get default_factory for optional nested Pydantic model fields.
+
+        Returns the class name if the field type references a BaseModel,
+        otherwise returns None.
+        """
+        for data_type in self.data_type.data_types or (self.data_type,):
+            if data_type.is_dict:
+                continue
+            if data_type.reference and isinstance(data_type.reference.source, BaseModelBase):
+                return data_type.alias or data_type.reference.source.class_name
         return None
 
     def _process_data_in_str(self, data: dict[str, Any]) -> None:
         if self.const:
             data["const"] = True
+
+        if self.use_frozen_field and self.read_only:
+            data["allow_mutation"] = False
 
     def _process_annotated_field_arguments(self, field_arguments: list[str]) -> list[str]:  # noqa: PLR6301
         return field_arguments
@@ -147,7 +186,12 @@ class DataModelField(DataModelFieldBase):
         data: dict[str, Any] = {k: v for k, v in self.extras.items() if k not in self._EXCLUDE_FIELD_KEYS}
         if self.alias:
             data["alias"] = self.alias
-        if self.constraints is not None and not self.self_reference() and not self.data_type.strict:
+        has_type_constraints = self.data_type.kwargs is not None and len(self.data_type.kwargs) > 0
+        if (
+            self.constraints is not None
+            and not self.self_reference()
+            and not (self.data_type.strict and has_type_constraints)
+        ):
             data = {
                 **data,
                 **(
@@ -174,10 +218,20 @@ class DataModelField(DataModelFieldBase):
 
         if self.required:
             default_factory = None
-        elif self.default and "default_factory" not in data:
+        elif self.default is not UNDEFINED and self.default is not None and "default_factory" not in data:
             default_factory = self._get_default_as_pydantic_model()
         else:
             default_factory = data.pop("default_factory", None)
+
+        if (
+            default_factory is None
+            and self.use_default_factory_for_optional_nested_models
+            and not self.required
+            and (self.default is None or self.default is UNDEFINED)
+        ):
+            default_factory = self._get_default_factory_for_optional_nested_model()
+
+        self.__dict__["_computed_default_factory"] = default_factory
 
         field_arguments = sorted(f"{k}={v!r}" for k, v in data.items() if v is not None)
 
@@ -186,14 +240,18 @@ class DataModelField(DataModelFieldBase):
                 return "Field(...)"  # Field() is for mypy
             return ""
 
+        if default_factory:
+            field_arguments = [f"default_factory={default_factory}", *field_arguments]
+
         if self.use_annotated:
             field_arguments = self._process_annotated_field_arguments(field_arguments)
         elif self.required:
             field_arguments = ["...", *field_arguments]
-        elif default_factory:
-            field_arguments = [f"default_factory={default_factory}", *field_arguments]
-        else:
-            field_arguments = [f"{self.default!r}", *field_arguments]
+        elif not default_factory:
+            from datamodel_code_generator.model.base import repr_set_sorted  # noqa: PLC0415
+
+            default_repr = repr_set_sorted(self.default) if isinstance(self.default, set) else repr(self.default)
+            field_arguments = [default_repr, *field_arguments]
 
         return f"Field({', '.join(field_arguments)})"
 
@@ -271,7 +329,7 @@ class BaseModel(BaseModelBase):
     TEMPLATE_FILE_PATH: ClassVar[str] = "pydantic/BaseModel.jinja2"
     BASE_CLASS: ClassVar[str] = "pydantic.BaseModel"
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # noqa: PLR0912, PLR0913
         self,
         *,
         reference: Reference,
@@ -325,6 +383,12 @@ class BaseModel(BaseModelBase):
         for config_attribute in "allow_population_by_field_name", "allow_mutation":
             if config_attribute in self.extra_template_data:
                 config_parameters[config_attribute] = self.extra_template_data[config_attribute]
+
+        if "validate_assignment" not in config_parameters and any(
+            field.use_frozen_field and field.read_only for field in self.fields
+        ):
+            config_parameters["validate_assignment"] = True
+
         for data_type in self.all_data_types:
             if data_type.is_custom_type:  # pragma: no cover
                 config_parameters["arbitrary_types_allowed"] = True

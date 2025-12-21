@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel
 
@@ -17,9 +16,9 @@ class ModelEnum(Enum):
     __1 = '\n'
     __ = '\r\n'
     __2 = '\t'
-    __3 = '\b'
-    __4 = '\\'
+    _x08 = '\\x08'
+    __3 = '\\'
 
 
 class Model(BaseModel):
-    __root__: Optional[ModelEnum] = None
+    __root__: ModelEnum | None = None

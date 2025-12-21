@@ -11,6 +11,7 @@ import pydantic
 import pytest
 import yaml
 
+from datamodel_code_generator import AllOfMergeMode
 from datamodel_code_generator.imports import Import
 from datamodel_code_generator.model import DataModelFieldBase
 from datamodel_code_generator.model.dataclass import DataClass
@@ -22,7 +23,7 @@ from datamodel_code_generator.parser.jsonschema import (
     Types,
     get_model_by_path,
 )
-from datamodel_code_generator.reference import Reference
+from datamodel_code_generator.reference import SPECIAL_PATH_MARKER, Reference
 from datamodel_code_generator.types import DataType
 from tests.conftest import assert_output
 
@@ -392,6 +393,8 @@ def test_parse_nested_array(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
         ("string", "date-time", "DateTime", "pendulum", "DateTime", True),
         ("string", "duration", "timedelta", "datetime", "timedelta", False),
         ("string", "duration", "Duration", "pendulum", "Duration", True),
+        ("number", "time-delta", "timedelta", "datetime", "timedelta", False),
+        ("number", "time-delta", "Duration", "pendulum", "Duration", True),
         ("string", "path", "Path", "pathlib", "Path", False),
         ("string", "password", "SecretStr", "pydantic", "SecretStr", False),
         ("string", "email", "EmailStr", "pydantic", "EmailStr", False),
@@ -807,3 +810,304 @@ def test_create_data_model_dataclass_arguments(
     result = parser._create_data_model(**kwargs)
     assert isinstance(result, DataClass)
     assert result.dataclass_arguments == expected
+
+
+def test_get_ref_body_from_url_file_unc_path(mocker: MockerFixture) -> None:
+    """Test _get_ref_body_from_url handles UNC file:// URLs correctly."""
+    parser = JsonSchemaParser("")
+    mock_load = mocker.patch(
+        "datamodel_code_generator.parser.jsonschema.load_yaml_dict_from_path",
+        return_value={"type": "object"},
+    )
+
+    result = parser._get_ref_body_from_url("file://server/share/schemas/pet.json")
+
+    assert result == {"type": "object"}
+    mock_load.assert_called_once()
+    called_path = mock_load.call_args[0][0]
+    # On Windows, UNC paths have \\server\share\ as a single "drive" part
+    # On POSIX, they're separate: /, server, share, schemas, pet.json
+    path_str = str(called_path)
+    assert "server" in path_str
+    assert "share" in path_str
+    assert called_path.parts[-2:] == ("schemas", "pet.json")
+
+
+def test_get_ref_body_from_url_file_local_path(mocker: MockerFixture) -> None:
+    """Test _get_ref_body_from_url handles local file:// URLs (no netloc)."""
+    parser = JsonSchemaParser("")
+    mock_load = mocker.patch(
+        "datamodel_code_generator.parser.jsonschema.load_yaml_dict_from_path",
+        return_value={"type": "string"},
+    )
+
+    result = parser._get_ref_body_from_url("file:///home/user/schemas/pet.json")
+
+    assert result == {"type": "string"}
+    mock_load.assert_called_once()
+    called_path = mock_load.call_args[0][0]
+    assert called_path.parts[-4:] == ("home", "user", "schemas", "pet.json")
+
+
+def test_merge_ref_with_schema_no_ref() -> None:
+    """Test _merge_ref_with_schema returns object unchanged when no $ref is present."""
+    parser = JsonSchemaParser("")
+    obj = JsonSchemaObject.parse_obj({"type": "string", "minLength": 5})
+    result = parser._merge_ref_with_schema(obj)
+    assert result is obj
+
+
+def test_has_ref_with_schema_keywords_extras_with_schema_affecting_keys() -> None:
+    """Test has_ref_with_schema_keywords when extras contains schema-affecting keys."""
+    # const is stored in extras and is schema-affecting
+    obj = JsonSchemaObject.parse_obj({
+        "$ref": "#/$defs/Base",
+        "const": "active",
+    })
+    # Verify extras contains schema-affecting key
+    assert obj.extras
+    assert "const" in obj.extras
+    assert obj.has_ref_with_schema_keywords is True
+
+
+def test_has_ref_with_schema_keywords_extras_with_metadata_only_keys() -> None:
+    """Test has_ref_with_schema_keywords when extras contains only metadata keys."""
+    # $comment is metadata-only, should not trigger merge
+    obj = JsonSchemaObject.parse_obj({
+        "$ref": "#/$defs/Base",
+        "$comment": "this is a comment",
+    })
+    # Verify extras contains only metadata key
+    assert obj.extras
+    assert "$comment" in obj.extras
+    assert obj.has_ref_with_schema_keywords is False
+
+
+def test_has_ref_with_schema_keywords_no_extras() -> None:
+    """Test has_ref_with_schema_keywords when extras is empty."""
+    # Only $ref and a schema-affecting field, no extras
+    obj = JsonSchemaObject.parse_obj({
+        "$ref": "#/$defs/Base",
+        "minLength": 10,
+    })
+    # Verify extras is empty but minLength triggers merge
+    assert not obj.extras
+    assert obj.has_ref_with_schema_keywords is True
+
+
+def test_parse_combined_schema_anyof_with_ref_and_schema_keywords() -> None:
+    """Test parse_combined_schema merges $ref with schema-affecting keywords in anyOf."""
+    parser = JsonSchemaParser("")
+    schema = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+            "value": {
+                "anyOf": [
+                    {
+                        "$ref": "#/$defs/BaseString",
+                        "minLength": 10,
+                    },
+                    {
+                        "type": "integer",
+                    },
+                ]
+            }
+        },
+        "$defs": {
+            "BaseString": {
+                "type": "string",
+                "maxLength": 100,
+            }
+        },
+    }
+    parser.parse_raw_obj("Model", schema, [])
+    results = list(parser.results)
+    assert len(results) >= 1
+
+
+def test_parse_enum_empty_enum_not_nullable() -> None:
+    """Test parse_enum returns null type when enum_fields is empty and not nullable."""
+    parser = JsonSchemaParser("")
+    obj = JsonSchemaObject.parse_obj({"type": "integer", "enum": []})
+    result = parser.parse_enum("EmptyEnum", obj, ["EmptyEnum"])
+    assert result.type == "None"
+
+
+@pytest.mark.parametrize(
+    ("schema", "expected"),
+    [
+        ({"type": "array", "items": {"type": "string"}}, False),
+        ({"allOf": [{"type": "string"}]}, False),
+        ({"oneOf": [{"type": "string"}]}, False),
+        ({"anyOf": [{"type": "string"}]}, False),
+        ({"properties": {"name": {"type": "string"}}}, False),
+        ({"patternProperties": {".*": {"type": "string"}}}, False),
+        ({"type": "object"}, False),
+        ({"enum": ["a", "b"]}, False),
+        ({"type": "string"}, True),
+        ({"type": "string", "minLength": 1}, True),
+    ],
+)
+def test_is_root_model_schema(schema: dict[str, Any], expected: bool) -> None:
+    """Test _is_root_model_schema returns correct value for various schema types."""
+    parser = JsonSchemaParser("")
+    obj = JsonSchemaObject.parse_obj(schema)
+    assert parser._is_root_model_schema(obj) is expected
+
+
+def test_merge_primitive_schemas_for_allof_single_item() -> None:
+    """Test _merge_primitive_schemas_for_allof returns unchanged item when single."""
+    parser = JsonSchemaParser("")
+    item = JsonSchemaObject.parse_obj({"type": "string", "minLength": 1})
+    result = parser._merge_primitive_schemas_for_allof([item])
+    assert result == item
+
+
+def test_merge_primitive_schemas_for_allof_nomerge_mode() -> None:
+    """Test _merge_primitive_schemas_for_allof overwrites constraints in NoMerge mode."""
+    parser = JsonSchemaParser("")
+    parser.allof_merge_mode = AllOfMergeMode.NoMerge
+    items = [
+        JsonSchemaObject.parse_obj({"type": "string", "pattern": "^a.*"}),
+        JsonSchemaObject.parse_obj({"minLength": 5}),
+    ]
+    result = parser._merge_primitive_schemas_for_allof(items)
+    assert result.pattern == "^a.*"
+    assert result.minLength == 5
+
+
+def test_merge_primitive_schemas_for_allof_nomerge_mode_with_format() -> None:
+    """Test _merge_primitive_schemas_for_allof handles format in NoMerge mode."""
+    parser = JsonSchemaParser("")
+    parser.allof_merge_mode = AllOfMergeMode.NoMerge
+    items = [
+        JsonSchemaObject.parse_obj({"type": "string"}),
+        JsonSchemaObject.parse_obj({"format": "email"}),
+    ]
+    result = parser._merge_primitive_schemas_for_allof(items)
+    assert result.format == "email"
+
+
+def test_merge_primitive_schemas_for_allof_constraints_mode_with_format() -> None:
+    """Test _merge_primitive_schemas_for_allof handles format in Constraints mode."""
+    parser = JsonSchemaParser("")
+    parser.allof_merge_mode = AllOfMergeMode.Constraints
+    items = [
+        JsonSchemaObject.parse_obj({"type": "string", "pattern": "^a.*"}),
+        JsonSchemaObject.parse_obj({"format": "email"}),
+    ]
+    result = parser._merge_primitive_schemas_for_allof(items)
+    assert result.format == "email"
+
+
+def test_handle_allof_root_model_special_path_marker() -> None:
+    """Test _handle_allof_root_model_with_constraints returns None for special path."""
+    parser = JsonSchemaParser("")
+    obj = JsonSchemaObject.parse_obj({
+        "allOf": [
+            {"$ref": "#/definitions/Base"},
+            {"minLength": 1},
+        ]
+    })
+    path = [f"test{SPECIAL_PATH_MARKER}inline"]
+    result = parser._handle_allof_root_model_with_constraints("Test", obj, path)
+    assert result is None
+
+
+def test_handle_allof_root_model_multiple_refs() -> None:
+    """Test _handle_allof_root_model_with_constraints returns None for multiple refs."""
+    parser = JsonSchemaParser("")
+    obj = JsonSchemaObject.parse_obj({
+        "allOf": [
+            {"$ref": "#/definitions/Base1"},
+            {"$ref": "#/definitions/Base2"},
+        ]
+    })
+    result = parser._handle_allof_root_model_with_constraints("Test", obj, ["test"])
+    assert result is None
+
+
+def test_handle_allof_root_model_no_refs() -> None:
+    """Test _handle_allof_root_model_with_constraints returns None when no refs."""
+    parser = JsonSchemaParser("")
+    obj = JsonSchemaObject.parse_obj({
+        "allOf": [
+            {"type": "string"},
+            {"minLength": 1},
+        ]
+    })
+    result = parser._handle_allof_root_model_with_constraints("Test", obj, ["test"])
+    assert result is None
+
+
+def test_handle_allof_root_model_no_constraint_items() -> None:
+    """Test _handle_allof_root_model_with_constraints returns None when no constraints."""
+    parser = JsonSchemaParser("")
+    parser._load_ref_schema_object = lambda _ref: JsonSchemaObject.parse_obj({"type": "string"})
+    obj = JsonSchemaObject.parse_obj({
+        "allOf": [
+            {"$ref": "#/definitions/Base"},
+        ]
+    })
+    result = parser._handle_allof_root_model_with_constraints("Test", obj, ["test"])
+    assert result is None
+
+
+def test_handle_allof_root_model_constraint_with_properties() -> None:
+    """Test _handle_allof_root_model_with_constraints returns None when constraint has properties."""
+    parser = JsonSchemaParser("")
+    parser._load_ref_schema_object = lambda _ref: JsonSchemaObject.parse_obj({"type": "string"})
+    obj = JsonSchemaObject.parse_obj({
+        "allOf": [
+            {"$ref": "#/definitions/Base"},
+            {"properties": {"name": {"type": "string"}}},
+        ]
+    })
+    result = parser._handle_allof_root_model_with_constraints("Test", obj, ["test"])
+    assert result is None
+
+
+def test_handle_allof_root_model_constraint_with_items() -> None:
+    """Test _handle_allof_root_model_with_constraints returns None when constraint has items."""
+    parser = JsonSchemaParser("")
+    parser._load_ref_schema_object = lambda _ref: JsonSchemaObject.parse_obj({"type": "string"})
+    obj = JsonSchemaObject.parse_obj({
+        "allOf": [
+            {"$ref": "#/definitions/Base"},
+            {"items": {"type": "string"}},
+        ]
+    })
+    result = parser._handle_allof_root_model_with_constraints("Test", obj, ["test"])
+    assert result is None
+
+
+def test_handle_allof_root_model_incompatible_types() -> None:
+    """Test _handle_allof_root_model_with_constraints returns None for incompatible types."""
+    parser = JsonSchemaParser("")
+    parser._load_ref_schema_object = lambda _ref: JsonSchemaObject.parse_obj({"type": "string"})
+    obj = JsonSchemaObject.parse_obj({
+        "allOf": [
+            {"$ref": "#/definitions/Base"},
+            {"type": "boolean"},
+        ]
+    })
+    result = parser._handle_allof_root_model_with_constraints("Test", obj, ["test"])
+    assert result is None
+
+
+def test_handle_allof_root_model_ref_to_non_root() -> None:
+    """Test _handle_allof_root_model_with_constraints returns None when ref is not root model."""
+    parser = JsonSchemaParser("")
+    parser._load_ref_schema_object = lambda _ref: JsonSchemaObject.parse_obj({
+        "type": "object",
+        "properties": {"id": {"type": "integer"}},
+    })
+    obj = JsonSchemaObject.parse_obj({
+        "allOf": [
+            {"$ref": "#/definitions/Base"},
+            {"minLength": 1},
+        ]
+    })
+    result = parser._handle_allof_root_model_with_constraints("Test", obj, ["test"])
+    assert result is None

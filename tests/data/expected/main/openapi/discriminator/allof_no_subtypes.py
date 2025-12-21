@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -14,12 +14,14 @@ class BaseItem(BaseModel):
 
 
 class FooItem(BaseModel):
-    fooValue: Optional[str] = None
+    fooValue: str | None = None
+    itemType: Literal['foo']
 
 
 class BarItem(BaseModel):
-    barValue: Optional[int] = None
+    barValue: int | None = None
+    itemType: Literal['bar']
 
 
 class ItemContainer(BaseModel):
-    item: BaseItem = Field(..., discriminator='itemType')
+    item: FooItem | BarItem = Field(..., discriminator='itemType')

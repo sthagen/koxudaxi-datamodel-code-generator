@@ -25,6 +25,11 @@ class Import(BaseModel):
     alias: Optional[str] = None  # noqa: UP045
     reference_path: Optional[str] = None  # noqa: UP045
 
+    @property
+    def is_future(self) -> bool:
+        """Check if this is a __future__ import."""
+        return self.from_ == "__future__"
+
     @classmethod
     @lru_cache
     def from_full_path(cls, class_path: str) -> Import:
@@ -33,7 +38,7 @@ class Import(BaseModel):
         return Import(from_=".".join(split_class_path[:-1]) or None, import_=split_class_path[-1])
 
 
-class Imports(defaultdict[Optional[str], set[str]]):
+class Imports(defaultdict[str | None, set[str]]):
     """Collection of imports with reference counting and alias support."""
 
     def __str__(self) -> str:
@@ -47,6 +52,7 @@ class Imports(defaultdict[Optional[str], set[str]]):
         self.counter: dict[tuple[str | None, str], int] = defaultdict(int)
         self.reference_paths: dict[str, Import] = {}
         self.use_exact: bool = use_exact
+        self._exports: set[str] | None = None
 
     def _set_alias(self, from_: str | None, imports: set[str]) -> list[str]:
         """Apply aliases to imports and return sorted list."""
@@ -82,32 +88,85 @@ class Imports(defaultdict[Optional[str], set[str]]):
                     if import_.alias:
                         self.alias[import_.from_][import_.import_] = import_.alias
 
-    def remove(self, imports: Import | Iterable[Import]) -> None:
+    def remove(self, imports: Import | Iterable[Import]) -> None:  # noqa: PLR0912
         """Remove one or more imports from the collection."""
         if isinstance(imports, Import):  # pragma: no cover
             imports = [imports]
         for import_ in imports:
             if "." in import_.import_:  # pragma: no cover
-                self.counter[None, import_.import_] -= 1
-                if self.counter[None, import_.import_] == 0:  # pragma: no cover
-                    self[None].remove(import_.import_)
-                    if not self[None]:
-                        del self[None]
+                key = (None, import_.import_)
+                if self.counter.get(key, 0) <= 0:
+                    continue
+                self.counter[key] -= 1
+                if self.counter[key] == 0:  # pragma: no cover
+                    del self.counter[key]
+                    if None in self and import_.import_ in self[None]:
+                        self[None].remove(import_.import_)
+                        if not self[None]:
+                            del self[None]
             else:
-                self.counter[import_.from_, import_.import_] -= 1  # pragma: no cover
-                if self.counter[import_.from_, import_.import_] == 0:  # pragma: no cover
-                    self[import_.from_].remove(import_.import_)
-                    if not self[import_.from_]:
-                        del self[import_.from_]
-                    if import_.alias:  # pragma: no cover
+                key = (import_.from_, import_.import_)
+                if self.counter.get(key, 0) <= 0:
+                    continue
+                self.counter[key] -= 1  # pragma: no cover
+                if self.counter[key] == 0:  # pragma: no cover
+                    del self.counter[key]
+                    if import_.from_ in self and import_.import_ in self[import_.from_]:
+                        self[import_.from_].remove(import_.import_)
+                        if not self[import_.from_]:
+                            del self[import_.from_]
+                    if import_.alias and import_.from_ in self.alias and import_.import_ in self.alias[import_.from_]:
                         del self.alias[import_.from_][import_.import_]
                         if not self.alias[import_.from_]:
                             del self.alias[import_.from_]
+            if import_.reference_path and import_.reference_path in self.reference_paths:
+                del self.reference_paths[import_.reference_path]
 
     def remove_referenced_imports(self, reference_path: str) -> None:
         """Remove imports associated with a reference path."""
         if reference_path in self.reference_paths:
             self.remove(self.reference_paths[reference_path])
+
+    def extract_future(self) -> Imports:
+        """Extract and remove __future__ imports, returning them as a new Imports."""
+        future = Imports(self.use_exact)
+        future_key = "__future__"
+        if future_key in self:
+            future[future_key] = self.pop(future_key)
+            for key in list(self.counter.keys()):
+                if key[0] == future_key:
+                    future.counter[key] = self.counter.pop(key)
+            if future_key in self.alias:
+                future.alias[future_key] = self.alias.pop(future_key)
+            for ref_path, import_ in list(self.reference_paths.items()):
+                if import_.from_ == future_key:
+                    future.reference_paths[ref_path] = self.reference_paths.pop(ref_path)
+        return future
+
+    def add_export(self, name: str) -> None:
+        """Add a name to export without importing it (for local definitions)."""
+        if self._exports is None:
+            self._exports = set()
+        self._exports.add(name)
+
+    def dump_all(self, *, multiline: bool = False) -> str:
+        """Generate __all__ declaration from imported names and added exports.
+
+        Args:
+            multiline: If True, format with one name per line
+
+        Returns:
+            Formatted __all__ = [...] string
+        """
+        name_set: set[str] = (self._exports or set()).copy()
+        for from_, imports in self.items():
+            name_set.update(self.alias.get(from_, {}).get(import_) or import_ for import_ in imports)
+        name_list = sorted(name_set)
+        if multiline:
+            items = ",\n    ".join(f'"{name}"' for name in name_list)
+            return f"__all__ = [\n    {items},\n]"
+        items = ", ".join(f'"{name}"' for name in name_list)
+        return f"__all__ = [{items}]"
 
 
 IMPORT_ANNOTATED = Import.from_full_path("typing.Annotated")
@@ -117,8 +176,8 @@ IMPORT_SET = Import.from_full_path("typing.Set")
 IMPORT_UNION = Import.from_full_path("typing.Union")
 IMPORT_OPTIONAL = Import.from_full_path("typing.Optional")
 IMPORT_LITERAL = Import.from_full_path("typing.Literal")
+IMPORT_TUPLE = Import.from_full_path("typing.Tuple")
 IMPORT_TYPE_ALIAS = Import.from_full_path("typing.TypeAlias")
-IMPORT_TYPE_ALIAS_BACKPORT = Import.from_full_path("typing_extensions.TypeAlias")
 IMPORT_TYPE_ALIAS_TYPE = Import.from_full_path("typing_extensions.TypeAliasType")
 IMPORT_SEQUENCE = Import.from_full_path("typing.Sequence")
 IMPORT_FROZEN_SET = Import.from_full_path("typing.FrozenSet")

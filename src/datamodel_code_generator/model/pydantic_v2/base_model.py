@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import re
 from enum import Enum
-from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NamedTuple, Optional
 
 from pydantic import Field
-from typing_extensions import Literal
 
 from datamodel_code_generator.model.base import UNDEFINED, DataModelFieldBase
 from datamodel_code_generator.model.pydantic.base_model import (
@@ -125,15 +124,8 @@ class DataModelField(DataModelFieldV1):
         return values
 
     def process_const(self) -> None:
-        """Process const field by converting it to a literal type with default value."""
-        if "const" not in self.extras:
-            return
-        self.const = True
-        self.nullable = False
-        const = self.extras["const"]
-        self.data_type = self.data_type.__class__(literals=[const])
-        if not self.default:
-            self.default = const
+        """Process const field constraint using literal type."""
+        self._process_const_as_literal()
 
     def _process_data_in_str(self, data: dict[str, Any]) -> None:
         if self.const:
@@ -142,6 +134,9 @@ class DataModelField(DataModelFieldV1):
 
         # unique_items is not supported in pydantic 2.0
         data.pop("unique_items", None)
+
+        if self.use_frozen_field and self.read_only:
+            data["frozen"] = True
 
         if "union_mode" in data:
             if self.data_type.is_union:
@@ -233,15 +228,8 @@ class BaseModel(BaseModelBase):
                 config_parameters["arbitrary_types_allowed"] = True
                 break
 
-        for field in self.fields:
-            # Check if a regex pattern uses lookarounds.
-            # Depending on the generation configuration, the pattern may end up in two different places.
-            pattern = (isinstance(field.constraints, Constraints) and field.constraints.pattern) or (
-                field.data_type.kwargs or {}
-            ).get("pattern")
-            if pattern and re.search(r"\(\?<?[=!]", pattern):
-                config_parameters["regex_engine"] = '"python-re"'
-                break
+        if self._has_lookaround_pattern():
+            config_parameters["regex_engine"] = '"python-re"'
 
         if isinstance(self.extra_template_data.get("config"), dict):
             for key, value in self.extra_template_data["config"].items():
@@ -270,3 +258,16 @@ class BaseModel(BaseModelBase):
         elif additional_properties is False:
             config_extra = "'forbid'"
         return config_extra
+
+    def _has_lookaround_pattern(self) -> bool:
+        """Check if any field has a regex pattern with lookaround assertions."""
+        lookaround_regex = re.compile(r"\(\?<?[=!]")
+        for field in self.fields:
+            pattern = isinstance(field.constraints, Constraints) and field.constraints.pattern
+            if pattern and lookaround_regex.search(pattern):
+                return True
+            for data_type in field.data_type.all_data_types:
+                pattern = (data_type.kwargs or {}).get("pattern")
+                if pattern and lookaround_regex.search(pattern):
+                    return True
+        return False

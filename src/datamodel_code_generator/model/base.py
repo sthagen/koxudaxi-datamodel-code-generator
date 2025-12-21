@@ -17,6 +17,7 @@ from warnings import warn
 
 from jinja2 import Environment, FileSystemLoader, Template
 from pydantic import Field
+from typing_extensions import Self
 
 from datamodel_code_generator.imports import (
     IMPORT_ANNOTATED,
@@ -24,10 +25,12 @@ from datamodel_code_generator.imports import (
     IMPORT_UNION,
     Import,
 )
+from datamodel_code_generator.model._types import WrappedDefault
 from datamodel_code_generator.reference import Reference, _BaseModel
 from datamodel_code_generator.types import (
     ANY,
     NONE,
+    OPTIONAL_PREFIX,
     UNION_PREFIX,
     DataType,
     Nullable,
@@ -35,6 +38,8 @@ from datamodel_code_generator.types import (
     get_optional_type,
 )
 from datamodel_code_generator.util import PYDANTIC_V2, ConfigDict
+
+__all__ = ["WrappedDefault"]
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -45,7 +50,22 @@ TEMPLATE_DIR: Path = Path(__file__).parents[0] / "template"
 
 ALL_MODEL: str = "#all#"
 
+
+def repr_set_sorted(value: set[Any]) -> str:
+    """Return a repr of a set with elements sorted for consistent output.
+
+    Uses (type_name, repr(x)) as sort key to safely handle any type including
+    Enum, custom classes, or types without __lt__ defined.
+    """
+    if not value:
+        return "set()"
+    # Sort by type name first, then by repr for consistent output
+    sorted_elements = sorted(value, key=lambda x: (type(x).__name__, repr(x)))
+    return "{" + ", ".join(repr(e) for e in sorted_elements) + "}"
+
+
 ConstraintsBaseT = TypeVar("ConstraintsBaseT", bound="ConstraintsBase")
+DataModelFieldBaseT = TypeVar("DataModelFieldBaseT", bound="DataModelFieldBase")
 
 
 class ConstraintsBase(_BaseModel):
@@ -121,6 +141,7 @@ class DataModelFieldBase(_BaseModel):
     parent: Optional[DataModel] = None  # noqa: UP045
     extras: dict[str, Any] = Field(default_factory=dict)
     use_annotated: bool = False
+    use_serialize_as_any: bool = False
     has_default: bool = False
     use_field_description: bool = False
     use_inline_field_description: bool = False
@@ -132,6 +153,10 @@ class DataModelFieldBase(_BaseModel):
     _pass_fields: ClassVar[set[str]] = {"parent", "data_type"}
     can_have_extra_keys: ClassVar[bool] = True
     type_has_null: Optional[bool] = None  # noqa: UP045
+    read_only: bool = False
+    write_only: bool = False
+    use_frozen_field: bool = False
+    use_default_factory_for_optional_nested_models: bool = False
 
     if not TYPE_CHECKING:
         if not PYDANTIC_V2:
@@ -162,10 +187,52 @@ class DataModelFieldBase(_BaseModel):
         self.required = False
         self.nullable = False
 
+    def _process_const_as_literal(self) -> None:
+        """Process const values by converting to literal type. Used by subclasses."""
+        if "const" not in self.extras:
+            return
+        const = self.extras["const"]
+        self.const = True
+        self.nullable = False
+        self.replace_data_type(self.data_type.__class__(literals=[const]), clear_old_parent=False)
+        if not self.default:
+            self.default = const
+
+    def self_reference(self) -> bool:
+        """Check if field references its parent model."""
+        if self.parent is None or not self.parent.reference:  # pragma: no cover
+            return False
+        return self.parent.reference.path in {d.reference.path for d in self.data_type.all_data_types if d.reference}
+
+    @property
+    def _use_union_operator(self) -> bool:
+        """Get effective use_union_operator considering parent model's forward reference."""
+        if self.parent and self.parent.has_forward_reference:
+            return False
+        return self.data_type.use_union_operator
+
+    def _build_union_type_hint(self) -> str | None:
+        """Build Union[] type hint from data_type.data_types if forward reference requires it."""
+        if not (self._use_union_operator != self.data_type.use_union_operator and self.data_type.is_union):
+            return None
+        parts = [dt.type_hint for dt in self.data_type.data_types if dt.type_hint]
+        if len(parts) > 1:
+            return f"Union[{', '.join(parts)}]"
+        return None  # pragma: no cover
+
+    def _build_base_union_type_hint(self) -> str | None:  # pragma: no cover
+        """Build Union[] base type hint from data_type.data_types if forward reference requires it."""
+        if not (self._use_union_operator != self.data_type.use_union_operator and self.data_type.is_union):
+            return None
+        parts = [dt.base_type_hint for dt in self.data_type.data_types if dt.base_type_hint]
+        if len(parts) > 1:
+            return f"Union[{', '.join(parts)}]"
+        return None
+
     @property
     def type_hint(self) -> str:  # noqa: PLR0911
         """Get the type hint string for this field, including nullability."""
-        type_hint = self.data_type.type_hint
+        type_hint = self._build_union_type_hint() or self.data_type.type_hint
 
         if not type_hint:
             return NONE
@@ -173,33 +240,62 @@ class DataModelFieldBase(_BaseModel):
             return type_hint
         if self.nullable is not None:
             if self.nullable:
-                return get_optional_type(type_hint, self.data_type.use_union_operator)
+                return get_optional_type(type_hint, self._use_union_operator)
             return type_hint
         if self.required:
             if self.type_has_null:
-                return get_optional_type(type_hint, self.data_type.use_union_operator)
+                return get_optional_type(type_hint, self._use_union_operator)
             return type_hint
         if self.fall_back_to_nullable:
-            return get_optional_type(type_hint, self.data_type.use_union_operator)
+            return get_optional_type(type_hint, self._use_union_operator)
         return type_hint
+
+    @property
+    def base_type_hint(self) -> str:
+        """Get the base type hint without constrained type kwargs.
+
+        This returns the type without kwargs (e.g., 'str' instead of 'constr(pattern=...)').
+        Used in RootModel generics when regex_engine config is needed for lookaround patterns.
+        """
+        base_hint = self._build_base_union_type_hint() or self.data_type.base_type_hint
+
+        if not base_hint:  # pragma: no cover
+            return NONE
+
+        needs_optional = (
+            (self.nullable is True)
+            or (self.required and self.type_has_null)
+            or (self.nullable is None and not self.required and self.fall_back_to_nullable)
+        )
+        skip_optional = (
+            self.has_default_factory
+            or (self.data_type.is_optional and self.data_type.type != ANY)
+            or (self.nullable is False)
+        )
+
+        if needs_optional and not skip_optional:  # pragma: no cover
+            return get_optional_type(base_hint, self._use_union_operator)
+        return base_hint
 
     @property
     def imports(self) -> tuple[Import, ...]:
         """Get all imports required for this field's type hint."""
         type_hint = self.type_hint
-        has_union = not self.data_type.use_union_operator and UNION_PREFIX in type_hint
+        has_union = not self._use_union_operator and UNION_PREFIX in type_hint
+        has_optional = OPTIONAL_PREFIX in type_hint
         imports: list[tuple[Import] | Iterator[Import]] = [
-            iter(i for i in self.data_type.all_imports if not (not has_union and i == IMPORT_UNION))
+            iter(
+                i
+                for i in self.data_type.all_imports
+                if not ((not has_union and i == IMPORT_UNION) or (not has_optional and i == IMPORT_OPTIONAL))
+            )
         ]
 
-        if self.fall_back_to_nullable:
-            if (
-                self.nullable or (self.nullable is None and not self.required)
-            ) and not self.data_type.use_union_operator:
-                imports.append((IMPORT_OPTIONAL,))
-        elif self.nullable and not self.data_type.use_union_operator:  # pragma: no cover
+        if has_union:
+            imports.append((IMPORT_UNION,))
+        if has_optional:
             imports.append((IMPORT_OPTIONAL,))
-        if self.use_annotated and self.annotated:
+        if self.use_annotated and self.needs_annotated_import:
             imports.append((IMPORT_ANNOTATED,))
         return chain_as_tuple(*imports)
 
@@ -244,12 +340,24 @@ class DataModelFieldBase(_BaseModel):
     @property
     def represented_default(self) -> str:
         """Get the repr() string of the default value."""
+        if isinstance(self.default, set):
+            return repr_set_sorted(self.default)
         return repr(self.default)
 
     @property
     def annotated(self) -> str | None:
         """Get the Annotated type hint content, if any."""
         return None
+
+    @property
+    def needs_annotated_import(self) -> bool:
+        """Check if this field requires the Annotated import."""
+        return bool(self.annotated)
+
+    @property
+    def needs_meta_import(self) -> bool:  # pragma: no cover
+        """Check if this field requires the Meta import (msgspec only)."""
+        return False
 
     @property
     def has_default_factory(self) -> bool:
@@ -260,6 +368,32 @@ class DataModelFieldBase(_BaseModel):
     def fall_back_to_nullable(self) -> bool:
         """Check if optional fields should be nullable by default."""
         return True
+
+    def copy_deep(self) -> Self:
+        """Create a deep copy of this field to avoid mutating the original."""
+        copied = self.copy()
+        copied.parent = None
+        copied.extras = deepcopy(self.extras)
+        copied.data_type = self.data_type.copy()
+        if self.data_type.data_types:
+            copied.data_type.data_types = [dt.copy() for dt in self.data_type.data_types]
+        if self.data_type.dict_key:
+            copied.data_type.dict_key = self.data_type.dict_key.copy()
+        return copied
+
+    def replace_data_type(self, new_data_type: DataType, *, clear_old_parent: bool = True) -> None:
+        """Replace data_type and update parent relationships.
+
+        Args:
+            new_data_type: The new DataType to set.
+            clear_old_parent: If True, clear the old data_type's parent reference.
+                Set to False when the old data_type may be referenced elsewhere.
+        """
+        if self.data_type.parent is self and clear_old_parent:
+            self.data_type.swap_with(new_data_type)
+        else:
+            self.data_type = new_data_type
+            new_data_type.parent = self
 
 
 @lru_cache
@@ -331,7 +465,7 @@ class BaseClassDataType(DataType):
 UNDEFINED: Any = object()
 
 
-class DataModel(TemplateBase, Nullable, ABC):
+class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
     """Abstract base class for all data model types.
 
     Handles template rendering, import collection, and model relationships.
@@ -341,6 +475,7 @@ class DataModel(TemplateBase, Nullable, ABC):
     BASE_CLASS: ClassVar[str] = ""
     DEFAULT_IMPORTS: ClassVar[tuple[Import, ...]] = ()
     IS_ALIAS: bool = False
+    has_forward_reference: bool = False
 
     def __init__(  # noqa: PLR0913
         self,
@@ -432,6 +567,49 @@ class DataModel(TemplateBase, Nullable, ABC):
                 names.add(field.name)
             unique_fields.append(field)
         return unique_fields
+
+    def iter_all_fields(self, visited: set[str] | None = None) -> Iterator[DataModelFieldBase]:
+        """Yield all fields including those from base classes (parent fields first)."""
+        if visited is None:
+            visited = set()
+        if self.reference.path in visited:  # pragma: no cover
+            return
+        visited.add(self.reference.path)
+        for base_class in self.base_classes:
+            if base_class.reference and isinstance(base_class.reference.source, DataModel):
+                yield from base_class.reference.source.iter_all_fields(visited)
+        yield from self.fields
+
+    def get_dedup_key(self, class_name: str | None = None, *, use_default: bool = True) -> tuple[Any, ...]:
+        """Generate hashable key for model deduplication."""
+        from datamodel_code_generator.parser.base import to_hashable  # noqa: PLC0415
+
+        render_class_name = class_name if class_name is not None or not use_default else "M"
+        return tuple(to_hashable(v) for v in (self.render(class_name=render_class_name), self.imports))
+
+    def create_reuse_model(self, base_ref: Reference) -> Self:
+        """Create inherited model with empty fields pointing to base reference."""
+        return self.__class__(
+            fields=[],
+            base_classes=[base_ref],
+            description=self.description,
+            reference=Reference(
+                name=self.name,
+                path=self.reference.path + "/reuse",
+            ),
+            custom_template_dir=self._custom_template_dir,
+            custom_base_class=self.custom_base_class,
+            keyword_only=self.keyword_only,
+            treat_dot_as_module=self._treat_dot_as_module,
+        )
+
+    def replace_children_in_models(self, models: list[DataModel], new_ref: Reference) -> None:
+        """Replace reference children if their parent model is in models list."""
+        from datamodel_code_generator.parser.base import get_most_of_parent  # noqa: PLC0415
+
+        for child in self.reference.children[:]:
+            if isinstance(child, DataType) and get_most_of_parent(child) in models:
+                child.replace_reference(new_ref)
 
     def set_base_class(self) -> None:
         """Set up the base class for this model."""
@@ -538,6 +716,12 @@ class DataModel(TemplateBase, Nullable, ABC):
     def path(self) -> str:
         """Get the full reference path for this model."""
         return self.reference.path
+
+    def set_reference_path(self, new_path: str) -> None:
+        """Set reference path and clear cached path property."""
+        self.reference.path = new_path
+        if "path" in self.__dict__:
+            del self.__dict__["path"]
 
     def render(self, *, class_name: str | None = None) -> str:
         """Render the model to a string using the template."""

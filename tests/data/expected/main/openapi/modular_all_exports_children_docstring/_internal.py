@@ -1,0 +1,67 @@
+"""
+Custom module docstring header.
+
+This is a multi-line docstring used for testing.
+"""
+
+from __future__ import annotations
+
+from pydantic import BaseModel
+
+from . import models
+
+
+class Optional(BaseModel):
+    __root__: str
+
+
+class Id(BaseModel):
+    __root__: str
+
+
+class Error(BaseModel):
+    code: int
+    message: str
+
+
+class Result(BaseModel):
+    event: models.Event | None = None
+
+
+class Source(BaseModel):
+    country: str | None = None
+
+
+class DifferentTea(BaseModel):
+    foo: Tea | None = None
+    nested: Tea_1 | None = None
+
+
+class Tea(BaseModel):
+    flavour: str | None = None
+    id: Id | None = None
+
+
+class Cocoa(BaseModel):
+    quality: int | None = None
+
+
+class Tea_1(BaseModel):
+    flavour: str | None = None
+    id: Id | None = None
+    self: Tea_1 | None = None
+    optional: list[Optional] | None = None
+
+
+class TeaClone(BaseModel):
+    flavour: str | None = None
+    id: Id | None = None
+    self: Tea_1 | None = None
+    optional: list[Optional] | None = None
+
+
+class List(BaseModel):
+    __root__: list[Tea_1]
+
+
+Tea_1.update_forward_refs()

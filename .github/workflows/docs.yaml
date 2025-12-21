@@ -5,6 +5,10 @@ on:
     branches:
     - main
   workflow_dispatch:
+  workflow_run:
+    workflows: ["Update CHANGELOG"]
+    types:
+      - completed
 
 concurrency:
   group: docs-${{ github.ref }}
@@ -12,6 +16,7 @@ concurrency:
 
 jobs:
   build-deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event.workflow_run == null }}
     runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v4
@@ -21,8 +26,17 @@ jobs:
         python-version: 3.13
     - name: Install dependencies
       run: uv sync
+    - name: Copy CHANGELOG to docs
+      run: |
+        if [ -f CHANGELOG.md ]; then
+          cp CHANGELOG.md docs/changelog.md
+        else
+          echo "# Changelog" > docs/changelog.md
+          echo "" >> docs/changelog.md
+          echo "Changelog will be available after the first release." >> docs/changelog.md
+        fi
     - name: build site
-      run:  mkdocs build --verbose --clean --strict
+      run: zensical build --clean
     - name: Deploy
       uses: peaceiris/actions-gh-pages@v2
       env:

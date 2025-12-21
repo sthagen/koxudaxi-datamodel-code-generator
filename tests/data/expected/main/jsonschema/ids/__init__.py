@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from enum import Enum
 
 from pydantic import BaseModel
 
@@ -12,13 +12,16 @@ from . import URI, ContactPoint
 from . import id as id_1
 from . import name as name_1
 from . import sameAs as sameAs_1
-from . import type as type_1
+
+
+class Type(Enum):
+    Organization = 'Organization'
 
 
 class Organization(BaseModel):
-    id: Optional[id_1.Schema] = None
-    type: type_1.Schema
+    id: id_1.Schema | None = None
+    type: Type
     name: name_1.Schema
-    contactPoint: Optional[ContactPoint.Schema] = None
-    sameAs: Optional[sameAs_1.Schema] = None
-    url: Optional[URI.Schema] = None
+    contactPoint: ContactPoint.Schema | None = None
+    sameAs: sameAs_1.Schema | None = None
+    url: URI.Schema | None = None

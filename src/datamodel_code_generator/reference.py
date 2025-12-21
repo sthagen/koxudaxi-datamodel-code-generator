@@ -19,7 +19,6 @@ from re import Pattern
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     ClassVar,
     NamedTuple,
     Optional,
@@ -33,16 +32,34 @@ from urllib.parse import ParseResult, urlparse
 import pydantic
 from packaging import version
 from pydantic import BaseModel, Field
+from typing_extensions import TypeIs
 
 from datamodel_code_generator import Error
-from datamodel_code_generator.util import PYDANTIC_V2, ConfigDict, model_validator
+from datamodel_code_generator.util import PYDANTIC_V2, ConfigDict, camel_to_snake, model_validator
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Mapping, Sequence
+    from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
     from collections.abc import Set as AbstractSet
 
     import inflect
     from pydantic.typing import DictStrAny
+
+    from datamodel_code_generator.model.base import DataModel
+    from datamodel_code_generator.types import DataType
+
+
+def _is_data_type(value: object) -> TypeIs[DataType]:
+    """Check if value is a DataType instance."""
+    from datamodel_code_generator.types import DataType as DataType_  # noqa: PLC0415
+
+    return isinstance(value, DataType_)
+
+
+def _is_data_model(value: object) -> TypeIs[DataModel]:
+    """Check if value is a DataModel instance."""
+    from datamodel_code_generator.model.base import DataModel as DataModel_  # noqa: PLC0415
+
+    return isinstance(value, DataModel_)
 
 
 @runtime_checkable
@@ -170,6 +187,18 @@ class Reference(_BaseModel):
         """Return the last component of the dotted name."""
         return self.name.rsplit(".", 1)[-1]
 
+    def replace_children_references(self, new_reference: Reference) -> None:
+        """Replace all DataType children's reference with new_reference."""
+        for child in self.children[:]:
+            if _is_data_type(child):
+                child.replace_reference(new_reference)
+
+    def iter_data_model_children(self) -> Iterator[DataModel]:
+        """Yield all DataModel children."""
+        for child in self.children:
+            if _is_data_model(child):
+                yield child
+
 
 SINGULAR_NAME_SUFFIX: str = "Item"
 
@@ -189,17 +218,6 @@ def context_variable(setter: Callable[[T], None], current_value: T, new_value: T
         yield
     finally:
         setter(previous_value)
-
-
-_UNDER_SCORE_1: Pattern[str] = re.compile(r"([^_])([A-Z][a-z]+)")
-_UNDER_SCORE_2: Pattern[str] = re.compile(r"([a-z0-9])([A-Z])")
-
-
-@lru_cache
-def camel_to_snake(string: str) -> str:
-    """Convert camelCase or PascalCase to snake_case."""
-    subbed = _UNDER_SCORE_1.sub(r"\1_\2", string)
-    return _UNDER_SCORE_2.sub(r"\1_\2", subbed).lower()
 
 
 class FieldNameResolver:
@@ -283,11 +301,33 @@ class FieldNameResolver:
         return new_name
 
     def get_valid_field_name_and_alias(
-        self, field_name: str, excludes: set[str] | None = None
+        self,
+        field_name: str,
+        excludes: set[str] | None = None,
+        path: list[str] | None = None,
+        class_name: str | None = None,
     ) -> tuple[str, str | None]:
-        """Get valid field name and original alias if different."""
+        """Get valid field name and original alias if different.
+
+        Supports hierarchical alias resolution with the following priority:
+        1. Scoped aliases (ClassName.field_name) - class-level specificity
+        2. Flat aliases (field_name) - applies to all occurrences
+
+        Args:
+            field_name: The original field name from the schema.
+            excludes: Set of names to avoid when generating valid names.
+            path: Unused, kept for backward compatibility.
+            class_name: Optional class name for scoped alias resolution.
+        """
+        del path
+        if class_name:
+            scoped_key = f"{class_name}.{field_name}"
+            if scoped_key in self.aliases:
+                return self.aliases[scoped_key], field_name
+
         if field_name in self.aliases:
             return self.aliases[field_name], field_name
+
         valid_name = self.get_valid_name(field_name, excludes=excludes)
         return (
             valid_name,
@@ -306,7 +346,92 @@ class PydanticFieldNameResolver(FieldNameResolver):
 
 
 class EnumFieldNameResolver(FieldNameResolver):
-    """Field name resolver for enum members with special handling for 'mro'."""
+    """Field name resolver for enum members with special handling for reserved names.
+
+    When using --use-subclass-enum, enums inherit from types like str or int.
+    Member names that conflict with methods of these types cause type checker errors.
+    This class detects and handles such conflicts by adding underscore suffixes.
+
+    The _BUILTIN_TYPE_ATTRIBUTES set is intentionally static (not using hasattr)
+    to avoid runtime Python version differences affecting code generation.
+    Based on Python 3.8-3.14 method names (union of all versions for safety).
+    Note: 'mro' is handled explicitly in get_valid_name for backward compatibility.
+    """
+
+    _BUILTIN_TYPE_ATTRIBUTES: ClassVar[frozenset[str]] = frozenset({
+        "as_integer_ratio",
+        "bit_count",
+        "bit_length",
+        "capitalize",
+        "casefold",
+        "center",
+        "conjugate",
+        "count",
+        "decode",
+        "denominator",
+        "encode",
+        "endswith",
+        "expandtabs",
+        "find",
+        "format",
+        "format_map",
+        "from_bytes",
+        "from_number",
+        "fromhex",
+        "hex",
+        "imag",
+        "index",
+        "isalnum",
+        "isalpha",
+        "isascii",
+        "isdecimal",
+        "isdigit",
+        "isidentifier",
+        "islower",
+        "isnumeric",
+        "isprintable",
+        "isspace",
+        "istitle",
+        "isupper",
+        "is_integer",
+        "join",
+        "ljust",
+        "lower",
+        "lstrip",
+        "maketrans",
+        "numerator",
+        "partition",
+        "real",
+        "removeprefix",
+        "removesuffix",
+        "replace",
+        "rfind",
+        "rindex",
+        "rjust",
+        "rpartition",
+        "rsplit",
+        "rstrip",
+        "split",
+        "splitlines",
+        "startswith",
+        "strip",
+        "swapcase",
+        "title",
+        "to_bytes",
+        "translate",
+        "upper",
+        "zfill",
+    })
+
+    @classmethod
+    def _validate_field_name(cls, field_name: str) -> bool:
+        """Check field name doesn't conflict with subclass enum base type attributes.
+
+        When using --use-subclass-enum, enums inherit from types like str or int.
+        Member names that conflict with methods of these types (e.g., 'count' for str)
+        cause type checker errors. This method detects such conflicts.
+        """
+        return field_name not in cls._BUILTIN_TYPE_ATTRIBUTES
 
     def get_valid_name(
         self,
@@ -390,6 +515,7 @@ class ModelResolver:  # noqa: PLR0904
         no_alias: bool = False,  # noqa: FBT001, FBT002
         remove_suffix_number: bool = False,  # noqa: FBT001, FBT002
         parent_scoped_naming: bool = False,  # noqa: FBT001, FBT002
+        treat_dot_as_module: bool = False,  # noqa: FBT001, FBT002
     ) -> None:
         """Initialize model resolver with naming and resolution options."""
         self.references: dict[str, Reference] = {}
@@ -425,6 +551,7 @@ class ModelResolver:  # noqa: PLR0904
         self._current_base_path: Path | None = self._base_path
         self.remove_suffix_number: bool = remove_suffix_number
         self.parent_scoped_naming = parent_scoped_naming
+        self.treat_dot_as_module = treat_dot_as_module
 
     @property
     def current_base_path(self) -> Path | None:
@@ -453,9 +580,16 @@ class ModelResolver:  # noqa: PLR0904
             yield
 
     @contextmanager
-    def base_url_context(self, base_url: str) -> Generator[None, None, None]:
-        """Temporarily set the base URL within a context."""
-        if self._base_url:
+    def base_url_context(self, base_url: str | None) -> Generator[None, None, None]:
+        """Temporarily set the base URL within a context.
+
+        Only sets the base_url if:
+        - The new value is actually a URL (http://, https://, or file://)
+        - OR _base_url was already set (switching between URLs)
+        This preserves backward compatibility for local file parsing where
+        this method was previously a no-op.
+        """
+        if self._base_url or (base_url and is_url(base_url)):
             with context_variable(self.set_base_url, self.base_url, base_url):
                 yield
         else:
@@ -499,7 +633,7 @@ class ModelResolver:  # noqa: PLR0904
         """Register an identifier mapping to a resolved reference path."""
         self.ids["/".join(self.current_root)][id_] = self.resolve_ref(path)
 
-    def resolve_ref(self, path: Sequence[str] | str) -> str:  # noqa: PLR0911, PLR0912
+    def resolve_ref(self, path: Sequence[str] | str) -> str:  # noqa: PLR0911, PLR0912, PLR0914
         """Resolve a reference path to its canonical form."""
         joined_path = path if isinstance(path, str) else self.join_path(path)
         if joined_path == "#":
@@ -524,18 +658,35 @@ class ModelResolver:  # noqa: PLR0904
         else:
             if "#" not in joined_path:
                 joined_path += "#"
-            elif joined_path[0] == "#":
+            elif joined_path[0] == "#" and self.current_root:
                 joined_path = f"{'/'.join(self.current_root)}{joined_path}"
 
             file_path, fragment = joined_path.split("#", 1)
             ref = f"{file_path}#{fragment}"
-            if self.root_id_base_path and not (is_url(joined_path) or Path(self._base_path, file_path).is_file()):
+            if (
+                self.root_id_base_path
+                and not self.base_url
+                and not (is_url(joined_path) or Path(self._base_path, file_path).is_file())
+            ):
                 ref = f"{self.root_id_base_path}/{ref}"
+
+        if is_url(ref):
+            file_part, path_part = ref.split("#", 1)
+            id_scope = "/".join(self.current_root)
+            scoped_ids = self.ids[id_scope]
+            if file_part in scoped_ids:
+                mapped_ref = scoped_ids[file_part]
+                if path_part:
+                    mapped_base, mapped_fragment = mapped_ref.split("#", 1) if "#" in mapped_ref else (mapped_ref, "")
+                    combined_fragment = f"{mapped_fragment.rstrip('/')}/{path_part.lstrip('/')}"
+                    return f"{mapped_base}#{combined_fragment}"
+                return mapped_ref
 
         if self.base_url:
             from .http import join_url  # noqa: PLC0415
 
-            joined_url = join_url(self.base_url, ref)
+            effective_base = self.root_id or self.base_url
+            joined_url = join_url(effective_base, ref)
             if "#" in joined_url:
                 return joined_url
             return f"{joined_url}#"
@@ -581,7 +732,7 @@ class ModelResolver:  # noqa: PLR0904
     @staticmethod
     def is_external_root_ref(ref: str) -> bool:
         """Check if a reference points to an external file root."""
-        return ref[-1] == "#"
+        return bool(ref) and ref[-1] == "#"
 
     @staticmethod
     def join_path(path: Sequence[str]) -> str:
@@ -658,7 +809,7 @@ class ModelResolver:  # noqa: PLR0904
                 name = get_singular_name(name, singular_name_suffix or self.singular_name_suffix)
             elif unique:  # pragma: no cover
                 unique_name = self._get_unique_name(name)
-                if unique_name == name:
+                if unique_name != name:
                     duplicate_name = name
                 name = unique_name
         if reference:
@@ -683,8 +834,9 @@ class ModelResolver:  # noqa: PLR0904
 
     def delete(self, path: Sequence[str] | str) -> None:
         """Delete a reference by path if it exists."""
-        if self.resolve_ref(path) in self.references:
-            del self.references[self.resolve_ref(path)]
+        resolved = self.resolve_ref(path)
+        if resolved in self.references:
+            del self.references[resolved]
 
     def default_class_name_generator(self, name: str) -> str:
         """Generate a valid class name from a string."""
@@ -767,9 +919,25 @@ class ModelResolver:  # noqa: PLR0904
         field_name: str,
         excludes: set[str] | None = None,
         model_type: ModelType = ModelType.PYDANTIC,
+        path: list[str] | None = None,
+        class_name: str | None = None,
     ) -> tuple[str, str | None]:
-        """Get a valid field name and alias for the specified model type."""
-        return self.field_name_resolvers[model_type].get_valid_field_name_and_alias(field_name, excludes)
+        """Get a valid field name and alias for the specified model type.
+
+        Args:
+            field_name: The original field name from the schema.
+            excludes: Set of names to avoid when generating valid names.
+            model_type: The type of model (PYDANTIC, ENUM, or CLASS).
+            path: Unused, kept for backward compatibility.
+            class_name: Optional class name for scoped alias resolution.
+
+        Returns:
+            A tuple of (valid_field_name, alias_or_none).
+        """
+        del path
+        return self.field_name_resolvers[model_type].get_valid_field_name_and_alias(
+            field_name, excludes, class_name=class_name
+        )
 
 
 def _get_inflect_engine() -> inflect.engine:
@@ -806,5 +974,5 @@ def snake_to_upper_camel(word: str, delimiter: str = "_") -> str:
 
 
 def is_url(ref: str) -> bool:
-    """Check if a reference string is a URL."""
-    return ref.startswith(("https://", "http://"))
+    """Check if a reference string is a URL (HTTP, HTTPS, or file scheme)."""
+    return ref.startswith(("https://", "http://", "file://"))

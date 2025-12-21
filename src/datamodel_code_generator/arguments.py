@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import locale
-from argparse import ArgumentParser, ArgumentTypeError, BooleanOptionalAction, HelpFormatter, Namespace
+from argparse import ArgumentParser, ArgumentTypeError, BooleanOptionalAction, Namespace, RawDescriptionHelpFormatter
 from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -18,10 +18,13 @@ from datamodel_code_generator import (
     DEFAULT_SHARED_MODULE_NAME,
     AllExportsCollisionStrategy,
     AllExportsScope,
+    AllOfMergeMode,
     DataclassArguments,
     DataModelType,
     InputFileType,
+    ModuleSplitMode,
     OpenAPIScope,
+    ReadOnlyWriteOnlyModelType,
     ReuseScope,
 )
 from datamodel_code_generator.format import DatetimeClassType, Formatter, PythonVersion
@@ -60,8 +63,8 @@ def _dataclass_arguments(value: str) -> DataclassArguments:
     return cast("DataclassArguments", result)
 
 
-class SortingHelpFormatter(HelpFormatter):
-    """Help formatter that sorts arguments and adds color to section headers."""
+class SortingHelpFormatter(RawDescriptionHelpFormatter):
+    """Help formatter that sorts arguments, adds color to section headers, and preserves epilog formatting."""
 
     def _bold_cyan(self, text: str) -> str:  # noqa: PLR6301
         """Wrap text in ANSI bold cyan escape codes."""
@@ -79,7 +82,10 @@ class SortingHelpFormatter(HelpFormatter):
 
 arg_parser = ArgumentParser(
     usage="\n  datamodel-codegen [options]",
-    description="Generate Python data models from schema definitions or structured data",
+    description="Generate Python data models from schema definitions or structured data\n\n"
+    "For detailed usage, see: https://koxudaxi.github.io/datamodel-code-generator",
+    epilog="Documentation: https://koxudaxi.github.io/datamodel-code-generator\n"
+    "GitHub: https://github.com/koxudaxi/datamodel-code-generator",
     formatter_class=SortingHelpFormatter,
     add_help=False,
 )
@@ -190,6 +196,12 @@ model_options.add_argument(
 model_options.add_argument(
     "--enable-version-header",
     help="Enable package version on file headers",
+    action="store_true",
+    default=None,
+)
+model_options.add_argument(
+    "--enable-command-header",
+    help="Enable command-line options on file headers for reproducibility",
     action="store_true",
     default=None,
 )
@@ -312,6 +324,12 @@ model_options.add_argument(
     choices=[s.value for s in AllExportsCollisionStrategy],
     default=None,
 )
+model_options.add_argument(
+    "--module-split-mode",
+    help="Split generated models into separate files. 'single': generate one file per model class.",
+    choices=[m.value for m in ModuleSplitMode],
+    default=None,
+)
 
 # ======================================================================================
 # Typing options for generated models
@@ -325,8 +343,15 @@ typing_options.add_argument(
     "--enum-field-as-literal",
     help="Parse enum field as literal. "
     "all: all enum field type are Literal. "
-    "one: field type is Literal when an enum has only one possible value",
+    "one: field type is Literal when an enum has only one possible value. "
+    "none: always use Enum class (never convert to Literal)",
     choices=[lt.value for lt in LiteralType],
+    default=None,
+)
+typing_options.add_argument(
+    "--ignore-enum-constraints",
+    help="Ignore enum constraints and use the base type (e.g., str, int) instead of generating Enum classes",
+    action="store_true",
     default=None,
 )
 typing_options.add_argument(
@@ -354,6 +379,12 @@ typing_options.add_argument(
     default=None,
 )
 typing_options.add_argument(
+    "--use-serialize-as-any",
+    help="Use pydantic.SerializeAsAny for fields with types that have subtypes (Pydantic v2 only)",
+    action="store_true",
+    default=None,
+)
+typing_options.add_argument(
     "--use-generic-container-types",
     help="Use generic container types for type hinting (typing.Sequence, typing.Mapping). "
     "If `--use-standard-collections` option is set, then import from collections.abc instead of typing",
@@ -367,15 +398,28 @@ typing_options.add_argument(
     default=None,
 )
 typing_options.add_argument(
+    "--use-decimal-for-multiple-of",
+    help="Use condecimal instead of confloat for float/number fields with multipleOf constraint "
+    "(Pydantic only). Avoids floating-point precision issues in validation.",
+    action="store_true",
+    default=None,
+)
+typing_options.add_argument(
     "--use-one-literal-as-default",
     help="Use one literal as default value for one literal field",
     action="store_true",
     default=None,
 )
 typing_options.add_argument(
-    "--use-standard-collections",
-    help="Use standard collections for type hinting (list, dict)",
+    "--use-enum-values-in-discriminator",
+    help="Use enum member literals in discriminator fields instead of string literals",
     action="store_true",
+    default=None,
+)
+typing_options.add_argument(
+    "--use-standard-collections",
+    help="Use standard collections for type hinting (list, dict). Default: enabled",
+    action=BooleanOptionalAction,
     default=None,
 )
 typing_options.add_argument(
@@ -386,20 +430,29 @@ typing_options.add_argument(
 )
 typing_options.add_argument(
     "--use-specialized-enum",
-    help="Don't use specialized Enum class (StrEnum, IntEnum) even if the target Python version supports it",
+    help="Use specialized Enum class (StrEnum, IntEnum). Requires --target-python-version 3.11+",
     action=BooleanOptionalAction,
     default=None,
 )
 typing_options.add_argument(
     "--use-union-operator",
-    help="Use | operator for Union type (PEP 604).",
-    action="store_true",
+    help="Use | operator for Union type (PEP 604). Default: enabled",
+    action=BooleanOptionalAction,
     default=None,
 )
 typing_options.add_argument(
     "--use-unique-items-as-set",
     help="define field type as `set` when the field attribute has `uniqueItems`",
     action="store_true",
+    default=None,
+)
+typing_options.add_argument(
+    "--allof-merge-mode",
+    help="Mode for field merging in allOf schemas. "
+    "'constraints': merge only constraints (minItems, maxItems, pattern, etc.) from parent (default). "
+    "'all': merge constraints plus annotations (default, examples) from parent. "
+    "'none': do not merge any fields from parent properties.",
+    choices=[m.value for m in AllOfMergeMode],
     default=None,
 )
 typing_options.add_argument(
@@ -487,6 +540,12 @@ field_options.add_argument(
     default=None,
 )
 field_options.add_argument(
+    "--strict-nullable",
+    help="Treat default field as a non-nullable field",
+    action="store_true",
+    default=None,
+)
+field_options.add_argument(
     "--strip-default-none",
     help="Strip default None on fields",
     action="store_true",
@@ -535,13 +594,31 @@ field_options.add_argument(
     action="store_true",
     default=None,
 )
+field_options.add_argument(
+    "--use-frozen-field",
+    help="Use Field(frozen=True) for readOnly fields (Pydantic v2) or Field(allow_mutation=False) (Pydantic v1)",
+    action="store_true",
+    default=None,
+)
+field_options.add_argument(
+    "--use-default-factory-for-optional-nested-models",
+    help="Use default_factory for optional nested model fields instead of None default. "
+    "E.g., `field: Model | None = Field(default_factory=Model)` instead of `field: Model | None = None`",
+    action="store_true",
+    default=None,
+)
 
 # ======================================================================================
 # Options for templating output
 # ======================================================================================
 template_options.add_argument(
     "--aliases",
-    help="Alias mapping file",
+    help="Alias mapping file (JSON) for renaming fields. "
+    "Supports hierarchical formats: "
+    "Flat: {'field': 'alias'} applies to all occurrences. "
+    "Scoped: {'ClassName.field': 'alias'} applies to specific class. "
+    "Priority: scoped > flat. "
+    "Example: {'User.name': 'user_name', 'Address.name': 'addr_name', 'id': 'id_'}",
     type=Path,
 )
 template_options.add_argument(
@@ -624,12 +701,6 @@ openapi_options.add_argument(
     default=None,
 )
 openapi_options.add_argument(
-    "--strict-nullable",
-    help="Treat default field as a non-nullable field (Only OpenAPI)",
-    action="store_true",
-    default=None,
-)
-openapi_options.add_argument(
     "--use-operation-id-as-name",
     help="use operation id of OpenAPI as class names of models",
     action="store_true",
@@ -645,6 +716,20 @@ openapi_options.add_argument(
     "--validation",
     help="Deprecated: Enable validation (Only OpenAPI). this option is deprecated. it will be removed in future "
     "releases",
+    action="store_true",
+    default=None,
+)
+openapi_options.add_argument(
+    "--read-only-write-only-model-type",
+    help="Model generation for readOnly/writeOnly fields: "
+    "'request-response' = Request/Response models only (no base model), "
+    "'all' = Base + Request + Response models.",
+    choices=[e.value for e in ReadOnlyWriteOnlyModelType],
+    default=None,
+)
+openapi_options.add_argument(
+    "--use-status-code-in-response-name",
+    help="Include HTTP status code in response model names (e.g., ResourceGetResponse200, ResourceGetResponseDefault)",
     action="store_true",
     default=None,
 )
@@ -696,6 +781,29 @@ general_options.add_argument(
     action="store_true",
     default=None,
     help="Generate CLI command from pyproject.toml configuration and exit",
+)
+general_options.add_argument(
+    "--ignore-pyproject",
+    action="store_true",
+    default=False,
+    help="Ignore pyproject.toml configuration",
+)
+general_options.add_argument(
+    "--profile",
+    help="Use a named profile from pyproject.toml [tool.datamodel-codegen.profiles.<name>]",
+    default=None,
+)
+general_options.add_argument(
+    "--watch",
+    action="store_true",
+    default=None,
+    help="Watch input file(s) for changes and regenerate output automatically",
+)
+general_options.add_argument(
+    "--watch-delay",
+    type=float,
+    default=None,
+    help="Debounce delay in seconds for watch mode (default: 0.5)",
 )
 general_options.add_argument(
     "--version",
