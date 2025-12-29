@@ -7,19 +7,24 @@ from typing import TYPE_CHECKING
 
 import black
 import pytest
+from inline_snapshot import snapshot
 
 from datamodel_code_generator import (
+    AllExportsScope,
     DataModelType,
     Error,
+    GeneratedModules,
     InputFileType,
+    SchemaParseError,
     chdir,
     generate,
     snooper_to_methods,
 )
 from datamodel_code_generator.__main__ import Config, Exit
 from datamodel_code_generator.arguments import _dataclass_arguments
-from datamodel_code_generator.format import PythonVersion
-from tests.conftest import create_assert_file_content, freeze_time
+from datamodel_code_generator.format import CodeFormatter, PythonVersion
+from datamodel_code_generator.parser.openapi import OpenAPIParser
+from tests.conftest import assert_output, create_assert_file_content, freeze_time
 from tests.main.conftest import (
     DATA_PATH,
     EXPECTED_MAIN_PATH,
@@ -44,14 +49,16 @@ def test_debug(mocker: MockerFixture) -> None:
     with pytest.raises(expected_exception=SystemExit):
         run_main_with_args(["--debug", "--help"])
 
-    mocker.patch("datamodel_code_generator.pysnooper", None)
+    # Simulate pysnooper not being installed by making import fail
+    mocker.patch.dict("sys.modules", {"pysnooper": None})
     with pytest.raises(expected_exception=SystemExit):
         run_main_with_args(["--debug", "--help"])
 
 
 def test_snooper_to_methods_without_pysnooper(mocker: MockerFixture) -> None:
     """Test snooper_to_methods function without pysnooper installed."""
-    mocker.patch("datamodel_code_generator.pysnooper", None)
+    # Simulate pysnooper not being installed by making import fail
+    mocker.patch.dict("sys.modules", {"pysnooper": None})
     mock = mocker.Mock()
     assert snooper_to_methods()(mock) == mock
 
@@ -146,6 +153,11 @@ def test_frozen_dataclasses(
 
 @pytest.mark.cli_doc(
     options=["--frozen-dataclasses"],
+    option_description="""Generate frozen dataclasses with optional keyword-only fields.
+
+The `--frozen-dataclasses` flag generates dataclass instances that are immutable
+(frozen=True). Combined with `--keyword-only` (Python 3.10+), all fields become
+keyword-only arguments.""",
     input_schema="jsonschema/simple_frozen_test.json",
     cli_args=["--output-model-type", "dataclasses.dataclass", "--frozen-dataclasses"],
     golden_output="frozen_dataclasses.py",
@@ -187,6 +199,147 @@ def test_frozen_dataclasses_command_line(output_file: Path, extra_args: list[str
 
 
 @freeze_time(TIMESTAMP)
+def test_class_decorators(tmp_path: Path) -> None:
+    """Test --class-decorators flag functionality."""
+    output_file = tmp_path / "output.py"
+    generate(
+        DATA_PATH / "jsonschema" / "simple_frozen_test.json",
+        input_file_type=InputFileType.JsonSchema,
+        output=output_file,
+        output_model_type=DataModelType.DataclassesDataclass,
+        class_decorators=["@dataclass_json"],
+        additional_imports=["dataclasses_json.dataclass_json"],
+    )
+    assert_file_content(output_file, "class_decorators_dataclass.py")
+
+
+@pytest.mark.cli_doc(
+    options=["--class-decorators"],
+    option_description="""Add custom decorators to generated model classes.
+
+The `--class-decorators` option adds custom decorators to all generated model classes.
+This is useful for integrating with serialization libraries like `dataclasses_json`.
+
+Use with `--additional-imports` to add the required imports for the decorators.
+The `@` prefix is optional and will be added automatically if missing.""",
+    input_schema="jsonschema/simple_frozen_test.json",
+    cli_args=[
+        "--output-model-type",
+        "dataclasses.dataclass",
+        "--class-decorators",
+        "@dataclass_json",
+        "--additional-imports",
+        "dataclasses_json.dataclass_json",
+    ],
+    golden_output="class_decorators_dataclass.py",
+    related_options=["--additional-imports", "--output-model-type"],
+)
+@freeze_time(TIMESTAMP)
+def test_class_decorators_command_line(output_file: Path) -> None:
+    """Add custom decorators to generated model classes.
+
+    The `--class-decorators` option adds custom decorators to all generated model classes.
+    This is useful for integrating with serialization libraries like `dataclasses_json`.
+
+    Use with `--additional-imports` to add the required imports for the decorators.
+    The `@` prefix is optional and will be added automatically if missing.
+    """
+    run_main_and_assert(
+        input_path=DATA_PATH / "jsonschema" / "simple_frozen_test.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="class_decorators_dataclass.py",
+        extra_args=[
+            "--output-model-type",
+            "dataclasses.dataclass",
+            "--class-decorators",
+            "@dataclass_json",
+            "--additional-imports",
+            "dataclasses_json.dataclass_json",
+        ],
+    )
+
+
+@freeze_time(TIMESTAMP)
+def test_class_decorators_without_at_prefix(output_file: Path) -> None:
+    """Test --class-decorators auto-adds @ prefix when missing."""
+    run_main_and_assert(
+        input_path=DATA_PATH / "jsonschema" / "simple_frozen_test.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="class_decorators_dataclass.py",
+        extra_args=[
+            "--output-model-type",
+            "dataclasses.dataclass",
+            "--class-decorators",
+            "dataclass_json",
+            "--additional-imports",
+            "dataclasses_json.dataclass_json",
+        ],
+    )
+
+
+@freeze_time(TIMESTAMP)
+def test_class_decorators_with_empty_entries(output_file: Path) -> None:
+    """Test --class-decorators filters out empty entries from comma-separated list."""
+    run_main_and_assert(
+        input_path=DATA_PATH / "jsonschema" / "simple_frozen_test.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="class_decorators_dataclass.py",
+        extra_args=[
+            "--output-model-type",
+            "dataclasses.dataclass",
+            "--class-decorators",
+            "@dataclass_json, ,",
+            "--additional-imports",
+            "dataclasses_json.dataclass_json",
+        ],
+    )
+
+
+@freeze_time(TIMESTAMP)
+@pytest.mark.parametrize(
+    ("output_model_type", "expected_file"),
+    [
+        ("pydantic.BaseModel", "class_decorators_pydantic_BaseModel.py"),
+        ("pydantic_v2.BaseModel", "class_decorators_pydantic_v2_BaseModel.py"),
+        ("pydantic_v2.dataclass", "class_decorators_pydantic_v2_dataclass.py"),
+        ("dataclasses.dataclass", "class_decorators_dataclasses_dataclass.py"),
+        ("msgspec.Struct", "class_decorators_msgspec_Struct.py"),
+        # Note: TypedDict is excluded because its template doesn't support decorators
+    ],
+    ids=[
+        "pydantic_v1",
+        "pydantic_v2",
+        "pydantic_v2_dataclass",
+        "dataclasses",
+        "msgspec",
+    ],
+)
+def test_class_decorators_all_output_types(output_file: Path, output_model_type: str, expected_file: str) -> None:
+    """Test --class-decorators works with all output model types that support decorators."""
+    run_main_and_assert(
+        input_path=DATA_PATH / "jsonschema" / "simple_frozen_test.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file=expected_file,
+        extra_args=[
+            "--output-model-type",
+            output_model_type,
+            "--class-decorators",
+            "@my_decorator",
+            "--additional-imports",
+            "my_module.my_decorator",
+        ],
+    )
+
+
+@freeze_time(TIMESTAMP)
 def test_use_attribute_docstrings(tmp_path: Path) -> None:
     """Test --use-attribute-docstrings flag functionality."""
     output_file = tmp_path / "output.py"
@@ -204,6 +357,12 @@ def test_use_attribute_docstrings(tmp_path: Path) -> None:
 @freeze_time(TIMESTAMP)
 @pytest.mark.cli_doc(
     options=["--use-attribute-docstrings"],
+    option_description="""Generate field descriptions as attribute docstrings instead of Field descriptions.
+
+The `--use-attribute-docstrings` flag places field descriptions in Python docstring
+format (PEP 224 attribute docstrings) rather than in Field(..., description=...).
+This provides better IDE support for hovering over attributes. Requires
+`--use-field-description` to be enabled.""",
     input_schema="jsonschema/use_attribute_docstrings_test.json",
     cli_args=[
         "--output-model-type",
@@ -337,6 +496,83 @@ def test_generate_with_invalid_file_format(tmp_path: Path) -> None:
         )
 
 
+def test_schema_parse_error_includes_path(tmp_path: Path) -> None:
+    """Test that schema parse errors include the schema path context."""
+    invalid_schema = tmp_path / "invalid_schema.json"
+    invalid_schema.write_text("""{
+        "type": "object",
+        "properties": {
+            "myField": {
+                "type": "integer",
+                "minimum": "not_a_number"
+            }
+        }
+    }""")
+    output_file = tmp_path / "output.py"
+
+    with pytest.raises(SchemaParseError, match="Error at schema path"):
+        generate(
+            input_=invalid_schema,
+            output=output_file,
+        )
+
+
+def test_schema_parse_error_includes_nested_path(tmp_path: Path) -> None:
+    """Test that schema parse errors include nested schema path context."""
+    invalid_schema = tmp_path / "invalid_nested_schema.json"
+    invalid_schema.write_text("""{
+        "$defs": {
+            "MyModel": {
+                "type": "object",
+                "properties": {
+                    "nestedField": {
+                        "type": "number",
+                        "maximum": "invalid_value"
+                    }
+                }
+            }
+        },
+        "type": "object",
+        "properties": {
+            "ref": {"$ref": "#/$defs/MyModel"}
+        }
+    }""")
+    output_file = tmp_path / "output.py"
+
+    with pytest.raises(SchemaParseError, match=r"\$defs/MyModel"):
+        generate(
+            input_=invalid_schema,
+            output=output_file,
+        )
+
+
+def test_schema_parse_error_original_error(tmp_path: Path) -> None:
+    """Test that SchemaParseError preserves the original error."""
+    invalid_schema = tmp_path / "invalid_schema.json"
+    invalid_schema.write_text("""{
+        "type": "integer",
+        "minimum": "not_a_number"
+    }""")
+    output_file = tmp_path / "output.py"
+
+    with pytest.raises(SchemaParseError) as exc_info:
+        generate(
+            input_=invalid_schema,
+            output=output_file,
+        )
+
+    assert exc_info.value.original_error is not None
+    assert exc_info.value.path is not None
+
+
+def test_schema_parse_error_without_path() -> None:
+    """Test SchemaParseError message formatting without path."""
+    error = SchemaParseError("Test error message")
+    assert error.message == "Test error message"
+    assert error.path == []
+    assert error.original_error is None
+
+
 def test_generate_cli_command_with_no_use_specialized_enum(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Test --generate-cli-command with use-specialized-enum = false."""
     pyproject_toml = """
@@ -434,6 +670,59 @@ def test_dataclass_arguments_invalid(json_str: str, match: str) -> None:
         _dataclass_arguments(json_str)
 
 
+@pytest.mark.cli_doc(
+    options=["--type-overrides"],
+    option_description="""Replace schema model types with custom Python types via JSON mapping.""",
+    input_schema="jsonschema/type_overrides_test.json",
+    cli_args=["--type-overrides", '{"CustomType": "my_app.types.CustomType"}'],
+    golden_output="main/type_overrides_model_level.py",
+    primary=True,
+)
+@freeze_time(TIMESTAMP)
+def test_type_overrides_model_level(output_file: Path) -> None:
+    """Replace schema model types with custom Python types via JSON mapping."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_overrides_test.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=[
+            "--type-overrides",
+            '{"CustomType": "my_app.types.CustomType"}',
+        ],
+    )
+
+
+@freeze_time(TIMESTAMP)
+def test_type_overrides_scoped(output_file: Path) -> None:
+    """Test --type-overrides with scoped override replaces specific field only."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_overrides_scoped.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=[
+            "--type-overrides",
+            '{"User.address": "my_app.Address"}',
+        ],
+    )
+
+
+@freeze_time(TIMESTAMP)
+def test_type_overrides_nested_types(output_file: Path) -> None:
+    """Test --type-overrides with nested types like List[CustomType]."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_overrides_nested.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=[
+            "--type-overrides",
+            '{"Tag": "my_app.Tag"}',
+        ],
+    )
+
+
 def test_skip_root_model(tmp_path: Path) -> None:
     """Test --skip-root-model flag functionality using generate()."""
     output_file = tmp_path / "output.py"
@@ -449,6 +738,11 @@ def test_skip_root_model(tmp_path: Path) -> None:
 
 @pytest.mark.cli_doc(
     options=["--skip-root-model"],
+    option_description="""Skip generation of root model when schema contains nested definitions.
+
+The `--skip-root-model` flag prevents generating a model for the root schema object
+when the schema primarily contains reusable definitions. This is useful when the root
+object is just a container for $defs and not a meaningful model itself.""",
     input_schema="jsonschema/skip_root_model_test.json",
     cli_args=["--output-model-type", "pydantic_v2.BaseModel", "--skip-root-model"],
     golden_output="skip_root_model.py",
@@ -472,6 +766,11 @@ def test_skip_root_model_command_line(output_file: Path) -> None:
 
 @pytest.mark.cli_doc(
     options=["--check"],
+    option_description="""Verify generated code matches existing output without modifying files.
+
+The `--check` flag compares the generated output with existing files and exits with
+a non-zero status if they differ. Useful for CI/CD validation to ensure schemas
+and generated code stay in sync. Works with both single files and directory outputs.""",
     input_schema="jsonschema/person.json",
     cli_args=["--disable-timestamp", "--check"],
     golden_output="person.py",
@@ -707,6 +1006,11 @@ def test_check_with_invalid_file_format(tmp_path: Path) -> None:
 
 @pytest.mark.cli_doc(
     options=["--all-exports-scope"],
+    option_description="""Generate __all__ exports for child modules in __init__.py files.
+
+The `--all-exports-scope=children` flag adds __all__ to each __init__.py containing
+exports from direct child modules. This improves IDE autocomplete and explicit exports.
+Use 'recursive' to include all descendant exports with collision handling.""",
     input_schema="openapi/modular.yaml",
     cli_args=["--all-exports-scope", "children"],
     golden_output="openapi/modular_all_exports_children",
@@ -730,6 +1034,12 @@ def test_all_exports_scope_children(output_dir: Path) -> None:
 
 @pytest.mark.cli_doc(
     options=["--all-exports-collision-strategy"],
+    option_description="""Handle name collisions when exporting recursive module hierarchies.
+
+The `--all-exports-collision-strategy` flag determines how to resolve naming conflicts
+when using `--all-exports-scope=recursive`. The 'minimal-prefix' strategy adds the
+minimum module path prefix needed to disambiguate colliding names, while 'full-prefix'
+uses the complete module path. Requires `--all-exports-scope=recursive`.""",
     input_schema="openapi/modular.yaml",
     cli_args=["--all-exports-scope", "recursive", "--all-exports-collision-strategy", "minimal-prefix"],
     golden_output="openapi/modular_all_exports_recursive",
@@ -910,7 +1220,13 @@ def test_all_exports_scope_children_with_local_models(output_dir: Path) -> None:
 
 
 def test_check_respects_pyproject_toml_settings(tmp_path: Path) -> None:
-    """Test --check uses pyproject.toml formatter settings from output path."""
+    """Test --check uses pyproject.toml formatter settings from output path.
+
+    This test verifies that both generation and --check mode use the same
+    pyproject.toml settings from the output directory. Without the fix,
+    generation would use cwd's settings while --check would use output path's
+    settings, causing a diff even with identical input.
+    """
     pyproject_toml = tmp_path / "pyproject.toml"
     pyproject_toml.write_text("[tool.black]\nline-length = 60\n", encoding="utf-8")
 
@@ -921,25 +1237,53 @@ def test_check_respects_pyproject_toml_settings(tmp_path: Path) -> None:
   "title": "Person",
   "type": "object",
   "properties": {
-    "firstName": {"type": "string", "description": "The person's first name description that is very long."}
-  }
+    "firstName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[A-Za-z]+$"
+    }
+  },
+  "required": ["firstName"]
 }""",
         encoding="utf-8",
     )
 
     output_file = tmp_path / "output.py"
+    expected_output = """\
+# generated by datamodel-codegen:
+#   filename:  input.json
+
+from __future__ import annotations
+
+from typing import Annotated
+
+from pydantic import BaseModel, Field
+
+
+class Person(BaseModel):
+    firstName: Annotated[
+        str,
+        Field(
+            max_length=100,
+            min_length=1,
+            regex='^[A-Za-z]+$',
+        ),
+    ]
+"""
     run_main_and_assert(
         input_path=input_json,
         output_path=output_file,
         input_file_type="jsonschema",
-        extra_args=["--disable-timestamp"],
+        extra_args=["--disable-timestamp", "--use-annotated"],
+        expected_output=expected_output,
     )
 
     run_main_and_assert(
         input_path=input_json,
         output_path=output_file,
         input_file_type="jsonschema",
-        extra_args=["--disable-timestamp", "--check"],
+        extra_args=["--disable-timestamp", "--use-annotated", "--check"],
         expected_exit=Exit.OK,
     )
 
@@ -1031,6 +1375,11 @@ def test_use_specialized_enum_pyproject_override_with_cli(output_file: Path, tmp
 
 @pytest.mark.cli_doc(
     options=["--module-split-mode"],
+    option_description="""Split generated models into separate files, one per model class.
+
+The `--module-split-mode=single` flag generates each model class in its own file,
+named after the class in snake_case. Use with `--all-exports-scope=recursive` to
+create an __init__.py that re-exports all models for convenient imports.""",
     input_schema="jsonschema/module_split_single/input.json",
     cli_args=["--module-split-mode", "single", "--all-exports-scope", "recursive", "--use-exact-imports"],
     golden_output="jsonschema/module_split_single",
@@ -1057,3 +1406,562 @@ def test_module_split_mode_single(output_dir: Path) -> None:
         ],
         expected_directory=EXPECTED_MAIN_PATH / "jsonschema" / "module_split_single",
     )
+
+
+@pytest.mark.cli_doc(
+    options=["--use-standard-primitive-types"],
+    option_description="""Use Python standard library types for string formats instead of str.
+
+The `--use-standard-primitive-types` flag configures the code generation to use
+Python standard library types (UUID, IPv4Address, IPv6Address, Path) for corresponding
+string formats instead of plain str. This affects dataclass, msgspec, and TypedDict
+output types. Pydantic already uses these types by default.""",
+    input_schema="jsonschema/use_standard_primitive_types.json",
+    cli_args=[
+        "--output-model-type",
+        "dataclasses.dataclass",
+        "--use-standard-primitive-types",
+    ],
+    golden_output="use_standard_primitive_types.py",
+    related_options=["--output-model-type", "--output-datetime-class"],
+)
+@freeze_time(TIMESTAMP)
+def test_use_standard_primitive_types(output_file: Path) -> None:
+    """Use Python standard library types for string formats instead of str.
+
+    The `--use-standard-primitive-types` flag configures the code generation to use
+    Python standard library types (UUID, IPv4Address, IPv6Address, Path) for corresponding
+    string formats instead of plain str. This affects dataclass, msgspec, and TypedDict
+    output types. Pydantic already uses these types by default.
+    """
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "use_standard_primitive_types.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=[
+            "--output-model-type",
+            "dataclasses.dataclass",
+            "--use-standard-primitive-types",
+        ],
+        expected_file=EXPECTED_MAIN_PATH / "use_standard_primitive_types.py",
+    )
+
+
+def test_format_code_fallback_on_error(tmp_path: Path, mocker: MockerFixture) -> None:
+    """Test that code generation continues with unformatted output when formatting fails."""
+    schema = tmp_path / "schema.json"
+    schema.write_text('{"type": "object", "properties": {"name": {"type": "string"}}}', encoding="utf-8")
+    output = tmp_path / "output.py"
+
+    def mock_format_code(_self: CodeFormatter, _code: str) -> str:
+        msg = "mock error"
+        raise black.InvalidInput(msg)
+
+    mocker.patch.object(CodeFormatter, "format_code", mock_format_code)
+
+    with pytest.warns(UserWarning, match="Failed to format code.*Emitting unformatted output"):
+        generate(
+            input_=schema,
+            input_file_type=InputFileType.JsonSchema,
+            output=output,
+        )
+
+    content = output.read_text()
+    assert "class Model" in content
+    assert "name:" in content
+
+
+def test_format_code_fallback_on_error_init_exports(tmp_path: Path, mocker: MockerFixture) -> None:
+    """Test that __init__.py generation continues with unformatted output when formatting fails."""
+    output_dir = tmp_path / "output"
+
+    def mock_format_code(_self: CodeFormatter, _code: str) -> str:
+        msg = "mock error"
+        raise black.InvalidInput(msg)
+
+    mocker.patch.object(CodeFormatter, "format_code", mock_format_code)
+
+    with pytest.warns(UserWarning, match="Failed to format code.*Emitting unformatted output"):
+        generate(
+            input_=OPEN_API_DATA_PATH / "modular.yaml",
+            input_file_type=InputFileType.OpenAPI,
+            output=output_dir,
+            all_exports_scope=AllExportsScope.Children,
+        )
+
+    init_content = (output_dir / "__init__.py").read_text()
+    assert "__all__" in init_content or "from ." in init_content
+
+
+def test_init_exports_without_formatting(tmp_path: Path) -> None:
+    """Test that __init__.py exports work correctly when formatting is disabled."""
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    parser = OpenAPIParser(source=OPEN_API_DATA_PATH / "modular.yaml")
+    results = parser.parse(
+        format_=False,
+        all_exports_scope=AllExportsScope.Children,
+    )
+
+    assert isinstance(results, dict)
+    init_key = ("__init__.py",)
+    assert init_key in results
+    init_content = results[init_key].body
+    assert "__all__" in init_content or "from ." in init_content
+
+
+def test_generate_parent_scoped_naming_backward_compat(tmp_path: Path) -> None:
+    """Test generate() with parent_scoped_naming=True triggers ModelResolver backward compat."""
+    output_file = tmp_path / "output.py"
+    generate(
+        input_=JSON_SCHEMA_DATA_PATH / "naming_strategy" / "input.json",
+        input_file_type=InputFileType.JsonSchema,
+        output=output_file,
+        output_model_type=DataModelType.PydanticV2BaseModel,
+        parent_scoped_naming=True,
+    )
+    content = output_file.read_text()
+    assert "class ModelOrderItem" in content
+    assert "class ModelCartItem" in content
+
+
+def test_ruff_check_and_format_combined(output_file: Path) -> None:
+    """Test ruff check and format run together in a pipeline for single file."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "simple_string.json",
+        output_path=output_file,
+        extra_args=["--formatters", "ruff-check", "ruff-format", "--disable-timestamp"],
+        expected_output="""\
+# generated by datamodel-codegen:
+#   filename:  simple_string.json
+
+from __future__ import annotations
+from pydantic import BaseModel
+
+
+class Model(BaseModel):
+    s: str
+""",
+    )
+
+
+def test_ruff_check_only(output_file: Path) -> None:
+    """Test ruff check formatter alone for single file."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "simple_string.json",
+        output_path=output_file,
+        extra_args=["--formatters", "ruff-check", "--disable-timestamp"],
+        expected_output="""\
+# generated by datamodel-codegen:
+#   filename:  simple_string.json
+
+from __future__ import annotations
+from pydantic import BaseModel
+
+
+class Model(BaseModel):
+    s: str
+""",
+    )
+
+
+def test_ruff_format_only(output_file: Path) -> None:
+    """Test ruff format formatter alone for single file."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "simple_string.json",
+        output_path=output_file,
+        extra_args=["--formatters", "ruff-format", "--disable-timestamp"],
+        expected_output="""\
+# generated by datamodel-codegen:
+#   filename:  simple_string.json
+
+from __future__ import annotations
+from pydantic import BaseModel
+
+
+class Model(BaseModel):
+    s: str
+""",
+    )
+
+
+def test_ruff_batch_formatting_directory(output_dir: Path) -> None:
+    """Test ruff batch formatting for directory output (multiple files)."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "all_exports_multi_file",
+        output_path=output_dir,
+        extra_args=["--formatters", "ruff-check", "ruff-format", "--disable-timestamp"],
+        skip_code_validation=True,
+    )
+    order_file = output_dir / "order.py"
+    assert order_file.exists()
+    content = order_file.read_text()
+    assert "from __future__ import annotations" in content
+    assert "class Order" in content
+
+
+def test_generate_returns_string_when_output_none() -> None:
+    """Test that generate() returns str when output=None for single file."""
+    json_schema = '{"type": "object", "properties": {"name": {"type": "string"}}}'
+    result = generate(
+        json_schema,
+        input_file_type=InputFileType.JsonSchema,
+        input_filename="test.json",
+        disable_timestamp=True,
+    )
+    assert result == snapshot(
+        """\
+# generated by datamodel-codegen:
+#   filename:  test.json
+
+from __future__ import annotations
+
+from pydantic import BaseModel
+
+
+class Model(BaseModel):
+    name: str | None = None\
+"""
+    )
+
+
+def test_generate_returns_string_with_pydantic_v2() -> None:
+    """Test that generate() returns str for Pydantic v2 models."""
+    json_schema = '{"type": "object", "properties": {"value": {"type": "number"}}}'
+    result = generate(
+        json_schema,
+        input_file_type=InputFileType.JsonSchema,
+        input_filename="schema.json",
+        output_model_type=DataModelType.PydanticV2BaseModel,
+        disable_timestamp=True,
+    )
+    assert result == snapshot(
+        """\
+# generated by datamodel-codegen:
+#   filename:  schema.json
+
+from __future__ import annotations
+
+from pydantic import BaseModel
+
+
+class Model(BaseModel):
+    value: float | None = None"""
+    )
+
+
+def test_generate_returns_string_with_dataclass() -> None:
+    """Test that generate() returns str for dataclass models."""
+    json_schema = '{"type": "object", "properties": {"value": {"type": "string"}}}'
+    result = generate(
+        json_schema,
+        input_file_type=InputFileType.JsonSchema,
+        input_filename="data.json",
+        output_model_type=DataModelType.DataclassesDataclass,
+        disable_timestamp=True,
+    )
+    assert result == snapshot(
+        """\
+# generated by datamodel-codegen:
+#   filename:  data.json
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass
+class Model:
+    value: str | None = None"""
+    )
+
+
+def test_generate_returns_none_when_output_path_provided(tmp_path: Path) -> None:
+    """Test that generate() returns None when output path is provided."""
+    json_schema = '{"type": "object", "properties": {"name": {"type": "string"}}}'
+    output = tmp_path / "model.py"
+    result = generate(
+        json_schema,
+        input_file_type=InputFileType.JsonSchema,
+        output=output,
+        disable_timestamp=True,
+    )
+    assert result is None
+    assert output.exists()
+
+
+def test_generate_file_content_matches_return_value(tmp_path: Path) -> None:
+    """Test that file content matches what would be returned with output=None."""
+    json_schema = '{"type": "object", "properties": {"id": {"type": "integer"}}}'
+
+    return_result = generate(
+        json_schema,
+        input_file_type=InputFileType.JsonSchema,
+        input_filename="test.json",
+        disable_timestamp=True,
+    )
+
+    output = tmp_path / "model.py"
+    generate(
+        json_schema,
+        input_file_type=InputFileType.JsonSchema,
+        input_filename="test.json",
+        output=output,
+        disable_timestamp=True,
+    )
+    file_content = output.read_text()
+
+    assert isinstance(return_result, str)
+    assert return_result.strip() == file_content.strip()
+
+
+def test_generate_returns_dict_for_multiple_modules(tmp_path: Path) -> None:
+    """Test that generate() returns GeneratedModules dict for multiple modules."""
+    main_schema = tmp_path / "main.json"
+    main_schema.write_text(
+        """{
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "definitions": {
+            "User": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer"},
+                    "address": {"$ref": "address.json#/definitions/Address"}
+                }
+            }
+        }
+    }"""
+    )
+
+    address_schema = tmp_path / "address.json"
+    address_schema.write_text(
+        """{
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "definitions": {
+            "Address": {
+                "type": "object",
+                "properties": {
+                    "street": {"type": "string"},
+                    "city": {"type": "string"}
+                }
+            }
+        }
+    }"""
+    )
+
+    result = generate(
+        tmp_path,
+        input_file_type=InputFileType.JsonSchema,
+        disable_timestamp=True,
+    )
+
+    assert result == snapshot({
+        ("__init__.py",): """\
+# generated by datamodel-codegen:
+#   filename:  test_generate_returns_dict_for0\
+""",
+        ("address.py",): """\
+# generated by datamodel-codegen:
+#   filename:  address.json
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel
+
+
+class Model(BaseModel):
+    __root__: Any
+
+
+class Address(BaseModel):
+    street: str | None = None
+    city: str | None = None\
+""",
+        ("main.py",): """\
+# generated by datamodel-codegen:
+#   filename:  main.json
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel
+
+from . import address as address_1
+
+
+class Model(BaseModel):
+    __root__: Any
+
+
+class User(BaseModel):
+    id: int | None = None
+    address: address_1.Address | None = None\
+""",
+    })
+
+
+def test_generated_modules_type_alias_is_exported() -> None:
+    """Test that GeneratedModules is exported from the module."""
+    assert GeneratedModules is not None
+
+
+def test_generate_returns_string_with_custom_file_header() -> None:
+    """Test generate() with custom_file_header when output=None."""
+    json_schema = '{"type": "object", "properties": {"name": {"type": "string"}}}'
+    custom_header = "# Custom header\n# More comments"
+    result = generate(
+        json_schema,
+        input_file_type=InputFileType.JsonSchema,
+        custom_file_header=custom_header,
+    )
+    assert result == snapshot(
+        """\
+# Custom header
+# More comments
+
+from __future__ import annotations
+
+from pydantic import BaseModel
+
+
+class Model(BaseModel):
+    name: str | None = None"""
+    )
+
+
+def test_generate_returns_string_with_custom_file_header_and_code() -> None:
+    """Test generate() with custom_file_header containing code after docstring."""
+    json_schema = '{"type": "object", "properties": {"id": {"type": "integer"}}}'
+    custom_header = '"""Module docstring."""\n\nimport sys'
+    result = generate(
+        json_schema,
+        input_file_type=InputFileType.JsonSchema,
+        custom_file_header=custom_header,
+    )
+    assert result == snapshot(
+        '''\
+"""Module docstring."""
+from __future__ import annotations
+
+import sys
+
+from pydantic import BaseModel
+
+
+class Model(BaseModel):
+    id: int | None = None\
+'''
+    )
+
+
+def test_generate_returns_string_with_custom_file_header_no_future() -> None:
+    """Test generate() with custom_file_header when body has no future imports."""
+    json_schema = '{"type": "object", "properties": {"id": {"type": "integer"}}}'
+    custom_header = "# Custom header for legacy code"
+    result = generate(
+        json_schema,
+        input_file_type=InputFileType.JsonSchema,
+        custom_file_header=custom_header,
+        disable_future_imports=True,
+    )
+    assert result == snapshot("""\
+# Custom header for legacy code
+
+from pydantic import BaseModel
+
+
+class Model(BaseModel):
+    id: int | None = None\
+""")
+
+
+def test_generate_with_dict_jsonschema() -> None:
+    """Test generate() with dict input as JsonSchema."""
+    from tests.data.dict_input import jsonschema_dict
+
+    result = generate(
+        jsonschema_dict,
+        input_file_type=InputFileType.JsonSchema,
+        disable_timestamp=True,
+    )
+
+    assert_output(result, EXPECTED_MAIN_PATH / "dict_input" / "jsonschema.py")
+
+
+def test_generate_with_dict_openapi() -> None:
+    """Test generate() with dict input as OpenAPI."""
+    from tests.data.dict_input import openapi_dict
+
+    result = generate(
+        openapi_dict,
+        input_file_type=InputFileType.OpenAPI,
+        disable_timestamp=True,
+    )
+
+    assert_output(result, EXPECTED_MAIN_PATH / "dict_input" / "openapi.py")
+
+
+def test_generate_with_dict_auto_raises_error() -> None:
+    """Test generate() with dict input + Auto raises error."""
+    from tests.data.dict_input import auto_error_dict
+
+    with pytest.raises(Error, match="input_file_type=Auto is not supported for dict input"):
+        generate(auto_error_dict, input_file_type=InputFileType.Auto)
+
+
+def test_generate_with_dict_graphql_raises_error() -> None:
+    """Test generate() with dict input + GraphQL raises error."""
+    from tests.data.dict_input import graphql_error_dict
+
+    with pytest.raises(Error, match="Dict input is not supported for GraphQL"):
+        generate(graphql_error_dict, input_file_type=InputFileType.GraphQL)
+
+
+def test_generate_with_dict_openapi_validation_warns() -> None:
+    """Test generate() with dict input + validation skips validation with warning."""
+    import warnings
+
+    from tests.data.dict_input import openapi_dict
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        result = generate(
+            openapi_dict,
+            input_file_type=InputFileType.OpenAPI,
+            validation=True,
+            disable_timestamp=True,
+        )
+        assert_output(result, EXPECTED_MAIN_PATH / "dict_input" / "openapi.py")
+        # Check that both deprecated warning and dict input warning were raised
+        warning_messages = [str(warning.message) for warning in w]
+        assert any("deprecated" in msg.lower() for msg in warning_messages)
+        assert any("dict input" in msg.lower() for msg in warning_messages)
+
+
+@pytest.mark.parametrize(
+    "input_file_type",
+    [InputFileType.Json, InputFileType.Yaml, InputFileType.CSV],
+    ids=["json", "yaml", "csv"],
+)
+def test_generate_with_dict_raw_data_types_raises_error(input_file_type: InputFileType) -> None:
+    """Test generate() with dict input + Json/Yaml/CSV raises error."""
+    from tests.data.dict_input import auto_error_dict
+
+    with pytest.raises(Error, match=f"Dict input is not supported for {input_file_type.value}"):
+        generate(auto_error_dict, input_file_type=input_file_type)
+
+
+def test_pydantic_v1_deprecation_warning(output_file: Path, mocker: MockerFixture) -> None:
+    """Test that deprecation warning is emitted when running with Pydantic v1."""
+    mocker.patch("datamodel_code_generator.__main__.is_pydantic_v2", return_value=False)
+
+    with pytest.warns(DeprecationWarning, match=r"Pydantic v1 runtime support is deprecated"):
+        run_main_and_assert(
+            input_path=JSON_SCHEMA_DATA_PATH / "simple_string.json",
+            output_path=output_file,
+            input_file_type="jsonschema",
+        )

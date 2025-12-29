@@ -12,7 +12,7 @@ datamodel-code-generator can generate code compatible with different Python vers
 | `--use-union-operator` | Use `X \| Y` instead of `Union[X, Y]` |
 | `--use-standard-collections` | Use `list`, `dict` instead of `List`, `Dict` |
 | `--use-annotated` | Use `Annotated` for field metadata |
-| `--use-generic-container-types` | Use generic types like `List[T]` |
+| `--use-generic-container-types` | Use `Sequence`, `Mapping` instead of `list`, `dict` |
 | `--disable-future-imports` | Don't add `from __future__ import annotations` |
 
 ---
@@ -155,23 +155,25 @@ class User(BaseModel):
 
 ## `--use-generic-container-types`
 
-Uses generic container types from `typing` module explicitly.
+Uses abstract container types (`Sequence`, `Mapping`, `FrozenSet`) instead of concrete types (`list`, `dict`, `set`).
 
 ```bash
 datamodel-codegen --input schema.json --output models.py --use-generic-container-types
 ```
 
 ```python
-from typing import List, Dict, Set
+from typing import Mapping, Sequence
 
 class Data(BaseModel):
-    items: List[str]
-    mapping: Dict[str, int]
+    items: Sequence[str]
+    mapping: Mapping[str, int]
 ```
 
+If `--use-standard-collections` is also set, imports from `collections.abc` instead of `typing`.
+
 This is useful when:
-- Working with tools that require explicit `typing` imports
-- Maintaining compatibility with legacy codebases
+- You want to use abstract types for better type flexibility
+- Maintaining compatibility with interfaces that accept any sequence/mapping
 
 ---
 
@@ -308,6 +310,44 @@ This occurs when using `list[T]` syntax on older Python versions without `__futu
 This can happen when `__future__.annotations` interacts poorly with Pydantic's type resolution.
 
 **Solution:** Try `--disable-future-imports` or update to Pydantic v2.
+
+### Python 3.13 DeprecationWarning with `typing._eval_type`
+
+When running on Python 3.13+ with `from __future__ import annotations`, you may see:
+
+```text
+DeprecationWarning: Failing to pass a value to the 'type_params' parameter
+of 'typing._eval_type' is deprecated...
+```
+
+This occurs because Python 3.13 deprecated calling `typing._eval_type()` without the `type_params` parameter. Libraries that evaluate forward references (like older Pydantic versions) trigger this warning.
+
+**Solutions:**
+
+1. **Upgrade Pydantic** (recommended):
+   - Pydantic v1: Upgrade to version 1.10.18 or later
+   - Pydantic v2: Upgrade to the latest version
+
+2. **Use `--disable-future-imports`** as a workaround:
+   ```bash
+   datamodel-codegen --input schema.json --output models.py --disable-future-imports
+   ```
+
+3. **Suppress the warning** in pytest (temporary fix):
+   ```toml
+   # pyproject.toml
+   [tool.pytest.ini_options]
+   filterwarnings = [
+       # For Pydantic v2's v1 compatibility layer (pydantic.v1)
+       "ignore::DeprecationWarning:pydantic.v1.typing",
+       # For standalone Pydantic v1
+       "ignore::DeprecationWarning:pydantic.typing",
+   ]
+   ```
+
+!!! note
+    Python 3.14+ will use native deferred annotations (PEP 649), and the generator
+    will no longer add `from __future__ import annotations` for those versions.
 
 ### IDE shows type errors
 

@@ -30,6 +30,7 @@ from pydantic import StrictBool, StrictInt, StrictStr, create_model
 from typing_extensions import TypeIs
 
 from datamodel_code_generator.format import (
+    DateClassType,
     DatetimeClassType,
     PythonVersion,
     PythonVersionMin,
@@ -51,7 +52,7 @@ from datamodel_code_generator.imports import (
     Import,
 )
 from datamodel_code_generator.reference import Reference, _BaseModel
-from datamodel_code_generator.util import PYDANTIC_V2, ConfigDict
+from datamodel_code_generator.util import ConfigDict, is_pydantic_v2
 
 T = TypeVar("T")
 SourceT = TypeVar("SourceT")
@@ -85,27 +86,32 @@ STR = "str"
 NOT_REQUIRED = "NotRequired"
 NOT_REQUIRED_PREFIX = f"{NOT_REQUIRED}["
 
+READ_ONLY = "ReadOnly"
+READ_ONLY_PREFIX = f"{READ_ONLY}["
+
+
+def __getattr__(name: str) -> Any:
+    """Provide lazy access to StrictTypes for backwards compatibility."""
+    if name == "StrictTypes":
+        from datamodel_code_generator.enums import StrictTypes  # noqa: PLC0415
+
+        return StrictTypes
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)
+
+
 if TYPE_CHECKING:
     import builtins
     from collections.abc import Callable, Iterable, Iterator, Sequence
 
     from pydantic_core import core_schema
 
+    from datamodel_code_generator.enums import StrictTypes
     from datamodel_code_generator.model.base import DataModelFieldBase
 
-if PYDANTIC_V2:
+if is_pydantic_v2():
     from pydantic import GetCoreSchemaHandler
     from pydantic_core import core_schema
-
-
-class StrictTypes(Enum):
-    """Strict type options for generated models."""
-
-    str = "str"
-    bytes = "bytes"
-    int = "int"
-    float = "float"
-    bool = "bool"
 
 
 class UnionIntFloat:
@@ -175,7 +181,12 @@ class UnionIntFloat:
 
 
 def chain_as_tuple(*iterables: Iterable[T]) -> tuple[T, ...]:
-    """Chain multiple iterables and return as a tuple."""
+    """Chain multiple iterables and return as a tuple.
+
+    Optimized for the common case of 2 iterables to avoid chain() overhead.
+    """
+    if len(iterables) == 2:  # noqa: PLR2004
+        return (*iterables[0], *iterables[1])
     return tuple(chain(*iterables))
 
 
@@ -285,7 +296,7 @@ class Nullable(Protocol):
 class DataType(_BaseModel):
     """Represents a type in generated code with imports and references."""
 
-    if PYDANTIC_V2:
+    if is_pydantic_v2():
         # TODO[pydantic]: The following keys were removed: `copy_on_model_validation`.
         # Check https://docs.pydantic.dev/dev-v2/migration/#changes-to-config for more information.
         model_config = ConfigDict(  # pyright: ignore[reportAssignmentType]
@@ -293,7 +304,7 @@ class DataType(_BaseModel):
             revalidate_instances="never",
         )
     else:
-        if not TYPE_CHECKING:
+        if not TYPE_CHECKING:  # pragma: no branch
 
             @classmethod
             def model_rebuild(
@@ -322,6 +333,9 @@ class DataType(_BaseModel):
     is_dict: bool = False
     is_list: bool = False
     is_set: bool = False
+    is_frozen_set: bool = False
+    is_mapping: bool = False
+    is_sequence: bool = False
     is_tuple: bool = False
     is_custom_type: bool = False
     literals: list[Union[StrictBool, StrictInt, StrictStr]] = []  # noqa: RUF012, UP007
@@ -429,6 +443,24 @@ class DataType(_BaseModel):
             yield from self.dict_key.all_data_types
         yield self
 
+    def walk(
+        self,
+        visitor: Callable[[DataType], None],
+        visited: set[int] | None = None,
+    ) -> None:
+        """Recursively walk this DataType tree, calling visitor on each node."""
+        if visited is None:
+            visited = set()
+        node_id = id(self)
+        if node_id in visited:
+            return
+        visited.add(node_id)
+        visitor(self)
+        for child in self.data_types:
+            child.walk(visitor, visited)
+        if self.dict_key:
+            self.dict_key.walk(visitor, visited)
+
     def find_source(self, source_type: type[SourceT]) -> SourceT | None:
         """Find the first reference source matching the given type from all nested data types."""
         for data_type in self.all_data_types:  # pragma: no branch
@@ -460,6 +492,15 @@ class DataType(_BaseModel):
             (bool(self.literals) or bool(self.enum_member_literals), IMPORT_LITERAL),
         )
 
+        imports = (
+            *imports,
+            (self.is_frozen_set and not self.use_standard_collections, IMPORT_FROZEN_SET),
+            (self.is_mapping and self.use_standard_collections, IMPORT_ABC_MAPPING),
+            (self.is_mapping and not self.use_standard_collections, IMPORT_MAPPING),
+            (self.is_sequence and self.use_standard_collections, IMPORT_ABC_SEQUENCE),
+            (self.is_sequence and not self.use_standard_collections, IMPORT_SEQUENCE),
+        )
+
         if self.use_generic_container:
             if self.use_standard_collections:
                 # frozenset is builtin, no import needed for is_set
@@ -487,7 +528,7 @@ class DataType(_BaseModel):
 
         # Yield imports based on conditions
         for field, import_ in imports:
-            if field and import_ != self.import_:
+            if field and import_ is not None and import_ != self.import_:
                 yield import_
 
         # Propagate imports from any dict_key type
@@ -496,15 +537,25 @@ class DataType(_BaseModel):
 
     def __init__(self, **values: Any) -> None:
         """Initialize DataType with validation and reference setup."""
-        if not TYPE_CHECKING:
+        if not TYPE_CHECKING:  # pragma: no cover
             super().__init__(**values)
 
+        # Single-pass optimization: detect ANY+optional and non-ANY types together
+        # This is a rare edge case optimization - pragma: no cover
+        any_optional_found = False
+        has_non_any = False
         for type_ in self.data_types:
             if type_.type == ANY and type_.is_optional:
-                if any(t for t in self.data_types if t.type != ANY):  # pragma: no cover
-                    self.is_optional = True
-                    self.data_types = [t for t in self.data_types if not (t.type == ANY and t.is_optional)]
-                break  # pragma: no cover
+                any_optional_found = True  # pragma: no cover
+            elif type_.type != ANY:
+                has_non_any = True
+            # Early exit if both conditions met
+            if any_optional_found and has_non_any:  # pragma: no cover
+                break
+
+        if any_optional_found and has_non_any:  # pragma: no cover
+            self.is_optional = True
+            self.data_types = [t for t in self.data_types if not (t.type == ANY and t.is_optional)]
 
         for data_type in self.data_types:
             if data_type.reference or data_type.data_types:
@@ -576,16 +627,12 @@ class DataType(_BaseModel):
                 type_ = ""
         if self.reference:
             source = self.reference.source
-            if isinstance(source, Nullable) and source.nullable:
+            is_alias = getattr(source, "is_alias", False)
+            if isinstance(source, Nullable) and source.nullable and not is_alias:
                 self.is_optional = True
-        if self.is_list:
-            if self.use_generic_container:
-                list_ = SEQUENCE
-            elif self.use_standard_collections:
-                list_ = STANDARD_LIST
-            else:
-                list_ = LIST
-            type_ = f"{list_}[{type_}]" if type_ else list_
+        if self.is_frozen_set:
+            set_ = STANDARD_FROZEN_SET if self.use_standard_collections else FROZEN_SET
+            type_ = f"{set_}[{type_}]" if type_ else set_
         elif self.is_set:
             if self.use_generic_container:
                 set_ = STANDARD_FROZEN_SET if self.use_standard_collections else FROZEN_SET
@@ -594,6 +641,24 @@ class DataType(_BaseModel):
             else:
                 set_ = SET
             type_ = f"{set_}[{type_}]" if type_ else set_
+        elif self.is_sequence:
+            list_ = SEQUENCE
+            type_ = f"{list_}[{type_}]" if type_ else list_
+        elif self.is_list:
+            if self.use_generic_container:
+                list_ = SEQUENCE
+            elif self.use_standard_collections:
+                list_ = STANDARD_LIST
+            else:
+                list_ = LIST
+            type_ = f"{list_}[{type_}]" if type_ else list_
+        elif self.is_mapping:
+            dict_ = MAPPING
+            if self.dict_key or type_:
+                key = self.dict_key.type_hint if self.dict_key else STR
+                type_ = f"{dict_}[{key}, {type_ or ANY}]"
+            else:  # pragma: no cover
+                type_ = dict_
         elif self.is_dict:
             if self.use_generic_container:
                 dict_ = MAPPING
@@ -701,7 +766,8 @@ class DataType(_BaseModel):
                 type_ = ""
         if self.reference:  # pragma: no cover
             source = self.reference.source
-            if isinstance(source, Nullable) and source.nullable:
+            is_alias = getattr(source, "is_alias", False)
+            if isinstance(source, Nullable) and source.nullable and not is_alias:
                 self.is_optional = True
         if self.is_list:
             if self.use_generic_container:
@@ -762,6 +828,8 @@ class Types(Enum):
     binary = auto()
     date = auto()
     date_time = auto()
+    date_time_local = auto()
+    time_local = auto()
     timedelta = auto()
     password = auto()
     path = auto()
@@ -772,6 +840,7 @@ class Types(Enum):
     uuid3 = auto()
     uuid4 = auto()
     uuid5 = auto()
+    ulid = auto()
     uri = auto()
     hostname = auto()
     ipv4 = auto()
@@ -806,8 +875,10 @@ class DataTypeManager(ABC):
         use_decimal_for_multiple_of: bool = False,  # noqa: FBT001, FBT002
         use_union_operator: bool = False,  # noqa: FBT001, FBT002
         use_pendulum: bool = False,  # noqa: FBT001, FBT002
+        use_standard_primitive_types: bool = False,  # noqa: FBT001, FBT002, ARG002
         target_datetime_class: DatetimeClassType | None = None,
-        treat_dot_as_module: bool = False,  # noqa: FBT001, FBT002
+        target_date_class: DateClassType | None = None,
+        treat_dot_as_module: bool | None = None,  # noqa: FBT001
         use_serialize_as_any: bool = False,  # noqa: FBT001, FBT002
     ) -> None:
         """Initialize DataTypeManager with code generation options."""
@@ -822,7 +893,8 @@ class DataTypeManager(ABC):
         self.use_union_operator: bool = use_union_operator
         self.use_pendulum: bool = use_pendulum
         self.target_datetime_class: DatetimeClassType | None = target_datetime_class
-        self.treat_dot_as_module: bool = treat_dot_as_module
+        self.target_date_class: DateClassType | None = target_date_class
+        self.treat_dot_as_module: bool = treat_dot_as_module or False
         self.use_serialize_as_any: bool = use_serialize_as_any
 
         self.data_type: type[DataType] = create_model(

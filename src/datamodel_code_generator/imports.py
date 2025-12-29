@@ -7,23 +7,23 @@ Python import statements for generated data models.
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from functools import lru_cache
 from itertools import starmap
-from typing import TYPE_CHECKING, Optional
-
-from datamodel_code_generator.util import BaseModel
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
 
-class Import(BaseModel):
+@dataclass(frozen=True)
+class Import:
     """Represents a single Python import statement."""
 
-    from_: Optional[str] = None  # noqa: UP045
     import_: str
-    alias: Optional[str] = None  # noqa: UP045
-    reference_path: Optional[str] = None  # noqa: UP045
+    from_: str | None = None
+    alias: str | None = None
+    reference_path: str | None = None
 
     @property
     def is_future(self) -> bool:
@@ -35,7 +35,7 @@ class Import(BaseModel):
     def from_full_path(cls, class_path: str) -> Import:
         """Create an Import from a fully qualified path (e.g., 'typing.Optional')."""
         split_class_path: list[str] = class_path.split(".")
-        return Import(from_=".".join(split_class_path[:-1]) or None, import_=split_class_path[-1])
+        return cls(import_=split_class_path[-1], from_=".".join(split_class_path[:-1]) or None)
 
 
 class Imports(defaultdict[str | None, set[str]]):
@@ -168,6 +168,34 @@ class Imports(defaultdict[str | None, set[str]]):
         items = ", ".join(f'"{name}"' for name in name_list)
         return f"__all__ = [{items}]"
 
+    def get_effective_name(self, from_: str | None, import_: str) -> str:
+        """Get the effective name after alias resolution."""
+        return self.alias.get(from_, {}).get(import_, import_)
+
+    def remove_unused(self, used_names: set[str]) -> None:
+        """Remove imports not referenced in used_names.
+
+        Note: Checks both effective name (after alias) and original name to handle
+        cases where code may reference either form (e.g., type annotations may use
+        original name while runtime code uses alias).
+        """
+        unused = [
+            (from_, import_)
+            for from_, imports_ in self.items()
+            for import_ in imports_
+            if not {self.get_effective_name(from_, import_), import_}.intersection(used_names)
+        ]
+        # Build reverse lookup dict for O(1) access instead of O(n) linear scan per import
+        reverse_lookup: dict[tuple[str | None, str], str | None] = {
+            (imp.from_, imp.import_): path for path, imp in self.reference_paths.items()
+        }
+        for from_, import_ in unused:
+            alias = self.alias.get(from_, {}).get(import_)
+            reference_path = reverse_lookup.get((from_, import_))
+            import_obj = Import(from_=from_, import_=import_, alias=alias, reference_path=reference_path)
+            while self.counter.get((from_, import_), 0) > 0:
+                self.remove(import_obj)
+
 
 IMPORT_ANNOTATED = Import.from_full_path("typing.Annotated")
 IMPORT_ANY = Import.from_full_path("typing.Any")
@@ -197,6 +225,11 @@ IMPORT_TIMEDELTA = Import.from_full_path("datetime.timedelta")
 IMPORT_PATH = Import.from_full_path("pathlib.Path")
 IMPORT_TIME = Import.from_full_path("datetime.time")
 IMPORT_UUID = Import.from_full_path("uuid.UUID")
+IMPORT_ULID = Import.from_full_path("ulid.ULID")
+IMPORT_IPV4ADDRESS = Import.from_full_path("ipaddress.IPv4Address")
+IMPORT_IPV6ADDRESS = Import.from_full_path("ipaddress.IPv6Address")
+IMPORT_IPV4NETWORK = Import.from_full_path("ipaddress.IPv4Network")
+IMPORT_IPV6NETWORK = Import.from_full_path("ipaddress.IPv6Network")
 IMPORT_PENDULUM_DATE = Import.from_full_path("pendulum.Date")
 IMPORT_PENDULUM_DATETIME = Import.from_full_path("pendulum.DateTime")
 IMPORT_PENDULUM_DURATION = Import.from_full_path("pendulum.Duration")

@@ -8,14 +8,14 @@ This documentation is auto-generated from test cases.
 
 | Category | Options | Description |
 |----------|---------|-------------|
-| 📁 [Base Options](base-options.md) | 5 | Input/output configuration |
-| 🔧 [Typing Customization](typing-customization.md) | 17 | Type annotation and import behavior |
-| 🏷️ [Field Customization](field-customization.md) | 20 | Field naming and docstring behavior |
-| 🏗️ [Model Customization](model-customization.md) | 27 | Model generation behavior |
-| 🎨 [Template Customization](template-customization.md) | 16 | Output formatting and custom rendering |
+| 📁 [Base Options](base-options.md) | 7 | Input/output configuration |
+| 🔧 [Typing Customization](typing-customization.md) | 26 | Type annotation and import behavior |
+| 🏷️ [Field Customization](field-customization.md) | 22 | Field naming and docstring behavior |
+| 🏗️ [Model Customization](model-customization.md) | 36 | Model generation behavior |
+| 🎨 [Template Customization](template-customization.md) | 18 | Output formatting and custom rendering |
 | 📘 [OpenAPI-only Options](openapi-only-options.md) | 6 | OpenAPI-specific features |
-| ⚙️ [General Options](general-options.md) | 14 | Utilities and meta options |
-| 📝 [Utility Options](utility-options.md) | 5 | Help, version, debug options |
+| ⚙️ [General Options](general-options.md) | 15 | Utilities and meta options |
+| 📝 [Utility Options](utility-options.md) | 6 | Help, version, debug options |
 
 ## All Options
 
@@ -35,13 +35,17 @@ This documentation is auto-generated from test cases.
 ### B {#b}
 
 - [`--base-class`](model-customization.md#base-class)
+- [`--base-class-map`](model-customization.md#base-class-map)
 
 ### C {#c}
 
 - [`--capitalize-enum-members`](field-customization.md#capitalize-enum-members)
 - [`--check`](general-options.md#check)
+- [`--class-decorators`](template-customization.md#class-decorators)
 - [`--class-name`](model-customization.md#class-name)
+- [`--collapse-reuse-models`](model-customization.md#collapse-reuse-models)
 - [`--collapse-root-models`](model-customization.md#collapse-root-models)
+- [`--collapse-root-models-name-strategy`](model-customization.md#collapse-root-models-name-strategy)
 - [`--custom-file-header`](template-customization.md#custom-file-header)
 - [`--custom-file-header-path`](template-customization.md#custom-file-header-path)
 - [`--custom-formatters`](template-customization.md#custom-formatters)
@@ -56,6 +60,7 @@ This documentation is auto-generated from test cases.
 - [`--disable-future-imports`](typing-customization.md#disable-future-imports)
 - [`--disable-timestamp`](template-customization.md#disable-timestamp)
 - [`--disable-warnings`](general-options.md#disable-warnings)
+- [`--duplicate-name-suffix`](model-customization.md#duplicate-name-suffix)
 
 ### E {#e}
 
@@ -65,6 +70,7 @@ This documentation is auto-generated from test cases.
 - [`--enable-version-header`](template-customization.md#enable-version-header)
 - [`--encoding`](base-options.md#encoding)
 - [`--enum-field-as-literal`](typing-customization.md#enum-field-as-literal)
+- [`--enum-field-as-literal-map`](typing-customization.md#enum-field-as-literal-map)
 - [`--extra-fields`](field-customization.md#extra-fields)
 - [`--extra-template-data`](template-customization.md#extra-template-data)
 
@@ -74,6 +80,7 @@ This documentation is auto-generated from test cases.
 - [`--field-extra-keys`](field-customization.md#field-extra-keys)
 - [`--field-extra-keys-without-x-prefix`](field-customization.md#field-extra-keys-without-x-prefix)
 - [`--field-include-all-keys`](field-customization.md#field-include-all-keys)
+- [`--field-type-collision-strategy`](field-customization.md#field-type-collision-strategy)
 - [`--force-optional`](model-customization.md#force-optional)
 - [`--formatters`](template-customization.md#formatters)
 - [`--frozen-dataclasses`](model-customization.md#frozen-dataclasses)
@@ -81,6 +88,7 @@ This documentation is auto-generated from test cases.
 ### G {#g}
 
 - [`--generate-cli-command`](general-options.md#generate-cli-command)
+- [`--generate-prompt`](utility-options.md#generate-prompt)
 - [`--generate-pyproject-config`](general-options.md#generate-pyproject-config)
 
 ### H {#h}
@@ -89,6 +97,7 @@ This documentation is auto-generated from test cases.
 - [`--http-headers`](general-options.md#http-headers)
 - [`--http-ignore-tls`](general-options.md#http-ignore-tls)
 - [`--http-query-parameters`](general-options.md#http-query-parameters)
+- [`--http-timeout`](general-options.md#http-timeout)
 
 ### I {#i}
 
@@ -97,6 +106,8 @@ This documentation is auto-generated from test cases.
 - [`--include-path-parameters`](openapi-only-options.md#include-path-parameters)
 - [`--input`](base-options.md#input)
 - [`--input-file-type`](base-options.md#input-file-type)
+- [`--input-model`](base-options.md#input-model)
+- [`--input-model-ref-strategy`](base-options.md#input-model-ref-strategy)
 
 ### K {#k}
 
@@ -105,12 +116,16 @@ This documentation is auto-generated from test cases.
 
 ### M {#m}
 
+- [`--model-extra-keys`](model-customization.md#model-extra-keys)
+- [`--model-extra-keys-without-x-prefix`](model-customization.md#model-extra-keys-without-x-prefix)
 - [`--module-split-mode`](general-options.md#module-split-mode)
 
 ### N {#n}
 
+- [`--naming-strategy`](model-customization.md#naming-strategy)
 - [`--no-alias`](field-customization.md#no-alias)
 - [`--no-color`](utility-options.md#no-color)
+- [`--no-treat-dot-as-module`](template-customization.md#no-treat-dot-as-module)
 - [`--no-use-specialized-enum`](typing-customization.md#no-use-specialized-enum)
 - [`--no-use-standard-collections`](typing-customization.md#no-use-standard-collections)
 - [`--no-use-union-operator`](typing-customization.md#no-use-union-operator)
@@ -120,6 +135,7 @@ This documentation is auto-generated from test cases.
 - [`--openapi-scopes`](openapi-only-options.md#openapi-scopes)
 - [`--original-field-name-delimiter`](field-customization.md#original-field-name-delimiter)
 - [`--output`](base-options.md#output)
+- [`--output-date-class`](typing-customization.md#output-date-class)
 - [`--output-datetime-class`](typing-customization.md#output-datetime-class)
 - [`--output-model-type`](model-customization.md#output-model-type)
 
@@ -148,9 +164,11 @@ This documentation is auto-generated from test cases.
 
 ### T {#t}
 
+- [`--target-pydantic-version`](model-customization.md#target-pydantic-version)
 - [`--target-python-version`](model-customization.md#target-python-version)
 - [`--treat-dot-as-module`](template-customization.md#treat-dot-as-module)
 - [`--type-mappings`](typing-customization.md#type-mappings)
+- [`--type-overrides`](typing-customization.md#type-overrides)
 
 ### U {#u}
 
@@ -166,19 +184,27 @@ This documentation is auto-generated from test cases.
 - [`--use-enum-values-in-discriminator`](field-customization.md#use-enum-values-in-discriminator)
 - [`--use-exact-imports`](template-customization.md#use-exact-imports)
 - [`--use-field-description`](field-customization.md#use-field-description)
+- [`--use-field-description-example`](field-customization.md#use-field-description-example)
 - [`--use-frozen-field`](model-customization.md#use-frozen-field)
+- [`--use-generic-base-class`](model-customization.md#use-generic-base-class)
 - [`--use-generic-container-types`](typing-customization.md#use-generic-container-types)
 - [`--use-inline-field-description`](field-customization.md#use-inline-field-description)
 - [`--use-non-positive-negative-number-constrained-types`](typing-customization.md#use-non-positive-negative-number-constrained-types)
 - [`--use-one-literal-as-default`](model-customization.md#use-one-literal-as-default)
 - [`--use-operation-id-as-name`](openapi-only-options.md#use-operation-id-as-name)
 - [`--use-pendulum`](typing-customization.md#use-pendulum)
+- [`--use-root-model-type-alias`](typing-customization.md#use-root-model-type-alias)
 - [`--use-schema-description`](field-customization.md#use-schema-description)
 - [`--use-serialize-as-any`](model-customization.md#use-serialize-as-any)
+- [`--use-specialized-enum`](typing-customization.md#use-specialized-enum)
+- [`--use-standard-collections`](typing-customization.md#use-standard-collections)
+- [`--use-standard-primitive-types`](typing-customization.md#use-standard-primitive-types)
 - [`--use-status-code-in-response-name`](openapi-only-options.md#use-status-code-in-response-name)
 - [`--use-subclass-enum`](model-customization.md#use-subclass-enum)
 - [`--use-title-as-name`](field-customization.md#use-title-as-name)
+- [`--use-tuple-for-fixed-items`](typing-customization.md#use-tuple-for-fixed-items)
 - [`--use-type-alias`](typing-customization.md#use-type-alias)
+- [`--use-union-operator`](typing-customization.md#use-union-operator)
 - [`--use-unique-items-as-set`](typing-customization.md#use-unique-items-as-set)
 
 ### V {#v}

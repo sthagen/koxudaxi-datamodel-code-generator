@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypeVar
 
 from pydantic import Field
 
-from datamodel_code_generator import DatetimeClassType, PythonVersion, PythonVersionMin
+from datamodel_code_generator import DateClassType, DatetimeClassType, PythonVersion, PythonVersionMin
 from datamodel_code_generator.imports import (
     IMPORT_DATE,
     IMPORT_DATETIME,
@@ -20,11 +20,12 @@ from datamodel_code_generator.imports import (
     Import,
 )
 from datamodel_code_generator.model import DataModel, DataModelFieldBase
-from datamodel_code_generator.model.base import UNDEFINED
+from datamodel_code_generator.model.base import UNDEFINED, BaseClassDataType
 from datamodel_code_generator.model.imports import (
     IMPORT_MSGSPEC_CONVERT,
     IMPORT_MSGSPEC_FIELD,
     IMPORT_MSGSPEC_META,
+    IMPORT_MSGSPEC_STRUCT,
     IMPORT_MSGSPEC_UNSET,
     IMPORT_MSGSPEC_UNSETTYPE,
 )
@@ -33,7 +34,7 @@ from datamodel_code_generator.model.pydantic.base_model import (
 )
 from datamodel_code_generator.model.type_alias import TypeAliasBase
 from datamodel_code_generator.model.types import DataTypeManager as _DataTypeManager
-from datamodel_code_generator.model.types import type_map_factory
+from datamodel_code_generator.model.types import standard_primitive_type_map_factory, type_map_factory
 from datamodel_code_generator.types import (
     NONE,
     OPTIONAL_PREFIX,
@@ -46,6 +47,7 @@ from datamodel_code_generator.types import (
     _remove_none_from_union,
     chain_as_tuple,
 )
+from datamodel_code_generator.util import model_dump
 
 UNSET_TYPE = "UnsetType"
 
@@ -109,7 +111,19 @@ class Struct(DataModel):
 
     TEMPLATE_FILE_PATH: ClassVar[str] = "msgspec.jinja2"
     BASE_CLASS: ClassVar[str] = "msgspec.Struct"
+    BASE_CLASS_NAME: ClassVar[str] = "Struct"
+    BASE_CLASS_ALIAS: ClassVar[str] = "_Struct"
     DEFAULT_IMPORTS: ClassVar[tuple[Import, ...]] = ()
+    SUPPORTS_DISCRIMINATOR: ClassVar[bool] = True
+    CONFIG_MAPPING: ClassVar[dict[tuple[str, Any], tuple[str, Any] | None]] = {
+        ("allow_mutation", False): ("frozen", True),
+        ("extra_fields", "forbid"): ("forbid_unknown_fields", True),
+        ("extra_fields", "allow"): None,
+        ("extra_fields", "ignore"): None,
+        ("allow_extra_fields", True): None,
+        ("allow_population_by_field_name", True): None,
+        ("use_attribute_docstrings", True): None,
+    }
 
     def __init__(  # noqa: PLR0913
         self,
@@ -127,7 +141,7 @@ class Struct(DataModel):
         default: Any = UNDEFINED,
         nullable: bool = False,
         keyword_only: bool = False,
-        treat_dot_as_module: bool = False,
+        treat_dot_as_module: bool | None = None,
     ) -> None:
         """Initialize msgspec Struct with fields sorted by field assignment requirement."""
         super().__init__(
@@ -153,6 +167,46 @@ class Struct(DataModel):
     def add_base_class_kwarg(self, name: str, value: str) -> None:
         """Add keyword argument to base class constructor."""
         self.extra_template_data["base_class_kwargs"][name] = value
+
+    @classmethod
+    def create_base_class_model(
+        cls,
+        config: dict[str, Any],
+        reference: Reference,
+        custom_template_dir: Path | None = None,
+        keyword_only: bool = False,  # noqa: FBT001, FBT002
+        treat_dot_as_module: bool | None = None,  # noqa: FBT001
+    ) -> Struct | None:
+        """Create a shared base class model for DRY configuration.
+
+        Creates a Struct that inherits from msgspec.Struct (aliased as _Struct)
+        with the specified configuration. Updates the reference path and name in place.
+        """
+        reference.path = f"#/{cls.BASE_CLASS_NAME}"
+        reference.name = cls.BASE_CLASS_NAME
+
+        base_model = cls(
+            reference=reference,
+            fields=[],
+            custom_template_dir=custom_template_dir,
+            keyword_only=keyword_only,
+            treat_dot_as_module=treat_dot_as_module,
+        )
+
+        base_model.base_classes = [BaseClassDataType(type=cls.BASE_CLASS_ALIAS)]
+
+        for key, value in config.items():
+            mapping_result = cls.CONFIG_MAPPING.get((key, value))
+            if mapping_result is None:
+                continue
+            mapped_key, mapped_value = mapping_result
+            base_model.add_base_class_kwarg(mapped_key, str(mapped_value))
+
+        base_model._additional_imports.append(
+            Import(from_=IMPORT_MSGSPEC_STRUCT.from_, import_=IMPORT_MSGSPEC_STRUCT.import_, alias=cls.BASE_CLASS_ALIAS)
+        )
+
+        return base_model
 
 
 class Constraints(_Constraints):
@@ -336,7 +390,7 @@ class DataModelField(DataModelFieldBase):
                 **data,
                 **{
                     k: self._get_strict_field_constraint_value(k, v)
-                    for k, v in self.constraints.dict().items()
+                    for k, v in model_dump(self.constraints).items()
                     if k in self._META_FIELD_KEYS
                 },
             }
@@ -450,23 +504,26 @@ class DataTypeManager(_DataTypeManager):
         use_decimal_for_multiple_of: bool = False,  # noqa: FBT001, FBT002
         use_union_operator: bool = False,  # noqa: FBT001, FBT002
         use_pendulum: bool = False,  # noqa: FBT001, FBT002
+        use_standard_primitive_types: bool = False,  # noqa: FBT001, FBT002
         target_datetime_class: DatetimeClassType | None = None,
-        treat_dot_as_module: bool = False,  # noqa: FBT001, FBT002
+        target_date_class: DateClassType | None = None,  # noqa: ARG002
+        treat_dot_as_module: bool | None = None,  # noqa: FBT001
         use_serialize_as_any: bool = False,  # noqa: FBT001, FBT002
     ) -> None:
         """Initialize type manager with optional datetime type mapping."""
         super().__init__(
-            python_version,
-            use_standard_collections,
-            use_generic_container_types,
-            strict_types,
-            use_non_positive_negative_number_constrained_types,
-            use_decimal_for_multiple_of,
-            use_union_operator,
-            use_pendulum,
-            target_datetime_class,
-            treat_dot_as_module,
-            use_serialize_as_any,
+            python_version=python_version,
+            use_standard_collections=use_standard_collections,
+            use_generic_container_types=use_generic_container_types,
+            strict_types=strict_types,
+            use_non_positive_negative_number_constrained_types=use_non_positive_negative_number_constrained_types,
+            use_decimal_for_multiple_of=use_decimal_for_multiple_of,
+            use_union_operator=use_union_operator,
+            use_pendulum=use_pendulum,
+            use_standard_primitive_types=use_standard_primitive_types,
+            target_datetime_class=target_datetime_class,
+            treat_dot_as_module=treat_dot_as_module,
+            use_serialize_as_any=use_serialize_as_any,
         )
 
         datetime_map = (
@@ -480,7 +537,12 @@ class DataTypeManager(_DataTypeManager):
             else {}
         )
 
+        standard_primitive_map = (
+            standard_primitive_type_map_factory(self.data_type) if use_standard_primitive_types else {}
+        )
+
         self.type_map: dict[Types, DataType] = {
             **type_map_factory(self.data_type),
             **datetime_map,
+            **standard_primitive_map,
         }

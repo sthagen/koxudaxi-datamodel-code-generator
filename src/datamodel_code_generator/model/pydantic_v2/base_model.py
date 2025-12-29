@@ -7,12 +7,13 @@ with support for Field() constraints and ConfigDict.
 from __future__ import annotations
 
 import re
-from enum import Enum
+from collections import defaultdict
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NamedTuple, Optional
 
 from pydantic import Field
 
-from datamodel_code_generator.model.base import UNDEFINED, DataModelFieldBase
+from datamodel_code_generator.imports import Import
+from datamodel_code_generator.model.base import ALL_MODEL, UNDEFINED, BaseClassDataType, DataModelFieldBase
 from datamodel_code_generator.model.pydantic.base_model import (
     BaseModelBase,
 )
@@ -22,21 +23,26 @@ from datamodel_code_generator.model.pydantic.base_model import (
 from datamodel_code_generator.model.pydantic.base_model import (
     DataModelField as DataModelFieldV1,
 )
-from datamodel_code_generator.model.pydantic_v2.imports import IMPORT_CONFIG_DICT
-from datamodel_code_generator.util import field_validator, model_validator
+from datamodel_code_generator.model.pydantic_v2.imports import IMPORT_BASE_MODEL, IMPORT_CONFIG_DICT
+from datamodel_code_generator.types import chain_as_tuple
+from datamodel_code_generator.util import field_validator, model_validate, model_validator
 
 if TYPE_CHECKING:
-    from collections import defaultdict
     from pathlib import Path
 
     from datamodel_code_generator.reference import Reference
 
 
-class UnionMode(Enum):
-    """Union discriminator mode for Pydantic v2."""
+class _RawRepr:
+    """Wrapper to prevent repr() from adding quotes around a value."""
 
-    smart = "smart"
-    left_to_right = "left_to_right"
+    __slots__ = ("value",)
+
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+    def __repr__(self) -> str:
+        return self.value
 
 
 class Constraints(_Constraints):
@@ -144,6 +150,14 @@ class DataModelField(DataModelFieldV1):
             else:
                 data.pop("union_mode")
 
+        # Handle multiple aliases using AliasChoices (Pydantic v2 feature)
+        if self.validation_aliases:
+            # Remove single alias if present (validation_aliases takes precedence)
+            data.pop("alias", None)
+            # Format as AliasChoices(...) - use _RawRepr to prevent double-quoting
+            aliases_repr = ", ".join(repr(a) for a in self.validation_aliases)
+            data["validation_alias"] = _RawRepr(f"AliasChoices({aliases_repr})")
+
         # **extra is not supported in pydantic 2.0
         json_schema_extra = {k: v for k, v in data.items() if k not in self._DEFAULT_FIELD_KEYS}
         if json_schema_extra:
@@ -156,6 +170,16 @@ class DataModelField(DataModelFieldV1):
         field_arguments: list[str],
     ) -> list[str]:
         return field_arguments
+
+    @property
+    def imports(self) -> tuple[Import, ...]:
+        """Get all required imports including AliasChoices if needed."""
+        base_imports = super().imports
+        if self.validation_aliases:
+            from datamodel_code_generator.model.pydantic_v2.imports import IMPORT_ALIAS_CHOICES  # noqa: PLC0415
+
+            return chain_as_tuple(base_imports, (IMPORT_ALIAS_CHOICES,))
+        return base_imports
 
 
 class ConfigAttribute(NamedTuple):
@@ -171,9 +195,23 @@ class BaseModel(BaseModelBase):
 
     TEMPLATE_FILE_PATH: ClassVar[str] = "pydantic_v2/BaseModel.jinja2"
     BASE_CLASS: ClassVar[str] = "pydantic.BaseModel"
-    CONFIG_ATTRIBUTES: ClassVar[list[ConfigAttribute]] = [
+    BASE_CLASS_NAME: ClassVar[str] = "BaseModel"
+    BASE_CLASS_ALIAS: ClassVar[str] = "_BaseModel"
+    SUPPORTS_DISCRIMINATOR: ClassVar[bool] = True
+    SUPPORTS_FIELD_RENAMING: ClassVar[bool] = True
+    SUPPORTS_WRAPPED_DEFAULT: ClassVar[bool] = True
+    # In Pydantic 2.11+, populate_by_name is deprecated in favor of validate_by_name + validate_by_alias
+    # Default to V2 compatible (populate_by_name) unless target_pydantic_version is specified
+    _CONFIG_ATTRIBUTES_V2: ClassVar[list[ConfigAttribute]] = [
         ConfigAttribute("allow_population_by_field_name", "populate_by_name", False),  # noqa: FBT003
         ConfigAttribute("populate_by_name", "populate_by_name", False),  # noqa: FBT003
+        ConfigAttribute("allow_mutation", "frozen", True),  # noqa: FBT003
+        ConfigAttribute("frozen", "frozen", False),  # noqa: FBT003
+        ConfigAttribute("use_attribute_docstrings", "use_attribute_docstrings", False),  # noqa: FBT003
+    ]
+    _CONFIG_ATTRIBUTES_V2_11: ClassVar[list[ConfigAttribute]] = [
+        ConfigAttribute("allow_population_by_field_name", "validate_by_name", False),  # noqa: FBT003
+        ConfigAttribute("populate_by_name", "validate_by_name", False),  # noqa: FBT003
         ConfigAttribute("allow_mutation", "frozen", True),  # noqa: FBT003
         ConfigAttribute("frozen", "frozen", False),  # noqa: FBT003
         ConfigAttribute("use_attribute_docstrings", "use_attribute_docstrings", False),  # noqa: FBT003
@@ -194,7 +232,7 @@ class BaseModel(BaseModelBase):
         default: Any = UNDEFINED,
         nullable: bool = False,
         keyword_only: bool = False,
-        treat_dot_as_module: bool = False,
+        treat_dot_as_module: bool | None = None,
     ) -> None:
         """Initialize BaseModel with ConfigDict generation from template data."""
         super().__init__(
@@ -218,7 +256,9 @@ class BaseModel(BaseModelBase):
         if extra:
             config_parameters["extra"] = extra
 
-        for from_, to, invert in self.CONFIG_ATTRIBUTES:
+        # Select CONFIG_ATTRIBUTES based on target_pydantic_version
+        config_attributes = self._get_config_attributes()
+        for from_, to, invert in config_attributes:
             if from_ in self.extra_template_data:
                 config_parameters[to] = (
                     not self.extra_template_data[from_] if invert else self.extra_template_data[from_]
@@ -235,14 +275,21 @@ class BaseModel(BaseModelBase):
             for key, value in self.extra_template_data["config"].items():
                 config_parameters[key] = value  # noqa: PERF403
 
+        # Handle json_schema_extra from schema extensions (x-* fields)
+        model_extras = self.extra_template_data.get("model_extras")
+        if model_extras:
+            existing = config_parameters.get("json_schema_extra") or {}
+            config_parameters["json_schema_extra"] = {**existing, **model_extras}
+
         if config_parameters:
             from datamodel_code_generator.model.pydantic_v2 import ConfigDict  # noqa: PLC0415
 
-            self.extra_template_data["config"] = ConfigDict.parse_obj(config_parameters)  # pyright: ignore[reportArgumentType]
+            self.extra_template_data["config"] = model_validate(ConfigDict, config_parameters)  # pyright: ignore[reportArgumentType]
             self._additional_imports.append(IMPORT_CONFIG_DICT)
 
     def _get_config_extra(self) -> Literal["'allow'", "'forbid'", "'ignore'"] | None:
         additional_properties = self.extra_template_data.get("additionalProperties")
+        unevaluated_properties = self.extra_template_data.get("unevaluatedProperties")
         allow_extra_fields = self.extra_template_data.get("allow_extra_fields")
         extra_fields = self.extra_template_data.get("extra_fields")
 
@@ -257,7 +304,24 @@ class BaseModel(BaseModelBase):
             config_extra = "'allow'"
         elif additional_properties is False:
             config_extra = "'forbid'"
+        elif unevaluated_properties is True:
+            config_extra = "'allow'"
+        elif unevaluated_properties is False:
+            config_extra = "'forbid'"
         return config_extra
+
+    def _get_config_attributes(self) -> list[ConfigAttribute]:
+        """Get config attributes based on target Pydantic version.
+
+        If target_pydantic_version is V2_11, use validate_by_name.
+        Otherwise (V2 or not specified), use populate_by_name for compatibility.
+        """
+        from datamodel_code_generator import TargetPydanticVersion  # noqa: PLC0415
+
+        target_version = self.extra_template_data.get("target_pydantic_version")
+        if target_version == TargetPydanticVersion.V2_11:
+            return self._CONFIG_ATTRIBUTES_V2_11
+        return self._CONFIG_ATTRIBUTES_V2
 
     def _has_lookaround_pattern(self) -> bool:
         """Check if any field has a regex pattern with lookaround assertions."""
@@ -271,3 +335,45 @@ class BaseModel(BaseModelBase):
                 if pattern and lookaround_regex.search(pattern):
                     return True
         return False
+
+    @classmethod
+    def create_base_class_model(
+        cls,
+        config: dict[str, Any],
+        reference: Reference,
+        custom_template_dir: Path | None = None,
+        keyword_only: bool = False,  # noqa: FBT001, FBT002
+        treat_dot_as_module: bool | None = None,  # noqa: FBT001
+    ) -> BaseModel | None:
+        """Create a shared base class model for DRY configuration.
+
+        Creates a BaseModel that inherits from pydantic's BaseModel (aliased as _BaseModel)
+        with the specified configuration. Updates the reference path and name in place.
+        """
+        reference.path = f"#/{cls.BASE_CLASS_NAME}"
+        reference.name = cls.BASE_CLASS_NAME
+
+        extra_data: defaultdict[str, dict[str, Any]] = defaultdict(dict)
+        for key, value in config.items():
+            extra_data[ALL_MODEL][key] = value
+
+        base_model = cls(
+            reference=reference,
+            fields=[],
+            custom_template_dir=custom_template_dir,
+            extra_template_data=extra_data,
+            keyword_only=keyword_only,
+            treat_dot_as_module=treat_dot_as_module,
+        )
+
+        base_model.base_classes = [BaseClassDataType(type=cls.BASE_CLASS_ALIAS)]
+        base_model._additional_imports = [
+            imp
+            for imp in base_model._additional_imports
+            if not (imp.from_ == IMPORT_BASE_MODEL.from_ and imp.import_ == IMPORT_BASE_MODEL.import_)
+        ]
+        base_model._additional_imports.append(
+            Import(from_=IMPORT_BASE_MODEL.from_, import_=IMPORT_BASE_MODEL.import_, alias=cls.BASE_CLASS_ALIAS)
+        )
+
+        return base_model

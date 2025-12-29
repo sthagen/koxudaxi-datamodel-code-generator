@@ -20,19 +20,23 @@ from pydantic import Field
 from datamodel_code_generator import (
     DEFAULT_SHARED_MODULE_NAME,
     AllOfMergeMode,
+    CollapseRootModelsNameStrategy,
     DataclassArguments,
     Error,
+    FieldTypeCollisionStrategy,
     LiteralType,
+    NamingStrategy,
     OpenAPIScope,
     PythonVersion,
     PythonVersionMin,
     ReadOnlyWriteOnlyModelType,
     ReuseScope,
+    TargetPydanticVersion,
     YamlValue,
-    load_yaml_dict,
+    load_data,
     snooper_to_methods,
 )
-from datamodel_code_generator.format import DEFAULT_FORMATTERS, DatetimeClassType, Formatter
+from datamodel_code_generator.format import DEFAULT_FORMATTERS, DateClassType, DatetimeClassType, Formatter
 from datamodel_code_generator.model import DataModel, DataModelFieldBase
 from datamodel_code_generator.model import pydantic as pydantic_model
 from datamodel_code_generator.parser.base import get_special_path
@@ -48,7 +52,7 @@ from datamodel_code_generator.types import (
     EmptyDataType,
     StrictTypes,
 )
-from datamodel_code_generator.util import BaseModel
+from datamodel_code_generator.util import BaseModel, model_dump, model_validate
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -186,7 +190,9 @@ class OpenAPIParser(JsonSchemaParser):
         data_type_manager_type: type[DataTypeManager] = pydantic_model.DataTypeManager,
         data_model_field_type: type[DataModelFieldBase] = pydantic_model.DataModelField,
         base_class: str | None = None,
+        base_class_map: dict[str, str] | None = None,
         additional_imports: list[str] | None = None,
+        class_decorators: list[str] | None = None,
         custom_template_dir: Path | None = None,
         extra_template_data: defaultdict[str, dict[str, Any]] | None = None,
         target_python_version: PythonVersion = PythonVersionMin,
@@ -199,6 +205,7 @@ class OpenAPIParser(JsonSchemaParser):
         allow_population_by_field_name: bool = False,
         allow_extra_fields: bool = False,
         extra_fields: str | None = None,
+        use_generic_base_class: bool = False,
         apply_default_values_for_required_fields: bool = False,
         force_optional_for_required_fields: bool = False,
         class_name: str | None = None,
@@ -206,6 +213,7 @@ class OpenAPIParser(JsonSchemaParser):
         base_path: Path | None = None,
         use_schema_description: bool = False,
         use_field_description: bool = False,
+        use_field_description_example: bool = False,
         use_attribute_docstrings: bool = False,
         use_inline_field_description: bool = False,
         use_default_kwarg: bool = False,
@@ -214,6 +222,7 @@ class OpenAPIParser(JsonSchemaParser):
         shared_module_name: str = DEFAULT_SHARED_MODULE_NAME,
         encoding: str = "utf-8",
         enum_field_as_literal: LiteralType | None = None,
+        enum_field_as_literal_map: dict[str, str] | None = None,
         ignore_enum_constraints: bool = False,
         use_one_literal_as_default: bool = False,
         use_enum_values_in_discriminator: bool = False,
@@ -231,15 +240,19 @@ class OpenAPIParser(JsonSchemaParser):
         field_extra_keys: set[str] | None = None,
         field_include_all_keys: bool = False,
         field_extra_keys_without_x_prefix: set[str] | None = None,
+        model_extra_keys: set[str] | None = None,
+        model_extra_keys_without_x_prefix: set[str] | None = None,
         openapi_scopes: list[OpenAPIScope] | None = None,
         include_path_parameters: bool = False,
         wrap_string_literal: bool | None = False,
         use_title_as_name: bool = False,
         use_operation_id_as_name: bool = False,
         use_unique_items_as_set: bool = False,
+        use_tuple_for_fixed_items: bool = False,
         allof_merge_mode: AllOfMergeMode = AllOfMergeMode.Constraints,
         http_headers: Sequence[tuple[str, str]] | None = None,
         http_ignore_tls: bool = False,
+        http_timeout: float | None = None,
         use_annotated: bool = False,
         use_serialize_as_any: bool = False,
         use_non_positive_negative_number_constrained_types: bool = False,
@@ -249,6 +262,8 @@ class OpenAPIParser(JsonSchemaParser):
         use_union_operator: bool = False,
         allow_responses_without_content: bool = False,
         collapse_root_models: bool = False,
+        collapse_root_models_name_strategy: CollapseRootModelsNameStrategy | None = None,
+        collapse_reuse_models: bool = False,
         skip_root_model: bool = False,
         use_type_alias: bool = False,
         special_field_name_prefix: str | None = None,
@@ -259,22 +274,30 @@ class OpenAPIParser(JsonSchemaParser):
         custom_formatters: list[str] | None = None,
         custom_formatters_kwargs: dict[str, Any] | None = None,
         use_pendulum: bool = False,
+        use_standard_primitive_types: bool = False,
         http_query_parameters: Sequence[tuple[str, str]] | None = None,
-        treat_dot_as_module: bool = False,
+        treat_dot_as_module: bool | None = None,
         use_exact_imports: bool = False,
         default_field_extras: dict[str, Any] | None = None,
         target_datetime_class: DatetimeClassType | None = None,
+        target_date_class: DateClassType | None = None,
         keyword_only: bool = False,
         frozen_dataclasses: bool = False,
         no_alias: bool = False,
         formatters: list[Formatter] = DEFAULT_FORMATTERS,
+        defer_formatting: bool = False,
         parent_scoped_naming: bool = False,
+        naming_strategy: NamingStrategy | None = None,
+        duplicate_name_suffix: dict[str, str] | None = None,
         dataclass_arguments: DataclassArguments | None = None,
         type_mappings: list[str] | None = None,
+        type_overrides: dict[str, str] | None = None,
         read_only_write_only_model_type: ReadOnlyWriteOnlyModelType | None = None,
         use_frozen_field: bool = False,
         use_default_factory_for_optional_nested_models: bool = False,
         use_status_code_in_response_name: bool = False,
+        field_type_collision_strategy: FieldTypeCollisionStrategy | None = None,
+        target_pydantic_version: TargetPydanticVersion | None = None,
     ) -> None:
         """Initialize the OpenAPI parser with extensive configuration options."""
         target_datetime_class = target_datetime_class or DatetimeClassType.Awaredatetime
@@ -285,7 +308,9 @@ class OpenAPIParser(JsonSchemaParser):
             data_type_manager_type=data_type_manager_type,
             data_model_field_type=data_model_field_type,
             base_class=base_class,
+            base_class_map=base_class_map,
             additional_imports=additional_imports,
+            class_decorators=class_decorators,
             custom_template_dir=custom_template_dir,
             extra_template_data=extra_template_data,
             target_python_version=target_python_version,
@@ -298,6 +323,7 @@ class OpenAPIParser(JsonSchemaParser):
             allow_population_by_field_name=allow_population_by_field_name,
             allow_extra_fields=allow_extra_fields,
             extra_fields=extra_fields,
+            use_generic_base_class=use_generic_base_class,
             apply_default_values_for_required_fields=apply_default_values_for_required_fields,
             force_optional_for_required_fields=force_optional_for_required_fields,
             class_name=class_name,
@@ -305,6 +331,7 @@ class OpenAPIParser(JsonSchemaParser):
             base_path=base_path,
             use_schema_description=use_schema_description,
             use_field_description=use_field_description,
+            use_field_description_example=use_field_description_example,
             use_attribute_docstrings=use_attribute_docstrings,
             use_inline_field_description=use_inline_field_description,
             use_default_kwarg=use_default_kwarg,
@@ -313,6 +340,7 @@ class OpenAPIParser(JsonSchemaParser):
             shared_module_name=shared_module_name,
             encoding=encoding,
             enum_field_as_literal=enum_field_as_literal,
+            enum_field_as_literal_map=enum_field_as_literal_map,
             ignore_enum_constraints=ignore_enum_constraints,
             use_one_literal_as_default=use_one_literal_as_default,
             use_enum_values_in_discriminator=use_enum_values_in_discriminator,
@@ -330,13 +358,17 @@ class OpenAPIParser(JsonSchemaParser):
             field_extra_keys=field_extra_keys,
             field_include_all_keys=field_include_all_keys,
             field_extra_keys_without_x_prefix=field_extra_keys_without_x_prefix,
+            model_extra_keys=model_extra_keys,
+            model_extra_keys_without_x_prefix=model_extra_keys_without_x_prefix,
             wrap_string_literal=wrap_string_literal,
             use_title_as_name=use_title_as_name,
             use_operation_id_as_name=use_operation_id_as_name,
             use_unique_items_as_set=use_unique_items_as_set,
+            use_tuple_for_fixed_items=use_tuple_for_fixed_items,
             allof_merge_mode=allof_merge_mode,
             http_headers=http_headers,
             http_ignore_tls=http_ignore_tls,
+            http_timeout=http_timeout,
             use_annotated=use_annotated,
             use_serialize_as_any=use_serialize_as_any,
             use_non_positive_negative_number_constrained_types=use_non_positive_negative_number_constrained_types,
@@ -346,6 +378,8 @@ class OpenAPIParser(JsonSchemaParser):
             use_union_operator=use_union_operator,
             allow_responses_without_content=allow_responses_without_content,
             collapse_root_models=collapse_root_models,
+            collapse_root_models_name_strategy=collapse_root_models_name_strategy,
+            collapse_reuse_models=collapse_reuse_models,
             skip_root_model=skip_root_model,
             use_type_alias=use_type_alias,
             special_field_name_prefix=special_field_name_prefix,
@@ -356,21 +390,29 @@ class OpenAPIParser(JsonSchemaParser):
             custom_formatters=custom_formatters,
             custom_formatters_kwargs=custom_formatters_kwargs,
             use_pendulum=use_pendulum,
+            use_standard_primitive_types=use_standard_primitive_types,
             http_query_parameters=http_query_parameters,
             treat_dot_as_module=treat_dot_as_module,
             use_exact_imports=use_exact_imports,
             default_field_extras=default_field_extras,
             target_datetime_class=target_datetime_class,
+            target_date_class=target_date_class,
             keyword_only=keyword_only,
             frozen_dataclasses=frozen_dataclasses,
             no_alias=no_alias,
             formatters=formatters,
+            defer_formatting=defer_formatting,
             parent_scoped_naming=parent_scoped_naming,
+            naming_strategy=naming_strategy,
+            duplicate_name_suffix=duplicate_name_suffix,
             dataclass_arguments=dataclass_arguments,
             type_mappings=type_mappings,
+            type_overrides=type_overrides,
             read_only_write_only_model_type=read_only_write_only_model_type,
             use_frozen_field=use_frozen_field,
             use_default_factory_for_optional_nested_models=use_default_factory_for_optional_nested_models,
+            field_type_collision_strategy=field_type_collision_strategy,
+            target_pydantic_version=target_pydantic_version,
         )
         self.open_api_scopes: list[OpenAPIScope] = openapi_scopes or [OpenAPIScope.Schemas]
         self.include_path_parameters: bool = include_path_parameters
@@ -488,7 +530,7 @@ class OpenAPIParser(JsonSchemaParser):
         """Resolve a reference object to its actual type or return the object as-is."""
         if isinstance(obj, ReferenceObject):
             ref_obj = self.get_ref_model(obj.ref)
-            return object_type.parse_obj(ref_obj)
+            return model_validate(object_type, ref_obj)
         return obj
 
     def _parse_schema_or_ref(
@@ -607,7 +649,7 @@ class OpenAPIParser(JsonSchemaParser):
                 if not detail.ref:  # pragma: no cover
                     continue
                 ref_model = self.get_ref_model(detail.ref)
-                content = {k: MediaObject.parse_obj(v) for k, v in ref_model.get("content", {}).items()}
+                content = {k: model_validate(MediaObject, v) for k, v in ref_model.get("content", {}).items()}
             else:
                 content = detail.content
 
@@ -640,7 +682,7 @@ class OpenAPIParser(JsonSchemaParser):
         camel_path_name = snake_to_upper_camel(normalized)
         return f"{camel_path_name}{method.capitalize()}{suffix}"
 
-    def parse_all_parameters(
+    def parse_all_parameters(  # noqa: PLR0912
         self,
         name: str,
         parameters: list[ReferenceObject | ParameterObject],
@@ -649,6 +691,7 @@ class OpenAPIParser(JsonSchemaParser):
         """Parse all operation parameters into a data model."""
         fields: list[DataModelFieldBase] = []
         exclude_field_names: set[str] = set()
+        seen_parameter_names: set[str] = set()
         reference = self.model_resolver.add(path, name, class_name=True, unique=True)
         for parameter_ in parameters:
             parameter = self.resolve_object(parameter_, ParameterObject)
@@ -660,9 +703,10 @@ class OpenAPIParser(JsonSchemaParser):
             ):
                 continue
 
-            if any(field.original_name == parameter_name for field in fields):
+            if parameter_name in seen_parameter_names:
                 msg = f"Parameter name '{parameter_name}' is used more than once."
                 raise Exception(msg)  # noqa: TRY002
+            seen_parameter_names.add(parameter_name)
 
             field_name, alias = self.model_resolver.get_valid_field_name_and_alias(
                 field_name=parameter_name,
@@ -707,14 +751,22 @@ class OpenAPIParser(JsonSchemaParser):
                     data_type = self.data_type(data_types=data_types)
                     # multiple data_type parse as non-constraints field
                     object_schema = None
+                # Handle multiple aliases (Pydantic v2 AliasChoices)
+                single_alias: str | None = None
+                validation_aliases: list[str] | None = None
+                if isinstance(alias, list):
+                    validation_aliases = alias
+                else:
+                    single_alias = alias
                 fields.append(
                     self.data_model_field_type(
                         name=field_name,
                         default=object_schema.default if object_schema else None,
                         data_type=data_type,
                         required=parameter.required,
-                        alias=alias,
-                        constraints=object_schema.dict()
+                        alias=single_alias,
+                        validation_aliases=validation_aliases,
+                        constraints=model_dump(object_schema, exclude_none=True)
                         if object_schema and self.is_constraints_field(object_schema)
                         else None,
                         nullable=object_schema.nullable
@@ -731,6 +783,7 @@ class OpenAPIParser(JsonSchemaParser):
                         use_annotated=self.use_annotated,
                         use_serialize_as_any=self.use_serialize_as_any,
                         use_field_description=self.use_field_description,
+                        use_field_description_example=self.use_field_description_example,
                         use_inline_field_description=self.use_inline_field_description,
                         use_default_kwarg=self.use_default_kwarg,
                         original_name=parameter_name,
@@ -746,8 +799,9 @@ class OpenAPIParser(JsonSchemaParser):
                 self._create_data_model(
                     fields=fields,
                     reference=reference,
-                    custom_base_class=self.base_class,
+                    custom_base_class=self._resolve_base_class(name),
                     custom_template_dir=self.custom_template_dir,
+                    extra_template_data=self.extra_template_data,
                     keyword_only=self.keyword_only,
                     treat_dot_as_module=self.treat_dot_as_module,
                     dataclass_arguments=self.dataclass_arguments,
@@ -763,7 +817,7 @@ class OpenAPIParser(JsonSchemaParser):
         path: list[str],
     ) -> None:
         """Parse an OpenAPI operation including parameters, request body, and responses."""
-        operation = Operation.parse_obj(raw_operation)
+        operation = model_validate(Operation, raw_operation)
         path_name, method = path[-2:]
         if self.use_operation_id_as_name:
             if not operation.operationId:
@@ -784,7 +838,7 @@ class OpenAPIParser(JsonSchemaParser):
         if operation.requestBody:
             if isinstance(operation.requestBody, ReferenceObject):
                 ref_model = self.get_ref_model(operation.requestBody.ref)
-                request_body = RequestBodyObject.parse_obj(ref_model)
+                request_body = model_validate(RequestBodyObject, ref_model)
             else:
                 request_body = operation.requestBody
             self.parse_request_body(
@@ -804,7 +858,7 @@ class OpenAPIParser(JsonSchemaParser):
                 path=[*path, "tags"],
             )
 
-    def parse_raw(self) -> None:
+    def parse_raw(self) -> None:  # noqa: PLR0912
         """Parse OpenAPI specification including schemas, paths, and operations."""
         for source, path_parts in self._get_context_source_path_parts():
             if self.validation:
@@ -814,24 +868,33 @@ class OpenAPIParser(JsonSchemaParser):
                     stacklevel=2,
                 )
 
-                try:
-                    from prance import BaseParser  # noqa: PLC0415
-
-                    BaseParser(
-                        spec_string=source.text,
-                        backend="openapi-spec-validator",
-                        encoding=self.encoding,
-                    )
-                except ImportError:  # pragma: no cover
+                if source.raw_data is not None:
                     warn(
-                        "Warning: Validation was skipped for OpenAPI. `prance` or `openapi-spec-validator` are not "
-                        "installed.\n"
-                        "To use --validation option after datamodel-code-generator 0.24.0, Please run `$pip install "
-                        "'datamodel-code-generator[validation]'`.\n",
+                        "Warning: Validation was skipped for dict input. "
+                        "The --validation option only works with file or text input.\n",
                         stacklevel=2,
                     )
+                else:
+                    try:
+                        from prance import BaseParser  # noqa: PLC0415
 
-            specification: dict[str, Any] = load_yaml_dict(source.text)
+                        BaseParser(
+                            spec_string=source.text,
+                            backend="openapi-spec-validator",
+                            encoding=self.encoding,
+                        )
+                    except ImportError:  # pragma: no cover
+                        warn(
+                            "Warning: Validation was skipped for OpenAPI. "
+                            "`prance` or `openapi-spec-validator` are not installed.\n"
+                            "To use --validation option after datamodel-code-generator 0.24.0, "
+                            "Please run `$pip install 'datamodel-code-generator[validation]'`.\n",
+                            stacklevel=2,
+                        )
+
+            specification: dict[str, Any] = (
+                dict(source.raw_data) if source.raw_data is not None else load_data(source.text)
+            )
             self.raw_obj = specification
             self._collect_discriminator_schemas()
             schemas: dict[str, Any] = specification.get("components", {}).get("schemas", {})
@@ -892,21 +955,22 @@ class OpenAPIParser(JsonSchemaParser):
     def _collect_discriminator_schemas(self) -> None:
         """Collect schemas with discriminators but no oneOf/anyOf, and find their subtypes."""
         schemas: dict[str, Any] = self.raw_obj.get("components", {}).get("schemas", {})
+        potential_subtypes: dict[str, list[str]] = {}
 
         for schema_name, schema in schemas.items():
             discriminator = schema.get("discriminator")
-            if not discriminator:
-                continue
+            if discriminator and not schema.get("oneOf") and not schema.get("anyOf"):
+                ref = f"#/components/schemas/{schema_name}"
+                self._discriminator_schemas[ref] = discriminator
 
-            if schema.get("oneOf") or schema.get("anyOf"):
-                continue
+            all_of = schema.get("allOf")
+            if all_of:
+                refs = [item.get("$ref") for item in all_of if item.get("$ref")]
+                if refs:
+                    potential_subtypes[schema_name] = refs
 
-            ref = f"#/components/schemas/{schema_name}"
-            self._discriminator_schemas[ref] = discriminator
-
-        for schema_name, schema in schemas.items():
-            for all_of_item in schema.get("allOf", []):
-                ref_in_allof = all_of_item.get("$ref")
-                if ref_in_allof and ref_in_allof in self._discriminator_schemas:
+        for schema_name, refs in potential_subtypes.items():
+            for ref_in_allof in refs:
+                if ref_in_allof in self._discriminator_schemas:
                     subtype_ref = f"#/components/schemas/{schema_name}"
                     self._discriminator_subtypes[ref_in_allof].append(subtype_ref)

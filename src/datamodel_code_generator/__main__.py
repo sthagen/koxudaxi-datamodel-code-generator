@@ -2,11 +2,40 @@
 
 from __future__ import annotations
 
+import sys
+
+# Fast path for --version (avoid importing heavy modules)
+if len(sys.argv) == 2 and sys.argv[1] in {"--version", "-V"}:  # pragma: no cover  # noqa: PLR2004
+    from importlib.metadata import version
+
+    print(f"datamodel-codegen {version('datamodel-code-generator')}")  # noqa: T201
+    sys.exit(0)
+
+# Fast path for --help (avoid importing heavy modules)
+if len(sys.argv) == 2 and sys.argv[1] in {"--help", "-h"}:  # pragma: no cover  # noqa: PLR2004
+    from datamodel_code_generator.arguments import arg_parser
+
+    arg_parser.print_help()
+    sys.exit(0)
+
+# Fast path for --generate-prompt
+if any(arg.startswith("--generate-prompt") for arg in sys.argv[1:]):  # pragma: no cover
+    from datamodel_code_generator.arguments import arg_parser
+
+    namespace = arg_parser.parse_args()
+    if namespace.generate_prompt is not None:
+        from datamodel_code_generator.prompt import generate_prompt
+
+        help_text = arg_parser.format_help()
+        prompt_output = generate_prompt(namespace, help_text)
+        print(prompt_output)  # noqa: T201
+        sys.exit(0)
+
 import difflib
 import json
+import os
 import shlex
 import signal
-import sys
 import tempfile
 import warnings
 from collections import defaultdict
@@ -17,7 +46,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypeAlias, Union, cast
 from urllib.parse import ParseResult, urlparse
 
-import argcomplete
 from pydantic import BaseModel
 
 from datamodel_code_generator import (
@@ -25,21 +53,27 @@ from datamodel_code_generator import (
     AllExportsCollisionStrategy,
     AllExportsScope,
     AllOfMergeMode,
+    CollapseRootModelsNameStrategy,
     DataclassArguments,
     DataModelType,
     Error,
+    FieldTypeCollisionStrategy,
     InputFileType,
+    InputModelRefStrategy,
     InvalidClassNameError,
     ModuleSplitMode,
+    NamingStrategy,
     OpenAPIScope,
     ReadOnlyWriteOnlyModelType,
     ReuseScope,
+    TargetPydanticVersion,
     enable_debug_message,
     generate,
 )
 from datamodel_code_generator.arguments import DEFAULT_ENCODING, arg_parser, namespace
 from datamodel_code_generator.format import (
     DEFAULT_FORMATTERS,
+    DateClassType,
     DatetimeClassType,
     Formatter,
     PythonVersion,
@@ -52,9 +86,9 @@ from datamodel_code_generator.parser import LiteralType  # noqa: TC001 # needed 
 from datamodel_code_generator.reference import is_url
 from datamodel_code_generator.types import StrictTypes  # noqa: TC001 # needed for pydantic
 from datamodel_code_generator.util import (
-    PYDANTIC_V2,
     ConfigDict,
     field_validator,
+    is_pydantic_v2,
     load_toml,
     model_validator,
 )
@@ -69,6 +103,7 @@ EXCLUDED_CONFIG_OPTIONS: frozenset[str] = frozenset({
     "check",
     "generate_pyproject_config",
     "generate_cli_command",
+    "generate_prompt",
     "ignore_pyproject",
     "profile",
     "version",
@@ -106,7 +141,7 @@ signal.signal(signal.SIGINT, sig_int_handler)
 class Config(BaseModel):
     """Configuration model for code generation."""
 
-    if PYDANTIC_V2:
+    if is_pydantic_v2():
         model_config = ConfigDict(arbitrary_types_allowed=True)  # pyright: ignore[reportAssignmentType]
 
         def get(self, item: str) -> Any:  # pragma: no cover
@@ -235,6 +270,45 @@ class Config(BaseModel):
             values["custom_formatters"] = custom_formatters.split(",")
         return values
 
+    @model_validator(mode="before")
+    def validate_duplicate_name_suffix(cls, values: dict[str, Any]) -> dict[str, Any]:  # noqa: N805
+        """Validate and parse duplicate_name_suffix JSON string."""
+        duplicate_name_suffix = values.get("duplicate_name_suffix")
+        if duplicate_name_suffix is not None and isinstance(duplicate_name_suffix, str):
+            try:
+                values["duplicate_name_suffix"] = json.loads(duplicate_name_suffix)
+            except json.JSONDecodeError as e:
+                msg = f"Invalid JSON for --duplicate-name-suffix: {e}"
+                raise Error(msg) from e
+        return values
+
+    @model_validator(mode="before")
+    def validate_naming_strategy_migration(cls, values: dict[str, Any]) -> dict[str, Any]:  # noqa: N805
+        """Migrate deprecated --parent-scoped-naming to --naming-strategy."""
+        if values.get("parent_scoped_naming") and not values.get("naming_strategy"):
+            values["naming_strategy"] = NamingStrategy.ParentPrefixed
+            warnings.warn(
+                "--parent-scoped-naming is deprecated. Use --naming-strategy parent-prefixed instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return values
+
+    @model_validator(mode="before")
+    def validate_class_decorators(cls, values: dict[str, Any]) -> dict[str, Any]:  # noqa: N805
+        """Validate and split class decorators, adding @ prefix if missing."""
+        class_decorators = values.get("class_decorators")
+        if class_decorators is not None:
+            decorators = []
+            for raw_decorator in class_decorators.split(","):
+                stripped = raw_decorator.strip()
+                if stripped:
+                    if not stripped.startswith("@"):
+                        stripped = f"@{stripped}"
+                    decorators.append(stripped)
+            values["class_decorators"] = decorators
+        return values
+
     __validate_output_datetime_class_err: ClassVar[str] = (
         '`--output-datetime-class` only allows "datetime" for '
         f"`--output-model-type` {DataModelType.DataclassesDataclass.value}"
@@ -255,7 +329,7 @@ class Config(BaseModel):
         "`--all-exports-collision-strategy` can only be used with `--all-exports-scope=recursive`."
     )
 
-    if PYDANTIC_V2:
+    if is_pydantic_v2():
 
         @model_validator()  # pyright: ignore[reportArgumentType]
         def validate_output_datetime_class(self: Self) -> Self:  # pyright: ignore[reportRedeclaration]
@@ -369,6 +443,8 @@ class Config(BaseModel):
             return values
 
     input: Optional[Union[Path, str]] = None  # noqa: UP007, UP045
+    input_model: Optional[str] = None  # noqa: UP045
+    input_model_ref_strategy: Optional[InputModelRefStrategy] = None  # noqa: UP045
     input_file_type: InputFileType = InputFileType.Auto
     output_model_type: DataModelType = DataModelType.PydanticBaseModel
     output: Optional[Path] = None  # noqa: UP045
@@ -376,8 +452,11 @@ class Config(BaseModel):
     debug: bool = False
     disable_warnings: bool = False
     target_python_version: PythonVersion = PythonVersionMin
+    target_pydantic_version: Optional[TargetPydanticVersion] = None  # noqa: UP045
     base_class: str = ""
+    base_class_map: Optional[dict[str, str]] = None  # noqa: UP045
     additional_imports: Optional[list[str]] = None  # noqa: UP045
+    class_decorators: Optional[list[str]] = None  # noqa: UP045
     custom_template_dir: Optional[Path] = None  # noqa: UP045
     extra_template_data: Optional[TextIOBase] = None  # noqa: UP045
     validation: bool = False
@@ -391,12 +470,14 @@ class Config(BaseModel):
     allow_population_by_field_name: bool = False
     allow_extra_fields: bool = False
     extra_fields: Optional[str] = None  # noqa: UP045
+    use_generic_base_class: bool = False
     use_default: bool = False
     force_optional: bool = False
     class_name: Optional[str] = None  # noqa: UP045
     use_standard_collections: bool = True
     use_schema_description: bool = False
     use_field_description: bool = False
+    use_field_description_example: bool = False
     use_attribute_docstrings: bool = False
     use_inline_field_description: bool = False
     use_default_kwarg: bool = False
@@ -405,6 +486,7 @@ class Config(BaseModel):
     shared_module_name: str = DEFAULT_SHARED_MODULE_NAME
     encoding: str = DEFAULT_ENCODING
     enum_field_as_literal: Optional[LiteralType] = None  # noqa: UP045
+    enum_field_as_literal_map: Optional[dict[str, str]] = None  # noqa: UP045
     ignore_enum_constraints: bool = False
     use_one_literal_as_default: bool = False
     use_enum_values_in_discriminator: bool = False
@@ -422,15 +504,19 @@ class Config(BaseModel):
     field_extra_keys: Optional[set[str]] = None  # noqa: UP045
     field_include_all_keys: bool = False
     field_extra_keys_without_x_prefix: Optional[set[str]] = None  # noqa: UP045
+    model_extra_keys: Optional[set[str]] = None  # noqa: UP045
+    model_extra_keys_without_x_prefix: Optional[set[str]] = None  # noqa: UP045
     openapi_scopes: Optional[list[OpenAPIScope]] = [OpenAPIScope.Schemas]  # noqa: UP045
     include_path_parameters: bool = False
     wrap_string_literal: Optional[bool] = None  # noqa: UP045
     use_title_as_name: bool = False
     use_operation_id_as_name: bool = False
     use_unique_items_as_set: bool = False
+    use_tuple_for_fixed_items: bool = False
     allof_merge_mode: AllOfMergeMode = AllOfMergeMode.Constraints
     http_headers: Optional[Sequence[tuple[str, str]]] = None  # noqa: UP045
     http_ignore_tls: bool = False
+    http_timeout: Optional[float] = None  # noqa: UP045
     use_annotated: bool = False
     use_serialize_as_any: bool = False
     use_non_positive_negative_number_constrained_types: bool = False
@@ -438,8 +524,11 @@ class Config(BaseModel):
     original_field_name_delimiter: Optional[str] = None  # noqa: UP045
     use_double_quotes: bool = False
     collapse_root_models: bool = False
+    collapse_root_models_name_strategy: Optional[CollapseRootModelsNameStrategy] = None  # noqa: UP045
+    collapse_reuse_models: bool = False
     skip_root_model: bool = False
     use_type_alias: bool = False
+    use_root_model_type_alias: bool = False
     special_field_name_prefix: Optional[str] = None  # noqa: UP045
     remove_special_field_name_prefix: bool = False
     capitalise_enum_members: bool = False
@@ -449,11 +538,13 @@ class Config(BaseModel):
     custom_formatters: Optional[list[str]] = None  # noqa: UP045
     custom_formatters_kwargs: Optional[TextIOBase] = None  # noqa: UP045
     use_pendulum: bool = False
+    use_standard_primitive_types: bool = False
     http_query_parameters: Optional[Sequence[tuple[str, str]]] = None  # noqa: UP045
-    treat_dot_as_module: bool = False
+    treat_dot_as_module: Optional[bool] = None  # noqa: UP045
     use_exact_imports: bool = False
     union_mode: Optional[UnionMode] = None  # noqa: UP045
     output_datetime_class: Optional[DatetimeClassType] = None  # noqa: UP045
+    output_date_class: Optional[DateClassType] = None  # noqa: UP045
     keyword_only: bool = False
     frozen_dataclasses: bool = False
     dataclass_arguments: Optional[DataclassArguments] = None  # noqa: UP045
@@ -462,12 +553,16 @@ class Config(BaseModel):
     use_default_factory_for_optional_nested_models: bool = False
     formatters: list[Formatter] = DEFAULT_FORMATTERS
     parent_scoped_naming: bool = False
+    naming_strategy: Optional[NamingStrategy] = None  # noqa: UP045
+    duplicate_name_suffix: Optional[dict[str, str]] = None  # noqa: UP045
     disable_future_imports: bool = False
     type_mappings: Optional[list[str]] = None  # noqa: UP045
+    type_overrides: Optional[dict[str, str]] = None  # noqa: UP045
     read_only_write_only_model_type: Optional[ReadOnlyWriteOnlyModelType] = None  # noqa: UP045
     use_status_code_in_response_name: bool = False
     all_exports_scope: Optional[AllExportsScope] = None  # noqa: UP045
     all_exports_collision_strategy: Optional[AllExportsCollisionStrategy] = None  # noqa: UP045
+    field_type_collision_strategy: Optional[FieldTypeCollisionStrategy] = None  # noqa: UP045
     module_split_mode: Optional[ModuleSplitMode] = None  # noqa: UP045
     watch: bool = False
     watch_delay: float = 0.5
@@ -487,6 +582,450 @@ class Config(BaseModel):
             setattr(self, field_name, getattr(parsed_args, field_name))
 
 
+def _extract_additional_imports(extra_template_data: defaultdict[str, dict[str, Any]]) -> list[str]:
+    """Extract additional_imports from extra_template_data entries."""
+    additional_imports: list[str] = []
+    for type_data in extra_template_data.values():
+        if "additional_imports" in type_data:
+            imports = type_data.pop("additional_imports")
+            if isinstance(imports, str):
+                if imports.strip():
+                    additional_imports.append(imports.strip())
+            elif isinstance(imports, list):
+                additional_imports.extend(item.strip() for item in imports if isinstance(item, str) and item.strip())
+    return additional_imports
+
+
+# Types that are lost during JSON Schema conversion and need to be preserved
+_PRESERVED_TYPE_ORIGINS: dict[type, str] = {}
+
+
+def _init_preserved_type_origins() -> dict[type, str]:
+    """Initialize preserved type origins mapping (lazy initialization)."""
+    from collections.abc import Mapping as ABCMapping  # noqa: PLC0415
+    from collections.abc import MutableMapping as ABCMutableMapping  # noqa: PLC0415
+    from collections.abc import MutableSequence as ABCMutableSequence  # noqa: PLC0415
+    from collections.abc import MutableSet as ABCMutableSet  # noqa: PLC0415
+    from collections.abc import Sequence as ABCSequence  # noqa: PLC0415
+    from collections.abc import Set as AbstractSet  # noqa: PLC0415
+
+    return {
+        set: "set",
+        frozenset: "frozenset",
+        AbstractSet: "AbstractSet",
+        ABCMutableSet: "MutableSet",
+        ABCMapping: "Mapping",
+        ABCMutableMapping: "MutableMapping",
+        ABCSequence: "Sequence",
+        ABCMutableSequence: "MutableSequence",
+    }
+
+
+def _get_preserved_type_origins() -> dict[type, str]:
+    """Get the preserved type origins mapping, initializing if needed."""
+    global _PRESERVED_TYPE_ORIGINS  # noqa: PLW0603
+    if not _PRESERVED_TYPE_ORIGINS:
+        _PRESERVED_TYPE_ORIGINS = _init_preserved_type_origins()
+    return _PRESERVED_TYPE_ORIGINS
+
+
+def _serialize_python_type(tp: type) -> str | None:
+    """Serialize Python type to a string for x-python-type field.
+
+    Returns None if the type doesn't need to be preserved (e.g., standard dict, list).
+    """
+    import types  # noqa: PLC0415
+    from typing import get_args, get_origin  # noqa: PLC0415
+
+    origin = get_origin(tp)
+    args = get_args(tp)
+    preserved_origins = _get_preserved_type_origins()
+
+    # Handle types.UnionType (X | Y syntax) in Python 3.10-3.13
+    # In Python 3.10-3.13, get_origin(X | Y) returns types.UnionType which is distinct from typing.Union
+    # In Python 3.14+, types.UnionType is the same as typing.Union, so this check is skipped
+    from typing import Union  # noqa: PLC0415
+
+    if (
+        hasattr(types, "UnionType")
+        and types.UnionType is not Union  # Only applies to Python 3.10-3.13
+        and origin is types.UnionType
+    ):
+        if args:
+            nested = [_serialize_python_type(a) for a in args]
+            if any(n is not None for n in nested):
+                return " | ".join(n or _simple_type_name(a) for n, a in zip(nested, args, strict=False))
+        return None  # pragma: no cover
+
+    if origin in preserved_origins:
+        type_name = preserved_origins[origin]
+        if args:
+            args_str = ", ".join(_serialize_python_type(a) or _simple_type_name(a) for a in args)
+            return f"{type_name}[{args_str}]"
+        return type_name  # pragma: no cover
+
+    if args:
+        nested = [_serialize_python_type(a) for a in args]
+        if any(n is not None for n in nested):
+            origin_name = _simple_type_name(origin or tp)
+            args_str = ", ".join(n or _simple_type_name(a) for n, a in zip(nested, args, strict=False))
+            return f"{origin_name}[{args_str}]"
+
+    return None
+
+
+def _simple_type_name(tp: type) -> str:
+    """Get a simple string representation of a type."""
+    if tp is type(None):
+        return "None"
+    if hasattr(tp, "__name__"):
+        return tp.__name__
+    return str(tp).replace("typing.", "")  # pragma: no cover
+
+
+def _collect_nested_models(model: type, visited: set[type] | None = None) -> dict[str, type]:
+    """Collect all nested types (BaseModel, Enum, dataclass) from a model's fields."""
+    if visited is None:
+        visited = set()
+
+    if model in visited:  # pragma: no cover
+        return {}
+    visited.add(model)
+
+    result: dict[str, type] = {}
+
+    model_fields = getattr(model, "model_fields", None)
+    if model_fields is not None:
+        for field_info in model_fields.values():
+            tp = field_info.annotation
+            _find_models_in_type(tp, result, visited)
+    else:
+        type_hints = _get_type_hints_safe(model)
+        for tp in type_hints.values():
+            _find_models_in_type(tp, result, visited)
+
+    return result
+
+
+def _find_models_in_type(tp: type, result: dict[str, type], visited: set[type]) -> None:
+    """Recursively find BaseModel subclasses, Enums, and dataclasses in a type annotation."""
+    from dataclasses import is_dataclass  # noqa: PLC0415
+    from enum import Enum as PyEnum  # noqa: PLC0415
+    from typing import get_args  # noqa: PLC0415
+
+    if isinstance(tp, type) and tp not in visited:
+        if issubclass(tp, BaseModel):
+            result[tp.__name__] = tp
+            result.update(_collect_nested_models(tp, visited))
+        elif issubclass(tp, PyEnum) or is_dataclass(tp):
+            result[tp.__name__] = tp
+
+    for arg in get_args(tp):
+        _find_models_in_type(arg, result, visited)
+
+
+def _get_type_hints_safe(obj: type) -> dict[str, Any]:
+    """Safely get type hints from a class, handling forward references."""
+    from typing import get_type_hints  # noqa: PLC0415
+
+    try:
+        return get_type_hints(obj)
+    except Exception:  # noqa: BLE001  # pragma: no cover
+        return getattr(obj, "__annotations__", {})
+
+
+def _add_python_type_to_properties(
+    properties: dict[str, Any],
+    model_fields: dict[str, Any],
+) -> None:
+    """Add x-python-type to properties dict for given model fields."""
+    for field_name, field_info in model_fields.items():
+        if field_name not in properties:  # pragma: no cover
+            continue
+        serialized = _serialize_python_type(field_info.annotation)
+        if serialized:
+            properties[field_name]["x-python-type"] = serialized
+
+
+def _add_python_type_info(schema: dict[str, Any], model: type) -> dict[str, Any]:
+    """Add x-python-type information to JSON Schema for types lost during conversion.
+
+    This preserves type information for Set, FrozenSet, Mapping, and other types
+    that are converted to array/object in JSON Schema.
+    """
+    model_fields = getattr(model, "model_fields", None)
+    if model_fields and "properties" in schema:
+        _add_python_type_to_properties(schema["properties"], model_fields)
+
+    if "$defs" in schema:
+        nested_models = _collect_nested_models(model)
+        model_name = getattr(model, "__name__", None)
+        if model_name and model_name in schema["$defs"]:
+            nested_models[model_name] = model
+        for def_name, def_schema in schema["$defs"].items():
+            if def_name not in nested_models or "properties" not in def_schema:  # pragma: no cover
+                continue
+            nested_model = nested_models[def_name]
+            nested_fields = getattr(nested_model, "model_fields", None)
+            if nested_fields:  # pragma: no branch
+                _add_python_type_to_properties(def_schema["properties"], nested_fields)
+
+    return schema
+
+
+def _add_python_type_info_generic(schema: dict[str, Any], obj: type) -> dict[str, Any]:
+    """Add x-python-type information using get_type_hints (for dataclass/TypedDict)."""
+    type_hints = _get_type_hints_safe(obj)
+    if type_hints and "properties" in schema:  # pragma: no branch
+        for field_name, field_type in type_hints.items():
+            if field_name in schema["properties"]:  # pragma: no branch
+                serialized = _serialize_python_type(field_type)
+                if serialized:
+                    schema["properties"][field_name]["x-python-type"] = serialized
+
+    return schema
+
+
+_TYPE_FAMILY_ENUM = "enum"
+_TYPE_FAMILY_PYDANTIC = "pydantic"
+_TYPE_FAMILY_DATACLASS = "dataclass"
+_TYPE_FAMILY_TYPEDDICT = "typeddict"
+_TYPE_FAMILY_OTHER = "other"
+
+
+def _get_type_family(tp: type) -> str:
+    """Determine the type family of a Python type."""
+    from dataclasses import is_dataclass  # noqa: PLC0415
+    from enum import Enum as PyEnum  # noqa: PLC0415
+
+    if isinstance(tp, type) and issubclass(tp, PyEnum):
+        return _TYPE_FAMILY_ENUM
+
+    if isinstance(tp, type) and issubclass(tp, BaseModel):
+        return _TYPE_FAMILY_PYDANTIC
+
+    if hasattr(tp, "__pydantic_fields__") and is_dataclass(tp):  # pragma: no cover
+        return _TYPE_FAMILY_PYDANTIC
+
+    if is_dataclass(tp):
+        return _TYPE_FAMILY_DATACLASS
+
+    if isinstance(tp, type) and hasattr(tp, "__required_keys__"):
+        return _TYPE_FAMILY_TYPEDDICT
+
+    return _TYPE_FAMILY_OTHER  # pragma: no cover
+
+
+def _filter_defs_by_strategy(
+    schema: dict[str, Any],
+    nested_models: dict[str, type],
+    input_model_family: str,
+    strategy: InputModelRefStrategy,
+) -> dict[str, Any]:
+    """Filter $defs based on ref strategy, marking reused types with x-python-import."""
+    if strategy == InputModelRefStrategy.RegenerateAll:  # pragma: no cover
+        return schema
+
+    if "$defs" not in schema:  # pragma: no cover
+        return schema
+
+    new_defs: dict[str, Any] = {}
+
+    for def_name, def_schema in schema["$defs"].items():
+        if def_name not in nested_models:  # pragma: no cover
+            new_defs[def_name] = def_schema
+            continue
+
+        nested_type = nested_models[def_name]
+        type_family = _get_type_family(nested_type)
+
+        should_reuse = strategy == InputModelRefStrategy.ReuseAll or (
+            strategy == InputModelRefStrategy.ReuseForeign and type_family != input_model_family
+        )
+
+        if should_reuse:
+            new_defs[def_name] = {
+                "x-python-import": {
+                    "module": nested_type.__module__,
+                    "name": nested_type.__name__,
+                },
+            }
+        else:
+            new_defs[def_name] = def_schema
+
+    return {**schema, "$defs": new_defs}
+
+
+def _load_model_schema(  # noqa: PLR0912, PLR0914, PLR0915
+    input_model: str,
+    input_file_type: InputFileType,
+    ref_strategy: InputModelRefStrategy | None = None,
+) -> dict[str, object]:
+    """Load schema from a Python import path.
+
+    Args:
+        input_model: Import path in 'module.path:ObjectName' format
+        input_file_type: Current input file type setting for validation
+        ref_strategy: Strategy for handling referenced types
+
+    Returns:
+        Schema dict
+
+    Raises:
+        Error: If format invalid, object cannot be loaded, or input_file_type invalid
+    """
+    import importlib.util  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+
+    modname, sep, qualname = input_model.rpartition(":")
+    if not sep or not modname:
+        msg = f"Invalid --input-model format: {input_model!r}. Expected 'module:Object' or 'path/to/file.py:Object'."
+        raise Error(msg)
+
+    is_path = "/" in modname or "\\" in modname
+    if not is_path and modname.endswith(".py"):
+        is_path = Path(modname).exists()
+
+    cwd = str(Path.cwd())
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)
+
+    if is_path:
+        file_path = Path(modname).resolve()
+        if not file_path.exists():
+            msg = f"File not found: {modname!r}"
+            raise Error(msg)
+        module_name = file_path.stem
+        spec = importlib.util.spec_from_file_location(module_name, file_path)
+        if spec is None or spec.loader is None:
+            msg = f"Cannot load module from {modname!r}"
+            raise Error(msg)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+    else:
+        try:
+            module = importlib.util.find_spec(modname)
+            if module is None:
+                msg = f"Cannot find module {modname!r}"
+                raise Error(msg)
+            module = importlib.import_module(modname)
+        except ImportError as e:
+            msg = f"Cannot import module {modname!r}: {e}"
+            raise Error(msg) from e
+
+    try:
+        obj = getattr(module, qualname)
+    except AttributeError as e:
+        msg = f"Module {modname!r} has no attribute {qualname!r}"
+        raise Error(msg) from e
+
+    if isinstance(obj, dict):
+        if input_file_type == InputFileType.Auto:
+            msg = "--input-file-type is required when --input-model points to a dict"
+            raise Error(msg)
+        return obj
+
+    if isinstance(obj, type) and issubclass(obj, BaseModel):
+        if input_file_type not in {InputFileType.Auto, InputFileType.JsonSchema}:
+            msg = (
+                f"--input-file-type must be 'jsonschema' (or omitted) "
+                f"when --input-model points to a Pydantic model, "
+                f"got '{input_file_type.value}'"
+            )
+            raise Error(msg)
+        if not hasattr(obj, "model_json_schema"):
+            msg = "--input-model with Pydantic model requires Pydantic v2 runtime. Please upgrade Pydantic to v2."
+            raise Error(msg)
+        schema = obj.model_json_schema()
+        schema = _add_python_type_info(schema, obj)
+
+        if ref_strategy and ref_strategy != InputModelRefStrategy.RegenerateAll:
+            nested_models = _collect_nested_models(obj)
+            model_name = getattr(obj, "__name__", None)
+            if model_name and "$defs" in schema and model_name in schema["$defs"]:  # pragma: no cover
+                nested_models[model_name] = obj
+            input_family = _get_type_family(obj)
+            schema = _filter_defs_by_strategy(schema, nested_models, input_family, ref_strategy)
+
+        return schema
+
+    # Check for dataclass or TypedDict - use TypeAdapter
+    from dataclasses import is_dataclass  # noqa: PLC0415
+
+    is_typed_dict = isinstance(obj, type) and hasattr(obj, "__required_keys__")
+    if is_dataclass(obj) or is_typed_dict:
+        if input_file_type not in {InputFileType.Auto, InputFileType.JsonSchema}:
+            msg = (
+                f"--input-file-type must be 'jsonschema' (or omitted) "
+                f"when --input-model points to a dataclass or TypedDict, "
+                f"got '{input_file_type.value}'"
+            )
+            raise Error(msg)
+        try:
+            from pydantic import TypeAdapter  # noqa: PLC0415
+
+            schema = TypeAdapter(obj).json_schema()
+            schema = _add_python_type_info_generic(schema, cast("type", obj))
+
+            if ref_strategy and ref_strategy != InputModelRefStrategy.RegenerateAll:
+                obj_type = cast("type", obj)
+                nested_models = _collect_nested_models(obj_type)
+                obj_name = getattr(obj, "__name__", None)
+                if obj_name and "$defs" in schema and obj_name in schema["$defs"]:  # pragma: no cover
+                    nested_models[obj_name] = obj_type
+                input_family = _get_type_family(obj_type)
+                schema = _filter_defs_by_strategy(schema, nested_models, input_family, ref_strategy)
+        except ImportError as e:
+            msg = "--input-model with dataclass/TypedDict requires Pydantic v2 runtime."
+            raise Error(msg) from e
+
+        return schema
+
+    msg = f"{qualname!r} is not a supported type. Supported: dict, Pydantic v2 BaseModel, dataclass, TypedDict"
+    raise Error(msg)
+
+
+def _resolve_profile_extends(
+    profiles: dict[str, Any],
+    profile_name: str,
+    visited: set[str] | None = None,
+) -> dict[str, Any]:
+    """Resolve profile inheritance via extends key."""
+    if visited is None:
+        visited = set()
+
+    if profile_name in visited:
+        chain = " -> ".join(visited) + f" -> {profile_name}"
+        msg = f"Circular extends detected: {chain}"
+        raise Error(msg)
+
+    if profile_name not in profiles:
+        available = list(profiles.keys()) if profiles else "none"
+        msg = f"Extended profile '{profile_name}' not found in pyproject.toml. Available profiles: {available}"
+        raise Error(msg)
+
+    visited.add(profile_name)
+    profile = profiles[profile_name]
+    extends = profile.get("extends")
+
+    if not extends:
+        return dict(profile.items())
+
+    parents = [extends] if isinstance(extends, str) else extends
+    result: dict[str, Any] = {}
+
+    for parent in parents:
+        if parent == profile_name:
+            msg = f"Profile '{profile_name}' cannot extend itself"
+            raise Error(msg)
+        parent_config = _resolve_profile_extends(profiles, parent, visited.copy())
+        result.update(parent_config)
+
+    result.update({k: v for k, v in profile.items() if k != "extends"})
+    return result
+
+
 def _get_pyproject_toml_config(source: Path, profile: str | None = None) -> dict[str, Any]:
     """Find and return the [tool.datamodel-codegen] section of the closest pyproject.toml if it exists."""
     current_path = source
@@ -504,11 +1043,10 @@ def _get_pyproject_toml_config(source: Path, profile: str | None = None) -> dict
                         available = list(profiles.keys()) if profiles else "none"
                         msg = f"Profile '{profile}' not found in pyproject.toml. Available profiles: {available}"
                         raise Error(msg)
-                    profile_config = profiles[profile]
-                    base_config.update(profile_config)
+                    resolved_profile = _resolve_profile_extends(profiles, profile)
+                    base_config.update(resolved_profile)
 
                 pyproject_config = {k.replace("-", "_"): v for k, v in base_config.items()}
-                # Replace US-american spelling if present (ignore if british spelling is present)
                 if (
                     "capitalize_enum_members" in pyproject_config and "capitalise_enum_members" not in pyproject_config
                 ):  # pragma: no cover
@@ -516,12 +1054,10 @@ def _get_pyproject_toml_config(source: Path, profile: str | None = None) -> dict
                 return pyproject_config
 
         if (current_path / ".git").exists():
-            # Stop early if we see a git repository root.
             break
 
         current_path = current_path.parent
 
-    # If profile was requested but no pyproject.toml config was found, raise an error
     if profile:
         msg = f"Profile '{profile}' requested but no [tool.datamodel-codegen] section found in pyproject.toml"
         raise Error(msg)
@@ -674,14 +1210,17 @@ def run_generate_from_config(  # noqa: PLR0913, PLR0917
     settings_path: Path | None = None,
 ) -> None:
     """Run code generation with the given config and parameters."""
-    generate(
+    result = generate(
         input_=input_,
         input_file_type=config.input_file_type,
         output=output,
         output_model_type=config.output_model_type,
         target_python_version=config.target_python_version,
+        target_pydantic_version=config.target_pydantic_version,
         base_class=config.base_class,
+        base_class_map=config.base_class_map,
         additional_imports=config.additional_imports,
+        class_decorators=config.class_decorators,
         custom_template_dir=config.custom_template_dir,
         validation=config.validation,
         field_constraints=config.field_constraints,
@@ -696,12 +1235,14 @@ def run_generate_from_config(  # noqa: PLR0913, PLR0917
         allow_population_by_field_name=config.allow_population_by_field_name,
         allow_extra_fields=config.allow_extra_fields,
         extra_fields=config.extra_fields,
+        use_generic_base_class=config.use_generic_base_class,
         apply_default_values_for_required_fields=config.use_default,
         force_optional_for_required_fields=config.force_optional,
         class_name=config.class_name,
         use_standard_collections=config.use_standard_collections,
         use_schema_description=config.use_schema_description,
         use_field_description=config.use_field_description,
+        use_field_description_example=config.use_field_description_example,
         use_attribute_docstrings=config.use_attribute_docstrings,
         use_inline_field_description=config.use_inline_field_description,
         use_default_kwarg=config.use_default_kwarg,
@@ -710,6 +1251,7 @@ def run_generate_from_config(  # noqa: PLR0913, PLR0917
         shared_module_name=config.shared_module_name,
         encoding=config.encoding,
         enum_field_as_literal=config.enum_field_as_literal,
+        enum_field_as_literal_map=config.enum_field_as_literal_map,
         ignore_enum_constraints=config.ignore_enum_constraints,
         use_one_literal_as_default=config.use_one_literal_as_default,
         use_enum_values_in_discriminator=config.use_enum_values_in_discriminator,
@@ -725,15 +1267,19 @@ def run_generate_from_config(  # noqa: PLR0913, PLR0917
         field_extra_keys=config.field_extra_keys,
         field_include_all_keys=config.field_include_all_keys,
         field_extra_keys_without_x_prefix=config.field_extra_keys_without_x_prefix,
+        model_extra_keys=config.model_extra_keys,
+        model_extra_keys_without_x_prefix=config.model_extra_keys_without_x_prefix,
         openapi_scopes=config.openapi_scopes,
         include_path_parameters=config.include_path_parameters,
         wrap_string_literal=config.wrap_string_literal,
         use_title_as_name=config.use_title_as_name,
         use_operation_id_as_name=config.use_operation_id_as_name,
         use_unique_items_as_set=config.use_unique_items_as_set,
+        use_tuple_for_fixed_items=config.use_tuple_for_fixed_items,
         allof_merge_mode=config.allof_merge_mode,
         http_headers=config.http_headers,
         http_ignore_tls=config.http_ignore_tls,
+        http_timeout=config.http_timeout,
         use_annotated=config.use_annotated,
         use_serialize_as_any=config.use_serialize_as_any,
         use_non_positive_negative_number_constrained_types=config.use_non_positive_negative_number_constrained_types,
@@ -741,8 +1287,11 @@ def run_generate_from_config(  # noqa: PLR0913, PLR0917
         original_field_name_delimiter=config.original_field_name_delimiter,
         use_double_quotes=config.use_double_quotes,
         collapse_root_models=config.collapse_root_models,
+        collapse_root_models_name_strategy=config.collapse_root_models_name_strategy,
+        collapse_reuse_models=config.collapse_reuse_models,
         skip_root_model=config.skip_root_model,
         use_type_alias=config.use_type_alias,
+        use_root_model_type_alias=config.use_root_model_type_alias,
         use_union_operator=config.use_union_operator,
         special_field_name_prefix=config.special_field_name_prefix,
         remove_special_field_name_prefix=config.remove_special_field_name_prefix,
@@ -753,11 +1302,13 @@ def run_generate_from_config(  # noqa: PLR0913, PLR0917
         custom_formatters=config.custom_formatters,
         custom_formatters_kwargs=custom_formatters_kwargs,
         use_pendulum=config.use_pendulum,
+        use_standard_primitive_types=config.use_standard_primitive_types,
         http_query_parameters=config.http_query_parameters,
         treat_dot_as_module=config.treat_dot_as_module,
         use_exact_imports=config.use_exact_imports,
         union_mode=config.union_mode,
         output_datetime_class=config.output_datetime_class,
+        output_date_class=config.output_date_class,
         keyword_only=config.keyword_only,
         frozen_dataclasses=config.frozen_dataclasses,
         no_alias=config.no_alias,
@@ -766,20 +1317,34 @@ def run_generate_from_config(  # noqa: PLR0913, PLR0917
         formatters=config.formatters,
         settings_path=settings_path,
         parent_scoped_naming=config.parent_scoped_naming,
+        naming_strategy=config.naming_strategy,
+        duplicate_name_suffix=config.duplicate_name_suffix,
         dataclass_arguments=config.dataclass_arguments,
         disable_future_imports=config.disable_future_imports,
         type_mappings=config.type_mappings,
+        type_overrides=config.type_overrides,
         read_only_write_only_model_type=config.read_only_write_only_model_type,
         use_status_code_in_response_name=config.use_status_code_in_response_name,
         all_exports_scope=config.all_exports_scope,
         all_exports_collision_strategy=config.all_exports_collision_strategy,
+        field_type_collision_strategy=config.field_type_collision_strategy,
         module_split_mode=config.module_split_mode,
     )
+
+    if output is None and result is not None:  # pragma: no cover
+        if isinstance(result, str):
+            sys.stdout.write(result + "\n")
+        else:
+            for content in result.values():
+                sys.stdout.write(content + "\n")
 
 
 def main(args: Sequence[str] | None = None) -> Exit:  # noqa: PLR0911, PLR0912, PLR0914, PLR0915
     """Execute datamodel code generation from command-line arguments."""
-    argcomplete.autocomplete(arg_parser)
+    if "_ARGCOMPLETE" in os.environ:  # pragma: no cover
+        import argcomplete  # noqa: PLC0415
+
+        argcomplete.autocomplete(arg_parser)
 
     if args is None:  # pragma: no cover
         args = sys.argv[1:]
@@ -795,6 +1360,14 @@ def main(args: Sequence[str] | None = None) -> Exit:  # noqa: PLR0911, PLR0912, 
     if namespace.generate_pyproject_config:
         config_output = generate_pyproject_config(namespace)
         print(config_output)  # noqa: T201
+        return Exit.OK
+
+    if namespace.generate_prompt is not None:
+        from datamodel_code_generator.prompt import generate_prompt  # noqa: PLC0415
+
+        help_text = arg_parser.format_help()
+        prompt_output = generate_prompt(namespace, help_text)
+        print(prompt_output)  # noqa: T201
         return Exit.OK
 
     # Handle --ignore-pyproject and --profile options
@@ -825,12 +1398,19 @@ def main(args: Sequence[str] | None = None) -> Exit:  # noqa: PLR0911, PLR0912, 
         print(e.message, file=sys.stderr)  # noqa: T201
         return Exit.ERROR
 
-    if not config.input and not config.url and sys.stdin.isatty():
+    if not config.input and not config.url and not config.input_model and sys.stdin.isatty():
         print(  # noqa: T201
-            "Not Found Input: require `stdin` or arguments `--input` or `--url`",
+            "Not Found Input: require `stdin` or arguments `--input`, `--url`, or `--input-model`",
             file=sys.stderr,
         )
         arg_parser.print_help()
+        return Exit.ERROR
+
+    if config.input_model and (config.input or config.url):
+        print(  # noqa: T201
+            "Error: --input-model cannot be used with --input or --url",
+            file=sys.stderr,
+        )
         return Exit.ERROR
 
     if config.check and config.output is None:
@@ -843,6 +1423,13 @@ def main(args: Sequence[str] | None = None) -> Exit:  # noqa: PLR0911, PLR0912, 
     if config.watch and config.check:
         print(  # noqa: T201
             "Error: --watch and --check cannot be used together",
+            file=sys.stderr,
+        )
+        return Exit.ERROR
+
+    if config.watch and config.input_model:
+        print(  # noqa: T201
+            "Error: --watch cannot be used with --input-model",
             file=sys.stderr,
         )
         return Exit.ERROR
@@ -869,11 +1456,26 @@ def main(args: Sequence[str] | None = None) -> Exit:  # noqa: PLR0911, PLR0912, 
     if config.disable_warnings:
         warnings.simplefilter("ignore")
 
+    if not is_pydantic_v2():
+        warnings.warn(
+            "Pydantic v1 runtime support is deprecated and will be removed in a future version. "
+            "Please upgrade to Pydantic v2.",
+            DeprecationWarning,
+            stacklevel=1,
+        )
+
     if config.reuse_scope == ReuseScope.Tree and not config.reuse_model:
         print(  # noqa: T201
             "Warning: --reuse-scope=tree has no effect without --reuse-model",
             file=sys.stderr,
         )
+
+    if config.collapse_root_models_name_strategy and not config.collapse_root_models:
+        print(  # noqa: T201
+            "Error: --collapse-root-models-name-strategy requires --collapse-root-models",
+            file=sys.stderr,
+        )
+        return Exit.ERROR
 
     if (
         config.use_specialized_enum
@@ -900,6 +1502,15 @@ def main(args: Sequence[str] | None = None) -> Exit:  # noqa: PLR0911, PLR0912, 
                 print(f"Unable to load extra template data: {e}", file=sys.stderr)  # noqa: T201
                 return Exit.ERROR
 
+        # Extract additional_imports from extra_template_data entries and merge with config
+        assert extra_template_data is not None
+        additional_imports_from_template_data = _extract_additional_imports(extra_template_data)
+        if additional_imports_from_template_data:
+            if config.additional_imports is None:
+                config.additional_imports = additional_imports_from_template_data
+            else:
+                config.additional_imports = list(config.additional_imports) + additional_imports_from_template_data
+
     if config.aliases is None:
         aliases = None
     else:
@@ -910,10 +1521,12 @@ def main(args: Sequence[str] | None = None) -> Exit:  # noqa: PLR0911, PLR0912, 
                 print(f"Unable to load alias mapping: {e}", file=sys.stderr)  # noqa: T201
                 return Exit.ERROR
         if not isinstance(aliases, dict) or not all(
-            isinstance(k, str) and isinstance(v, str) for k, v in aliases.items()
+            isinstance(k, str) and (isinstance(v, str) or (isinstance(v, list) and all(isinstance(i, str) for i in v)))
+            for k, v in aliases.items()
         ):
             print(  # noqa: T201
-                'Alias mapping must be a JSON string mapping (e.g. {"from": "to", ...})',
+                "Alias mapping must be a JSON mapping with string keys and string or list of strings values "
+                '(e.g. {"from": "to", "field": ["alias1", "alias2"]})',
                 file=sys.stderr,
             )
             return Exit.ERROR
@@ -954,15 +1567,28 @@ def main(args: Sequence[str] | None = None) -> Exit:  # noqa: PLR0911, PLR0912, 
         is_directory_output = False
 
     try:
+        input_: Path | str | ParseResult
+        if config.input_model:
+            schema = _load_model_schema(
+                config.input_model,
+                config.input_file_type,
+                config.input_model_ref_strategy,
+            )
+            input_ = json.dumps(schema)
+            if config.input_file_type == InputFileType.Auto:
+                config.input_file_type = InputFileType.JsonSchema
+        else:
+            input_ = config.url or config.input or sys.stdin.read()
+
         run_generate_from_config(
             config=config,
-            input_=config.url or config.input or sys.stdin.read(),
+            input_=input_,
             output=generate_output,
             extra_template_data=extra_template_data,
             aliases=aliases,
             command_line=shlex.join(["datamodel-codegen", *args]) if config.enable_command_header else None,
             custom_formatters_kwargs=custom_formatters_kwargs,
-            settings_path=config.output if config.check else None,
+            settings_path=config.output,
         )
     except InvalidClassNameError as e:
         print(f"{e} You have to set `--class-name` option", file=sys.stderr)  # noqa: T201

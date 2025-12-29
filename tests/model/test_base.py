@@ -12,6 +12,7 @@ from datamodel_code_generator.model.base import (
     DataModel,
     DataModelFieldBase,
     TemplateBase,
+    escape_docstring,
     get_module_path,
     sanitize_module_name,
 )
@@ -303,7 +304,7 @@ def test_sanitize_module_name(name: str, expected_true: str, expected_false: str
     ("treat_dot_as_module", "expected"),
     [
         (True, ["inputs", "array_commons.schema", "array-commons"]),
-        (False, ["inputs", "array_commons_schema", "array-commons"]),
+        (False, ["inputs", "array_commons_schema"]),
     ],
 )
 def test_get_module_path_with_file_path(treat_dot_as_module: bool, expected: list[str]) -> None:
@@ -313,11 +314,17 @@ def test_get_module_path_with_file_path(treat_dot_as_module: bool, expected: lis
     assert result == expected
 
 
-@pytest.mark.parametrize("treat_dot_as_module", [True, False])
-def test_get_module_path_without_file_path(treat_dot_as_module: bool) -> None:
-    """Test module path generation without a file path."""
-    result = get_module_path("my_module.submodule", None, treat_dot_as_module=treat_dot_as_module)
+def test_get_module_path_without_file_path_treat_dot_true() -> None:
+    """Test module path generation without a file path with treat_dot_as_module=True."""
+    result = get_module_path("my_module.submodule", None, treat_dot_as_module=True)
     expected = ["my_module"]
+    assert result == expected
+
+
+def test_get_module_path_without_file_path_treat_dot_false() -> None:
+    """Test module path generation without a file path with treat_dot_as_module=False."""
+    result = get_module_path("my_module.submodule", None, treat_dot_as_module=False)
+    expected: list[str] = []
     assert result == expected
 
 
@@ -327,9 +334,9 @@ def test_get_module_path_without_file_path(treat_dot_as_module: bool) -> None:
         (True, "a.b.c", ["a", "b"]),
         (True, "simple", []),
         (True, "with.dot", ["with"]),
-        (False, "a.b.c", ["a", "b"]),
+        (False, "a.b.c", []),
         (False, "simple", []),
-        (False, "with.dot", ["with"]),
+        (False, "with.dot", []),
     ],
 )
 def test_get_module_path_without_file_path_parametrized(
@@ -368,3 +375,74 @@ def test_copy_deep_with_extras() -> None:
     assert copied.extras == {"key": "value", "nested": {"inner": 1}}
     copied.extras["key"] = "modified"
     assert field.extras["key"] == "value"
+
+
+@pytest.mark.parametrize(
+    ("input_value", "expected"),
+    [
+        (None, None),
+        ("", ""),
+        ("no special chars", "no special chars"),
+        # Backslash escaping
+        (r"backslash \ here", r"backslash \\ here"),
+        (r"path C:\Users\name", r"path C:\\Users\\name"),
+        (r"escape \n sequence", r"escape \\n sequence"),
+        # Triple quote escaping
+        ('"""', r"\"\"\""),
+        ('contains """quotes"""', r"contains \"\"\"quotes\"\"\""),
+        # Both backslash and triple quotes
+        (r'both \ and """', r"both \\ and \"\"\""),
+        (r'path C:\"""file"""', r"path C:\\\"\"\"file\"\"\""),
+    ],
+)
+def test_escape_docstring(input_value: str | None, expected: str | None) -> None:
+    """Test escape_docstring properly escapes special characters.
+
+    This tests issue #1808 where backslashes and triple quotes in docstrings
+    were not escaped, causing Python syntax errors and type checker warnings.
+    """
+    assert escape_docstring(input_value) == expected
+
+
+def test_inline_field_docstring_escapes_special_chars() -> None:
+    """Test inline_field_docstring property escapes special characters."""
+    field = DataModelFieldBase(
+        name="test_field",
+        data_type=DataType(type="str"),
+        required=True,
+        extras={"description": r"Path like C:\Users\name"},
+        use_inline_field_description=True,
+    )
+    assert field.inline_field_docstring == r'"""Path like C:\\Users\\name"""'
+
+
+def test_inline_field_docstring_escapes_triple_quotes() -> None:
+    """Test inline_field_docstring property escapes triple quotes."""
+    field = DataModelFieldBase(
+        name="test_field",
+        data_type=DataType(type="str"),
+        required=True,
+        extras={"description": 'Contains """quotes"""'},
+        use_inline_field_description=True,
+    )
+    assert field.inline_field_docstring == r'"""Contains \"\"\"quotes\"\"\""""'
+
+
+def test_data_type_manager_unknown_type_raises_error() -> None:
+    """Test DataTypeManager raises NotImplementedError for unknown types."""
+    from datamodel_code_generator.model.types import DataTypeManager
+
+    manager = DataTypeManager()
+    del manager.type_map[Types.path]
+
+    with pytest.raises(NotImplementedError, match="Type mapping for 'path' not implemented"):
+        manager.get_data_type(Types.path)
+
+
+def test_data_type_manager_has_all_types() -> None:
+    """Test DataTypeManager has mappings for all Types enum members."""
+    from datamodel_code_generator.model.types import DataTypeManager
+
+    manager = DataTypeManager()
+    missing_types = [t for t in Types if t not in manager.type_map]
+    assert not missing_types, f"Missing type mappings: {[t.name for t in missing_types]}"

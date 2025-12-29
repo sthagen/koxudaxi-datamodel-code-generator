@@ -42,6 +42,7 @@ class Enum(DataModel):
     TEMPLATE_FILE_PATH: ClassVar[str] = "Enum.jinja2"
     BASE_CLASS: ClassVar[str] = "enum.Enum"
     DEFAULT_IMPORTS: ClassVar[tuple[Import, ...]] = (IMPORT_ENUM,)
+    SUPPORTS_GENERIC_BASE_CLASS: ClassVar[bool] = False
 
     def __init__(  # noqa: PLR0913
         self,
@@ -60,7 +61,7 @@ class Enum(DataModel):
         default: Any = UNDEFINED,
         nullable: bool = False,
         keyword_only: bool = False,
-        treat_dot_as_module: bool = False,
+        treat_dot_as_module: bool | None = None,
     ) -> None:
         """Initialize Enum with optional specialized base class based on type."""
         super().__init__(

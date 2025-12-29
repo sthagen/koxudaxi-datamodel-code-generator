@@ -3,14 +3,20 @@
 🚀 Generate Python data models from schema definitions in seconds.
 
 [![PyPI version](https://badge.fury.io/py/datamodel-code-generator.svg)](https://pypi.python.org/pypi/datamodel-code-generator)
+[![Conda-forge](https://img.shields.io/conda/v/conda-forge/datamodel-code-generator)](https://anaconda.org/conda-forge/datamodel-code-generator)
 [![Downloads](https://pepy.tech/badge/datamodel-code-generator/month)](https://pepy.tech/project/datamodel-code-generator)
-[![Python Version](https://img.shields.io/pypi/pyversions/datamodel-code-generator)](https://pypi.python.org/pypi/datamodel-code-generator)
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/datamodel-code-generator)](https://pypi.python.org/pypi/datamodel-code-generator)
+[![codecov](https://codecov.io/gh/koxudaxi/datamodel-code-generator/graph/badge.svg?token=plzSSFb9Li)](https://codecov.io/gh/koxudaxi/datamodel-code-generator)
+![license](https://img.shields.io/github/license/koxudaxi/datamodel-code-generator.svg)
+[![Pydantic v1](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pydantic/pydantic/main/docs/badge/v1.json)](https://pydantic.dev)
+[![Pydantic v2](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pydantic/pydantic/main/docs/badge/v2.json)](https://pydantic.dev)
 
 ---
 
 ## ✨ What it does
 
 - 📄 Converts **OpenAPI 3**, **JSON Schema**, **GraphQL**, and raw data (JSON/YAML/CSV) into Python models
+- 🐍 Generates from **existing Python types** (Pydantic, dataclass, TypedDict) via `--input-model`
 - 🎯 Generates **Pydantic v1/v2**, **dataclasses**, **TypedDict**, or **msgspec** output
 - 🔗 Handles complex schemas: `$ref`, `allOf`, `oneOf`, `anyOf`, enums, and nested types
 - ✅ Produces type-safe, validated code ready for your IDE and type checker
@@ -89,6 +95,7 @@ datamodel-codegen --input pet.json --input-file-type jsonschema --output-model-t
 | 📋 [JSON Schema](jsonschema.md) | `.json` | Data validation schemas |
 | 🔷 [GraphQL](graphql.md) | `.graphql` | GraphQL type definitions |
 | 📊 [JSON/YAML Data](jsondata.md) | `.json`, `.yaml` | Infer schema from data |
+| 🐍 [Python Models](python-model.md) | `.py` | Pydantic, dataclass, TypedDict |
 
 ---
 
@@ -117,6 +124,16 @@ See [Supported Data Types](supported-data-types.md) for the full list.
 
 ## 🍳 Common Recipes
 
+### 🤖 Get CLI Help from LLMs
+
+Generate a prompt to ask LLMs about CLI options:
+
+```bash
+datamodel-codegen --generate-prompt "Best options for Pydantic v2?" | claude -p
+```
+
+See [LLM Integration](llm-integration.md) for more examples.
+
 ### 🌐 Generate from URL {#http-extra-option}
 
 ```bash
@@ -131,7 +148,6 @@ datamodel-codegen --url https://example.com/api/openapi.yaml --output model.py
 input = "schema.yaml"
 output = "src/models.py"
 output-model-type = "pydantic_v2.BaseModel"
-snake-case-field = true
 ```
 
 Then simply run:
@@ -142,21 +158,18 @@ datamodel-codegen
 
 See [pyproject.toml Configuration](pyproject_toml.md) for more options.
 
-### 🐍 Snake-case field names
-
-```bash
-datamodel-codegen --snake-case-field --input schema.json --output model.py
-```
-
 ### 🔄 CI/CD Integration
 
-Verify generated code stays in sync with schemas using `--check`:
+Validate generated models in your CI pipeline:
 
-```bash
-datamodel-codegen --input schema.yaml --output models.py --disable-timestamp --check
+```yaml title=".github/workflows/validate-models.yml"
+- uses: koxudaxi/datamodel-code-generator@0.44.0
+  with:
+    input: schemas/api.yaml
+    output: src/models/api.py
 ```
 
-See [CI/CD Integration](ci-cd.md) for GitHub Actions and more.
+See [CI/CD Integration](ci-cd.md) for more options.
 
 ---
 

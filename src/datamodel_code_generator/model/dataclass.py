@@ -7,7 +7,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
-from datamodel_code_generator import DataclassArguments, DatetimeClassType, PythonVersion, PythonVersionMin
+from datamodel_code_generator import (
+    DataclassArguments,
+    DateClassType,
+    DatetimeClassType,
+    PythonVersion,
+    PythonVersionMin,
+)
 from datamodel_code_generator.imports import (
     IMPORT_DATE,
     IMPORT_DATETIME,
@@ -20,7 +26,7 @@ from datamodel_code_generator.model.base import UNDEFINED
 from datamodel_code_generator.model.imports import IMPORT_DATACLASS, IMPORT_FIELD
 from datamodel_code_generator.model.pydantic.base_model import Constraints  # noqa: TC001 # needed for pydantic
 from datamodel_code_generator.model.types import DataTypeManager as _DataTypeManager
-from datamodel_code_generator.model.types import type_map_factory
+from datamodel_code_generator.model.types import standard_primitive_type_map_factory, type_map_factory
 from datamodel_code_generator.reference import Reference
 from datamodel_code_generator.types import DataType, StrictTypes, Types, chain_as_tuple
 
@@ -42,6 +48,8 @@ class DataClass(DataModel):
 
     TEMPLATE_FILE_PATH: ClassVar[str] = "dataclass.jinja2"
     DEFAULT_IMPORTS: ClassVar[tuple[Import, ...]] = (IMPORT_DATACLASS,)
+    SUPPORTS_DISCRIMINATOR: ClassVar[bool] = True
+    SUPPORTS_KW_ONLY: ClassVar[bool] = True
 
     def __init__(  # noqa: PLR0913
         self,
@@ -60,7 +68,7 @@ class DataClass(DataModel):
         nullable: bool = False,
         keyword_only: bool = False,
         frozen: bool = False,
-        treat_dot_as_module: bool = False,
+        treat_dot_as_module: bool | None = None,
         dataclass_arguments: DataclassArguments | None = None,
     ) -> None:
         """Initialize dataclass with fields sorted by field assignment requirement."""
@@ -215,23 +223,26 @@ class DataTypeManager(_DataTypeManager):
         use_decimal_for_multiple_of: bool = False,  # noqa: FBT001, FBT002
         use_union_operator: bool = False,  # noqa: FBT001, FBT002
         use_pendulum: bool = False,  # noqa: FBT001, FBT002
+        use_standard_primitive_types: bool = False,  # noqa: FBT001, FBT002
         target_datetime_class: DatetimeClassType = DatetimeClassType.Datetime,
-        treat_dot_as_module: bool = False,  # noqa: FBT001, FBT002
+        target_date_class: DateClassType | None = None,  # noqa: ARG002
+        treat_dot_as_module: bool | None = None,  # noqa: FBT001
         use_serialize_as_any: bool = False,  # noqa: FBT001, FBT002
     ) -> None:
         """Initialize type manager with datetime type mapping."""
         super().__init__(
-            python_version,
-            use_standard_collections,
-            use_generic_container_types,
-            strict_types,
-            use_non_positive_negative_number_constrained_types,
-            use_decimal_for_multiple_of,
-            use_union_operator,
-            use_pendulum,
-            target_datetime_class,
-            treat_dot_as_module,
-            use_serialize_as_any,
+            python_version=python_version,
+            use_standard_collections=use_standard_collections,
+            use_generic_container_types=use_generic_container_types,
+            strict_types=strict_types,
+            use_non_positive_negative_number_constrained_types=use_non_positive_negative_number_constrained_types,
+            use_decimal_for_multiple_of=use_decimal_for_multiple_of,
+            use_union_operator=use_union_operator,
+            use_pendulum=use_pendulum,
+            use_standard_primitive_types=use_standard_primitive_types,
+            target_datetime_class=target_datetime_class,
+            treat_dot_as_module=treat_dot_as_module,
+            use_serialize_as_any=use_serialize_as_any,
         )
 
         datetime_map = (
@@ -245,7 +256,12 @@ class DataTypeManager(_DataTypeManager):
             else {}
         )
 
+        standard_primitive_map = (
+            standard_primitive_type_map_factory(self.data_type) if use_standard_primitive_types else {}
+        )
+
         self.type_map: dict[Types, DataType] = {
             **type_map_factory(self.data_type),
             **datetime_map,
+            **standard_primitive_map,
         }

@@ -4,6 +4,254 @@ All notable changes to this project are documented in this file.
 This changelog is automatically generated from GitHub Releases.
 
 ---
+## [0.50.0](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.50.0) - 2025-12-28
+
+## Breaking Changes
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Code Generation Changes
+* Models with `unevaluatedProperties` now generate extra field configuration - JSON Schemas containing `unevaluatedProperties: false` will now generate models with `extra='forbid'` (Pydantic v2) or `extra = Extra.forbid` (Pydantic v1), and schemas with `unevaluatedProperties: true` will generate `extra='allow'`. Previously this keyword was ignored. This may cause validation errors for data that was previously accepted. (#2797)
+  Example - a schema like:
+  ```json
+  {
+    "title": "Resource",
+    "type": "object",
+    "properties": { "name": { "type": "string" } },
+    "unevaluatedProperties": false
+  }
+  ```
+  Previously generated:
+  ```python
+  class Resource(BaseModel):
+      name: str | None = None
+  ```
+  Now generates:
+  ```python
+  class Resource(BaseModel):
+      model_config = ConfigDict(extra='forbid')
+      name: str | None = None
+  ```
+
+### Default Behavior Changes
+* Default encoding changed from system locale to UTF-8 - The default encoding for reading input files and writing output is now always `utf-8` instead of the system's locale-preferred encoding (e.g., `cp1252` on Windows). Users who rely on locale-specific encoding must now explicitly use `--encoding` to specify their desired encoding (#2802)
+
+## What's Changed
+* Fix missing model_config in query parameter classes by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2795
+* Escape backslash and triple quotes in docstrings by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2796
+* Add unevaluatedProperties support by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2797
+* Expose schema $id and path to template context by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2798
+* Improve CLI startup time with lazy imports by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2799
+* Use UTF-8 as default encoding instead of locale-preferred by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2802
+* Add model-level json_schema_extra support for Pydantic v2 by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2803
+* Add input_model field support to cli_doc marker by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2805
+* Add dict input support for generate() function by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2806
+* Optimize extra_template_data copy in DataModel init by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2811
+* Add LRU cache for file loading and path existence checks by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2810
+* Optimize JSON/YAML loading with auto-detection and json.load by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2809
+* Migrate docs deployment to Cloudflare Pages by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2812
+* Optimize CI workflow with tox cache and remove dev check by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2815
+* Fix superfluous None when using $ref with nullable type aliases by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2814
+* Remove tox cache that breaks Windows CI by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2816
+* Add --input-model option for Pydantic models and dicts by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2804
+* Add ReadOnly support for TypedDict with --use-frozen-field by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2813
+* Exclude perf tests from regular test runs by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2817
+* Add extreme-scale performance tests with dynamic schema generation by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2818
+* Add ULID type support by @ahmetveburak in https://github.com/koxudaxi/datamodel-code-generator/pull/2820
+* Add --enum-field-as-literal-map option and x-enum-field-as-literal schema extension by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2821
+* Fix propertyNames constraint ignored when using $ref to enum definition by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2824
+* Reduce CodSpeed benchmark tests for faster CI by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2826
+* Optimize propertyNames $ref handling by calling get_ref_data_type directly by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2825
+* Add missing path and ulid type mappings to TypedDict type manager by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2828
+* Fix --check to use output path's pyproject.toml settings by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2831
+
+## New Contributors
+* @ahmetveburak made their first contribution in https://github.com/koxudaxi/datamodel-code-generator/pull/2820
+
+**Full Changelog**: https://github.com/koxudaxi/datamodel-code-generator/compare/0.49.0...0.50.0
+
+---
+
+## [0.49.0](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.49.0) - 2025-12-25
+
+## Breaking Changes
+
+  ### SchemaParseError for Invalid Schema Data
+  * Schema validation errors now raise `SchemaParseError` instead of Pydantic `ValidationError` - When parsing invalid schema data (e.g., `"minimum": "not_a_number"`), the library now raises `SchemaParseError` instead of passing through Pydantic's `ValidationError`. Users catching `pydantic.ValidationError` for schema validation failures should update to catch `SchemaParseError`. The original error is preserved in the `original_error` attribute. (#2786)
+
+  ## Bug Fixes
+
+  ### CLI Now Correctly Outputs to stdout
+  * Fixed CLI to actually output to stdout when `--output` is not specified - The `--output` argument has always documented `(default: stdout)` in `--help`, but previously no output was produced. Now works as documented. (#2787)
+
+  ## Other Notable Changes
+
+  * `generate()` function now returns `str | GeneratedModules | None` instead of `None` - Existing code ignoring the return value is unaffected. (#2787)
+  * Error message for multi-module output without directory changed to be more descriptive. (#2787)
+
+## What's Changed
+* Merge duplicate breaking change headings in release notes by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2776
+* Optimize O(n²) algorithms and reduce redundant iterations by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2778
+* Optimize performance with LRU caching and O(n) algorithms by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2777
+* Optimize Jinja2 environment caching and ruff batch formatting by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2779
+* Remove YAML parsing cache and deepcopy overhead by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2781
+* Add performance e2e tests with large schema fixtures by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2782
+* Convert Import class from Pydantic to dataclass for performance by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2783
+* Add schema path context to error messages by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2786
+* Return str or dict when output=None in generate() by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2787
+* Add --http-timeout CLI option by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2788
+* Pass schema extensions to templates by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2790
+* Add propertyNames and x-propertyNames support by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2789
+* Add support for additional_imports in extra-template-data JSON by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2793
+* Update zensical to 0.0.15 by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2794
+* Add --use-field-description-example option by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2792
+* Add --collapse-root-models-name-strategy option by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2791
+
+
+**Full Changelog**: https://github.com/koxudaxi/datamodel-code-generator/compare/0.48.0...0.49.0
+
+---
+
+## [0.48.0](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.48.0) - 2025-12-24
+
+## Breaking Changes
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Code Generation Changes
+* Custom class name generator now applied consistently during duplicate name resolution - Previously, when using `custom_class_name_generator`, the default PascalCase naming was incorrectly applied during duplicate name resolution. Now the custom generator is respected throughout, which may change generated class names. For example, a class name like `nested_object_result` with a custom generator `f"Custom{name}"` will now produce `CustomNested_object_result` instead of `CustomNestedObjectResult`. Users relying on the previous behavior should update their code to expect the new, correct class names. (#2757)
+
+* YAML 1.1 boolean keywords now preserved as strings in enums - Values like `YES`, `NO`, `on`, `off`, `y`, `n` that were previously converted to Python booleans are now preserved as their original string values. This fixes issues where string enum values were incorrectly converted but may change generated output for schemas that relied on the previous behavior. For example, a YAML enum with `YES` will now generate `YES = 'YES'` instead of being converted to `True`. (#2767)
+
+### Default Behavior Changes
+* YAML boolean parsing restricted to YAML 1.2 semantics - Only `true`, `false`, `True`, `False`, `TRUE`, `FALSE` are now recognized as boolean values. YAML 1.1 boolean aliases (`yes`, `no`, `on`, `off`, `y`, `n`, etc.) are no longer parsed as booleans and will be treated as strings. Non-lowercase forms (`True`, `False`, `TRUE`, `FALSE`) now emit a deprecation warning indicating future versions will only support lowercase `true`/`false`. (#2767)
+
+## What's Changed
+* Fix Google Analytics config for Zensical by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2748
+* ci: add release draft workflow with Claude Code Action by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2749
+* fix: improve release-draft workflow configuration by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2750
+* fix: quote JSON schema in claude_args to preserve double quotes by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2751
+* fix: remove redundant --output-format json from claude_args by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2752
+* fix: increase max-turns from 5 to 10 for structured output by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2753
+* chore: increase max-turns to 20 for better margin by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2754
+* Add pydantic_v2.dataclass output type and remove pydantic v1 dataclass by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2746
+* Fix Pydantic v2 deprecation warnings by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2747
+* Add --use-tuple-for-fixed-items option by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2756
+* Fix custom_class_name_generator not applied consistently by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2757
+* Add --base-class-map option for model-specific base classes by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2759
+* Support 'timestamp with time zone' format by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2762
+* Add --type-overrides option to replace schema types with custom Python types by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2758
+* Add --use-root-model-type-alias option by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2763
+* Add --class-decorators option for custom model decorators by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2760
+* Add --naming-strategy and --duplicate-name-suffix CLI options by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2761
+* Add --generate-prompt option for LLM consultation by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2764
+* Add pydantic_v2.dataclass to output model types documentation by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2765
+* Clarify --input-file-type help text and CLI documentation by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2768
+* Support boolean values in patternProperties for JSON Schema 2020-12 by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2766
+* Use YAML 1.2-like bool semantics to fix YES/NO/on/off enum issues by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2767
+* Add InvalidFileFormatError with detailed error messages by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2771
+* Merge multiple patternProperties with same value type into single regex pattern by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2770
+* Sync Common Recipes and badges between README and docs by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2773
+* Fix primary-first naming for multi-file schemas with same-named definitions by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2772
+* Optimize performance for large schema processing by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2774
+
+
+**Full Changelog**: https://github.com/koxudaxi/datamodel-code-generator/compare/0.47.0...0.48.0
+
+---
+
+## [0.47.0](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.47.0) - 2025-12-23
+
+## Breaking Changes
+
+### Code Generation Changes
+* RootModel defaults use direct instantiation - RootModel fields with default values now generate `ClassName(value)` instead of `ClassName.model_validate(value)`. This produces cleaner code but changes the generated output (#2714)
+
+* `--strict-nullable` now applies to JSON Schema - The `--strict-nullable` option is no longer OpenAPI-only and has been moved to Field customization options. It now also correctly respects `nullable` on array items (#2713, #2727)
+
+### Custom Template Update Required
+* If you use custom Jinja2 templates that check `field.nullable`, you may need to update them. The `nullable` field on JsonSchemaObject now defaults to `None` instead of `False`. Templates should check `field.nullable is True` instead of just `if field.nullable` (#2715)
+
+  Example change:
+  ```jinja2
+  {# Before #}
+  {%- if field.nullable %}...{% endif %}
+
+  {# After #}
+  {%- if field.nullable is true %}...{% endif %}
+  ```
+
+### Error Handling Changes
+* Formatting failures emit warning instead of error - When code formatting fails (e.g., due to black errors), the generator now emits an unformatted output with a warning instead of raising an exception. This allows code generation to succeed even when formatting tools encounter issues (#2737)
+
+## What's Changed
+* Require @cli_doc marker for all CLI options by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2712
+* fix: respect nullable on array items with --strict-nullable by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2713
+* fix: wrap RootModel primitive defaults with default_factory by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2714
+* Add --use-default-factory-for-optional-nested-models option by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2711
+* Fix nullable field access in custom templates with strict_nullable by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2715
+* fix: skip non-model types in __change_field_name by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2717
+* Add requestBodies scope support for OpenAPI by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2716
+* Fix test data backspace escape by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2718
+* fix: quote forward references in recursive RootModel generic parameters by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2720
+* Add force_exec_validation option to catch runtime errors across Python versions by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2719
+* Add validation for extra_args in test helper functions by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2723
+* Fix discriminator with allOf without Literal type for Pydantic v2 by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2722
+* Fix regex_engine config not applied to RootModel generic by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2721
+* Fix hostname format with field_constraints to use Field(pattern=...) by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2724
+* Move --strict-nullable from OpenAPI-only to Field customization by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2727
+* Run CLI doc coverage test in CI without --collect-cli-docs by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2728
+* Add --use-generic-base-class option for DRY model config by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2726
+* Refactor parser base post-processing for DRY and type-safe implementation by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2730
+* Add --collapse-reuse-models option by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2731
+* Add --field-type-collision-strategy option by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2733
+* Revert "Add --field-type-collision-strategy option" by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2734
+* Add --no-treat-dot-as-module option for flat output structure by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2732
+* Add --field-type-collision-strategy option by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2735
+* Add --use-standard-primitive-types option by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2736
+* Emit unformatted output when formatting fails by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2737
+* Fix aliasing of builtin type field names by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2738
+* Add path filters to optimize CodeRabbit reviews by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2742
+* Add --output-date-class option and date-time-local format support by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2739
+* Fix custom template directory not working for included templates by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2740
+* Remove unnecessary model_config from RootModel subclasses by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2741
+* Fix incorrect --type-mappings examples in documentation by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2744
+* Add Python 3.13 deprecation warning documentation by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2743
+* Add admonition support to CLI docs and document --use-default nullable behavior by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/2745
+
+
+**Full Changelog**: https://github.com/koxudaxi/datamodel-code-generator/compare/0.46.0...0.47.0
+
+---
+
 ## [0.46.0](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.46.0) - 2025-12-20
 
 ## Breaking Changes

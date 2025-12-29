@@ -8,35 +8,39 @@ template customization, OpenAPI-specific options, and general options.
 from __future__ import annotations
 
 import json
-import locale
 from argparse import ArgumentParser, ArgumentTypeError, BooleanOptionalAction, Namespace, RawDescriptionHelpFormatter
 from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from datamodel_code_generator import (
+from datamodel_code_generator.enums import (
     DEFAULT_SHARED_MODULE_NAME,
     AllExportsCollisionStrategy,
     AllExportsScope,
     AllOfMergeMode,
+    CollapseRootModelsNameStrategy,
     DataclassArguments,
     DataModelType,
+    FieldTypeCollisionStrategy,
     InputFileType,
+    InputModelRefStrategy,
     ModuleSplitMode,
+    NamingStrategy,
     OpenAPIScope,
     ReadOnlyWriteOnlyModelType,
     ReuseScope,
+    StrictTypes,
+    TargetPydanticVersion,
+    UnionMode,
 )
-from datamodel_code_generator.format import DatetimeClassType, Formatter, PythonVersion
-from datamodel_code_generator.model.pydantic_v2 import UnionMode
+from datamodel_code_generator.format import DateClassType, DatetimeClassType, Formatter, PythonVersion
 from datamodel_code_generator.parser import LiteralType
-from datamodel_code_generator.types import StrictTypes
 
 if TYPE_CHECKING:
     from argparse import Action
     from collections.abc import Iterable
 
-DEFAULT_ENCODING = locale.getpreferredencoding()
+DEFAULT_ENCODING = "utf-8"
 
 namespace = Namespace(no_color=False)
 
@@ -83,8 +87,8 @@ class SortingHelpFormatter(RawDescriptionHelpFormatter):
 arg_parser = ArgumentParser(
     usage="\n  datamodel-codegen [options]",
     description="Generate Python data models from schema definitions or structured data\n\n"
-    "For detailed usage, see: https://koxudaxi.github.io/datamodel-code-generator",
-    epilog="Documentation: https://koxudaxi.github.io/datamodel-code-generator\n"
+    "For detailed usage, see: https://datamodel-code-generator.koxudaxi.dev",
+    epilog="Documentation: https://datamodel-code-generator.koxudaxi.dev\n"
     "GitHub: https://github.com/koxudaxi/datamodel-code-generator",
     formatter_class=SortingHelpFormatter,
     add_help=False,
@@ -121,12 +125,22 @@ base_options.add_argument(
     default=None,
 )
 base_options.add_argument(
+    "--http-timeout",
+    type=float,
+    default=None,
+    help="Timeout in seconds for HTTP requests to remote hosts (default: 30)",
+)
+base_options.add_argument(
     "--input",
     help="Input file/directory (default: stdin)",
 )
 base_options.add_argument(
     "--input-file-type",
-    help="Input file type (default: auto)",
+    help=(
+        "Input file type (default: auto). "
+        "Use 'jsonschema', 'openapi', or 'graphql' for schema definitions. "
+        "Use 'json', 'yaml', or 'csv' for raw sample data to infer a schema automatically."
+    ),
     choices=[i.value for i in InputFileType],
 )
 base_options.add_argument(
@@ -141,6 +155,24 @@ base_options.add_argument(
 base_options.add_argument(
     "--url",
     help="Input file URL. `--input` is ignored when `--url` is used",
+)
+base_options.add_argument(
+    "--input-model",
+    help="Python import path to a Pydantic v2 model or schema dict "
+    "(e.g., 'mypackage.module:ClassName' or 'mypackage.schemas:SCHEMA_DICT'). "
+    "For dict input, --input-file-type is required. "
+    "Cannot be used with --input or --url.",
+    metavar="MODULE:NAME",
+)
+base_options.add_argument(
+    "--input-model-ref-strategy",
+    help="Strategy for referenced types in --input-model. "
+    "'regenerate-all': Regenerate all types. "
+    "'reuse-foreign': Reuse types from different families (Enum, etc.), regenerate same-family. "
+    "'reuse-all': Reuse all referenced types via import. "
+    "If not specified, defaults to regenerate-all behavior.",
+    choices=[s.value for s in InputModelRefStrategy],
+    default=None,
 )
 
 # ======================================================================================
@@ -168,6 +200,21 @@ model_options.add_argument(
     action="store_true",
     default=None,
     help="Models generated with a root-type field will be merged into the models using that root-type model",
+)
+model_options.add_argument(
+    "--collapse-root-models-name-strategy",
+    help="Strategy for naming when collapsing root models that reference other models. "
+    "'child': Keep inner model's name (default). 'parent': Use wrapper's name for inner model. "
+    "Requires --collapse-root-models to be set.",
+    choices=[s.value for s in CollapseRootModelsNameStrategy],
+    default=None,
+)
+model_options.add_argument(
+    "--collapse-reuse-models",
+    action="store_true",
+    default=None,
+    help="When used with --reuse-model, collapse duplicate models by replacing references instead of creating "
+    "empty inheritance subclasses. This eliminates 'class Foo(Bar): pass' patterns",
 )
 model_options.add_argument(
     "--skip-root-model",
@@ -264,8 +311,24 @@ model_options.add_argument(
     choices=[v.value for v in PythonVersion],
 )
 model_options.add_argument(
+    "--target-pydantic-version",
+    help="Target Pydantic version for generated code. "
+    "'2': Pydantic 2.0+ compatible (default, uses populate_by_name). "
+    "'2.11': Pydantic 2.11+ (uses validate_by_name).",
+    choices=[v.value for v in TargetPydanticVersion],
+    default=None,
+)
+model_options.add_argument(
     "--treat-dot-as-module",
-    help="treat dotted module names as modules",
+    help="Treat dotted schema names as module paths, creating nested directory structures (e.g., 'foo.bar.Model' "
+    "becomes 'foo/bar.py'). Use --no-treat-dot-as-module to keep dots in names as underscores for single-file output.",
+    action=BooleanOptionalAction,
+    default=None,
+)
+model_options.add_argument(
+    "--use-generic-base-class",
+    help="Generate a shared base class with model configuration (e.g., extra='forbid') "
+    "instead of repeating the configuration in each model. Keeps code DRY.",
     action="store_true",
     default=None,
 )
@@ -288,6 +351,14 @@ model_options.add_argument(
     default=None,
 )
 model_options.add_argument(
+    "--use-standard-primitive-types",
+    help="Use Python standard library types for string formats (UUID, IPv4Address, etc.) "
+    "instead of str. Affects dataclass, msgspec, TypedDict output. "
+    "Pydantic already uses these types by default.",
+    action="store_true",
+    default=None,
+)
+model_options.add_argument(
     "--use-exact-imports",
     help='import exact types instead of modules, for example: "from .foo import Bar" instead of '
     '"from . import foo" with "foo.Bar"',
@@ -296,15 +367,45 @@ model_options.add_argument(
 )
 model_options.add_argument(
     "--output-datetime-class",
-    help="Choose Datetime class between AwareDatetime, NaiveDatetime or datetime. "
+    help="Choose Datetime class between AwareDatetime, NaiveDatetime, PastDatetime, FutureDatetime or datetime. "
     "Each output model has its default mapping (for example pydantic: datetime, dataclass: str, ...)",
     choices=[i.value for i in DatetimeClassType],
     default=None,
 )
 model_options.add_argument(
+    "--output-date-class",
+    help="Choose Date class between PastDate, FutureDate or date. (Pydantic v2 only) "
+    "Each output model has its default mapping.",
+    choices=[i.value for i in DateClassType],
+    default=None,
+)
+model_options.add_argument(
     "--parent-scoped-naming",
-    help="Set name of models defined inline from the parent model",
+    help="[Deprecated: use --naming-strategy parent-prefixed] Set name of models defined inline from the parent model",
     action="store_true",
+    default=None,
+)
+model_options.add_argument(
+    "--naming-strategy",
+    help="Strategy for generating unique model names when duplicates occur. "
+    "'numbered' (default): Append numeric suffix (Address, Address1, Address2). "
+    "Simple but names don't indicate context. "
+    "'parent-prefixed': Prefix with parent model name using underscore "
+    "(Company_Address, Company_Employee_Address for nested). Names show hierarchy. "
+    "'full-path': Similar to parent-prefixed but joins with CamelCase "
+    "(CompanyAddress, CompanyEmployeeAddress). More readable for deep nesting. "
+    "'primary-first': Keep clean names for primary definitions (in /definitions/ or "
+    "/components/schemas/), only add suffix to inline/nested duplicates.",
+    choices=[s.value for s in NamingStrategy],
+    default=None,
+)
+model_options.add_argument(
+    "--duplicate-name-suffix",
+    help="JSON mapping of type to suffix for resolving duplicate name conflicts. "
+    'Example: \'{"model": "Schema"}\' changes Address1 to AddressSchema. '
+    "Keys: 'model' (for classes), 'enum' (for enums), 'default' (fallback). "
+    "When not specified, uses numeric suffix (Address1, Address2).",
+    type=str,
     default=None,
 )
 model_options.add_argument(
@@ -340,12 +441,29 @@ typing_options.add_argument(
     type=str,
 )
 typing_options.add_argument(
+    "--base-class-map",
+    help="Model-specific base class mapping (JSON). "
+    'Example: \'{"MyModel": "custom.BaseA", "OtherModel": "custom.BaseB"}\'. '
+    "Priority: base-class-map > customBasePath (in schema) > base-class.",
+    type=json.loads,
+    default=None,
+)
+typing_options.add_argument(
     "--enum-field-as-literal",
     help="Parse enum field as literal. "
     "all: all enum field type are Literal. "
     "one: field type is Literal when an enum has only one possible value. "
     "none: always use Enum class (never convert to Literal)",
     choices=[lt.value for lt in LiteralType],
+    default=None,
+)
+typing_options.add_argument(
+    "--enum-field-as-literal-map",
+    help="Per-field override for enum/literal generation. "
+    "Format: JSON object mapping field names to 'literal' or 'enum'. "
+    'Example: \'{"status": "literal", "priority": "enum"}\'. '
+    "Overrides --enum-field-as-literal for matched fields.",
+    type=json.loads,
     default=None,
 )
 typing_options.add_argument(
@@ -447,6 +565,12 @@ typing_options.add_argument(
     default=None,
 )
 typing_options.add_argument(
+    "--use-tuple-for-fixed-items",
+    help="Generate tuple types for arrays with items array syntax when minItems equals maxItems equals items length",
+    action="store_true",
+    default=None,
+)
+typing_options.add_argument(
     "--allof-merge-mode",
     help="Mode for field merging in allOf schemas. "
     "'constraints': merge only constraints (minItems, maxItems, pattern, etc.) from parent (default). "
@@ -458,6 +582,13 @@ typing_options.add_argument(
 typing_options.add_argument(
     "--use-type-alias",
     help="Use TypeAlias instead of root models (experimental)",
+    action="store_true",
+    default=None,
+)
+typing_options.add_argument(
+    "--use-root-model-type-alias",
+    help="Use type alias format for RootModel (e.g., Foo = RootModel[Bar]) "
+    "instead of class inheritance (Pydantic v2 only)",
     action="store_true",
     default=None,
 )
@@ -475,6 +606,15 @@ typing_options.add_argument(
     "Can be specified multiple times.",
     nargs="+",
     type=str,
+    default=None,
+)
+typing_options.add_argument(
+    "--type-overrides",
+    help="Replace schema model types with custom Python types. "
+    "Format: JSON object mapping model names to Python import paths. "
+    'Model-level: \'{"CustomType": "my_app.types.MyType"}\' replaces all references. '
+    'Scoped: \'{"User.field": "my_app.Type"}\' replaces specific field only.',
+    type=json.loads,
     default=None,
 )
 
@@ -510,6 +650,19 @@ field_options.add_argument(
     help="Add all keys to field parameters",
     action="store_true",
     default=None,
+)
+field_options.add_argument(
+    "--model-extra-keys",
+    help="Add extra keys from schema extensions (x-* fields) to model_config json_schema_extra",
+    type=str,
+    nargs="+",
+)
+field_options.add_argument(
+    "--model-extra-keys-without-x-prefix",
+    help="Add extra keys with `x-` prefix to model_config json_schema_extra. "
+    "The extra keys are stripped of the `x-` prefix.",
+    type=str,
+    nargs="+",
 )
 field_options.add_argument(
     "--force-optional",
@@ -570,6 +723,12 @@ field_options.add_argument(
     default=None,
 )
 field_options.add_argument(
+    "--use-field-description-example",
+    help="Use schema example to populate field docstring",
+    action="store_true",
+    default=None,
+)
+field_options.add_argument(
     "--use-attribute-docstrings",
     help="Set use_attribute_docstrings=True in Pydantic v2 ConfigDict",
     action="store_true",
@@ -607,6 +766,14 @@ field_options.add_argument(
     action="store_true",
     default=None,
 )
+field_options.add_argument(
+    "--field-type-collision-strategy",
+    help="Strategy for handling field name and type name collisions (Pydantic v2 only). "
+    "'rename-field': rename field with suffix and add alias (default). "
+    "'rename-type': rename type class with suffix to preserve field name.",
+    choices=[s.value for s in FieldTypeCollisionStrategy],
+    default=None,
+)
 
 # ======================================================================================
 # Options for templating output
@@ -618,7 +785,8 @@ template_options.add_argument(
     "Flat: {'field': 'alias'} applies to all occurrences. "
     "Scoped: {'ClassName.field': 'alias'} applies to specific class. "
     "Priority: scoped > flat. "
-    "Example: {'User.name': 'user_name', 'Address.name': 'addr_name', 'id': 'id_'}",
+    "Multiple aliases (Pydantic v2 only): {'field': ['alias1', 'alias2']} uses AliasChoices for validation. "
+    "Example: {'User.name': 'user_name', 'id': 'id_', 'field': ['my-field', 'my_field']}",
     type=Path,
 )
 template_options.add_argument(
@@ -668,6 +836,14 @@ template_options.add_argument(
 base_options.add_argument(
     "--additional-imports",
     help='Custom imports for output (delimited list input). For example "datetime.date,datetime.datetime"',
+    type=str,
+    default=None,
+)
+base_options.add_argument(
+    "--class-decorators",
+    help="Custom decorators for generated model classes (delimited list input). "
+    'For example "@dataclass_json(letter_case=LetterCase.CAMEL)". '
+    'The "@" prefix is optional and will be added automatically if missing.',
     type=str,
     default=None,
 )
@@ -781,6 +957,20 @@ general_options.add_argument(
     action="store_true",
     default=None,
     help="Generate CLI command from pyproject.toml configuration and exit",
+)
+general_options.add_argument(
+    "--generate-prompt",
+    type=str,
+    nargs="?",
+    const="",
+    default=None,
+    metavar="QUESTION",
+    help=(
+        "Generate a prompt for consulting LLMs about CLI options. "
+        "Optionally provide your question as an argument. "
+        "Pipe to CLI tools (e.g., `| claude -p`, `| codex exec`) "
+        "or copy to clipboard (e.g., `| pbcopy`, `| xclip`) for web LLM chats."
+    ),
 )
 general_options.add_argument(
     "--ignore-pyproject",

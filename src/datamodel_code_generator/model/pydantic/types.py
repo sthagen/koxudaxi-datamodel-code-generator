@@ -8,7 +8,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from datamodel_code_generator.format import DatetimeClassType, PythonVersion, PythonVersionMin
+from datamodel_code_generator.format import DateClassType, DatetimeClassType, PythonVersion, PythonVersionMin
 from datamodel_code_generator.imports import (
     IMPORT_ANY,
     IMPORT_DATE,
@@ -21,6 +21,7 @@ from datamodel_code_generator.imports import (
     IMPORT_PENDULUM_TIME,
     IMPORT_TIME,
     IMPORT_TIMEDELTA,
+    IMPORT_ULID,
     IMPORT_UUID,
 )
 from datamodel_code_generator.model.pydantic.imports import (
@@ -86,6 +87,8 @@ def type_map_factory(
         Types.binary: data_type(type="bytes"),
         Types.date: data_type.from_import(IMPORT_DATE),
         Types.date_time: data_type.from_import(IMPORT_DATETIME),
+        Types.date_time_local: data_type.from_import(IMPORT_DATETIME),
+        Types.time_local: data_type.from_import(IMPORT_TIME),
         Types.timedelta: data_type.from_import(IMPORT_TIMEDELTA),
         Types.path: data_type.from_import(IMPORT_PATH),
         Types.password: data_type.from_import(IMPORT_SECRET_STR),
@@ -96,6 +99,7 @@ def type_map_factory(
         Types.uuid3: data_type.from_import(IMPORT_UUID3),
         Types.uuid4: data_type.from_import(IMPORT_UUID4),
         Types.uuid5: data_type.from_import(IMPORT_UUID5),
+        Types.ulid: data_type.from_import(IMPORT_ULID),
         Types.uri: data_type.from_import(IMPORT_ANYURL),
         Types.hostname: data_type.from_import(
             IMPORT_CONSTR,
@@ -180,23 +184,25 @@ class DataTypeManager(_DataTypeManager):
         use_decimal_for_multiple_of: bool = False,  # noqa: FBT001, FBT002
         use_union_operator: bool = False,  # noqa: FBT001, FBT002
         use_pendulum: bool = False,  # noqa: FBT001, FBT002
+        use_standard_primitive_types: bool = False,  # noqa: FBT001, FBT002, ARG002
         target_datetime_class: DatetimeClassType | None = None,
-        treat_dot_as_module: bool = False,  # noqa: FBT001, FBT002
+        target_date_class: DateClassType | None = None,  # noqa: ARG002
+        treat_dot_as_module: bool | None = None,  # noqa: FBT001
         use_serialize_as_any: bool = False,  # noqa: FBT001, FBT002
     ) -> None:
         """Initialize the DataTypeManager with Pydantic v1 type mappings."""
         super().__init__(
-            python_version,
-            use_standard_collections,
-            use_generic_container_types,
-            strict_types,
-            use_non_positive_negative_number_constrained_types,
-            use_decimal_for_multiple_of,
-            use_union_operator,
-            use_pendulum,
-            target_datetime_class,
-            treat_dot_as_module,
-            use_serialize_as_any,
+            python_version=python_version,
+            use_standard_collections=use_standard_collections,
+            use_generic_container_types=use_generic_container_types,
+            strict_types=strict_types,
+            use_non_positive_negative_number_constrained_types=use_non_positive_negative_number_constrained_types,
+            use_decimal_for_multiple_of=use_decimal_for_multiple_of,
+            use_union_operator=use_union_operator,
+            use_pendulum=use_pendulum,
+            target_datetime_class=target_datetime_class,
+            treat_dot_as_module=treat_dot_as_module,
+            use_serialize_as_any=use_serialize_as_any,
         )
 
         self.type_map: dict[Types, DataType] = self.type_map_factory(

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 from pydantic import Field
 
+from datamodel_code_generator import cached_path_exists
 from datamodel_code_generator.model import (
     ConstraintsBase,
     DataModel,
@@ -25,6 +26,7 @@ from datamodel_code_generator.model.pydantic.imports import (
     IMPORT_FIELD,
 )
 from datamodel_code_generator.types import STANDARD_LIST, UnionIntFloat, chain_as_tuple
+from datamodel_code_generator.util import model_dump, model_validate
 
 if TYPE_CHECKING:
     from collections import defaultdict
@@ -199,7 +201,7 @@ class DataModelField(DataModelFieldBase):
                     if any(d.import_ == IMPORT_ANYURL for d in self.data_type.all_data_types)
                     else {
                         k: self._get_strict_field_constraint_value(k, v)
-                        for k, v in self.constraints.dict(exclude_unset=True).items()
+                        for k, v in model_dump(self.constraints, exclude_unset=True).items()
                     }
                 ),
             }
@@ -265,6 +267,10 @@ class DataModelField(DataModelFieldBase):
     @property
     def imports(self) -> tuple[Import, ...]:
         """Get all required imports including Field if needed."""
+        # Fast path: skip expensive self.field check for simple required fields
+        if self.required and not self.nullable and not self.alias and self.constraints is None and not self.extras:
+            return super().imports
+
         if self.field:
             return chain_as_tuple(super().imports, (IMPORT_FIELD,))
         return super().imports
@@ -288,7 +294,7 @@ class BaseModelBase(DataModel, ABC):
         default: Any = UNDEFINED,
         nullable: bool = False,
         keyword_only: bool = False,
-        treat_dot_as_module: bool = False,
+        treat_dot_as_module: bool | None = None,
     ) -> None:
         """Initialize the BaseModel with fields and configuration."""
         methods: list[str] = [field.method for field in fields if field.method]
@@ -318,7 +324,7 @@ class BaseModelBase(DataModel, ABC):
         # But, Future version will support only '{custom_template_dir}/pydantic/BaseModel.jinja'
         if self._custom_template_dir is not None:
             custom_template_file_path = self._custom_template_dir / Path(self.TEMPLATE_FILE_PATH).name
-            if custom_template_file_path.exists():
+            if cached_path_exists(custom_template_file_path):
                 return custom_template_file_path
         return super().template_file_path
 
@@ -328,6 +334,7 @@ class BaseModel(BaseModelBase):
 
     TEMPLATE_FILE_PATH: ClassVar[str] = "pydantic/BaseModel.jinja2"
     BASE_CLASS: ClassVar[str] = "pydantic.BaseModel"
+    SUPPORTS_DISCRIMINATOR: ClassVar[bool] = True
 
     def __init__(  # noqa: PLR0912, PLR0913
         self,
@@ -344,7 +351,7 @@ class BaseModel(BaseModelBase):
         default: Any = UNDEFINED,
         nullable: bool = False,
         keyword_only: bool = False,
-        treat_dot_as_module: bool = False,
+        treat_dot_as_module: bool | None = None,
     ) -> None:
         """Initialize the BaseModel with Config and extra fields support."""
         super().__init__(
@@ -365,10 +372,16 @@ class BaseModel(BaseModelBase):
         config_parameters: dict[str, Any] = {}
 
         additional_properties = self.extra_template_data.get("additionalProperties")
+        unevaluated_properties = self.extra_template_data.get("unevaluatedProperties")
         allow_extra_fields = self.extra_template_data.get("allow_extra_fields")
         extra_fields = self.extra_template_data.get("extra_fields")
 
-        if allow_extra_fields or extra_fields or additional_properties is not None:
+        if (
+            allow_extra_fields
+            or extra_fields
+            or additional_properties is not None
+            or unevaluated_properties is not None
+        ):
             self._additional_imports.append(IMPORT_EXTRA)
 
         if allow_extra_fields:
@@ -378,6 +391,10 @@ class BaseModel(BaseModelBase):
         elif additional_properties is True:
             config_parameters["extra"] = "Extra.allow"
         elif additional_properties is False:
+            config_parameters["extra"] = "Extra.forbid"
+        elif unevaluated_properties is True:
+            config_parameters["extra"] = "Extra.allow"
+        elif unevaluated_properties is False:
             config_parameters["extra"] = "Extra.forbid"
 
         for config_attribute in "allow_population_by_field_name", "allow_mutation":
@@ -401,4 +418,4 @@ class BaseModel(BaseModelBase):
         if config_parameters:
             from datamodel_code_generator.model.pydantic import Config  # noqa: PLC0415
 
-            self.extra_template_data["config"] = Config.parse_obj(config_parameters)  # pyright: ignore[reportArgumentType]
+            self.extra_template_data["config"] = model_validate(Config, config_parameters)  # pyright: ignore[reportArgumentType]

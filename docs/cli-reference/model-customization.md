@@ -7,14 +7,21 @@
 | [`--allow-extra-fields`](#allow-extra-fields) | Allow extra fields in generated Pydantic models (extra='allo... |
 | [`--allow-population-by-field-name`](#allow-population-by-field-name) | Allow Pydantic model population by field name (not just alia... |
 | [`--base-class`](#base-class) | Specify a custom base class for generated models. |
+| [`--base-class-map`](#base-class-map) | Specify different base classes for specific models via JSON ... |
 | [`--class-name`](#class-name) | Override the auto-generated class name with a custom name. |
+| [`--collapse-reuse-models`](#collapse-reuse-models) | Collapse duplicate models by replacing references instead of... |
 | [`--collapse-root-models`](#collapse-root-models) | Inline root model definitions instead of creating separate w... |
+| [`--collapse-root-models-name-strategy`](#collapse-root-models-name-strategy) | Select which name to keep when collapsing root models with o... |
 | [`--dataclass-arguments`](#dataclass-arguments) | Customize dataclass decorator arguments via JSON dictionary.... |
+| [`--duplicate-name-suffix`](#duplicate-name-suffix) | Customize suffix for duplicate model names. |
 | [`--enable-faux-immutability`](#enable-faux-immutability) | Enable faux immutability in Pydantic v1 models (allow_mutati... |
 | [`--force-optional`](#force-optional) | Force all fields to be Optional regardless of required statu... |
 | [`--frozen-dataclasses`](#frozen-dataclasses) | Generate frozen dataclasses with optional keyword-only field... |
 | [`--keep-model-order`](#keep-model-order) | Keep model definition order as specified in schema. |
 | [`--keyword-only`](#keyword-only) | Generate dataclasses with keyword-only fields (Python 3.10+)... |
+| [`--model-extra-keys`](#model-extra-keys) | Add model-level schema extensions to ConfigDict json_schema_... |
+| [`--model-extra-keys-without-x-prefix`](#model-extra-keys-without-x-prefix) | Strip x- prefix from model-level schema extensions and add t... |
+| [`--naming-strategy`](#naming-strategy) | Use parent-prefixed naming strategy for duplicate model name... |
 | [`--output-model-type`](#output-model-type) | Select the output model type (Pydantic v1/v2, dataclasses, T... |
 | [`--parent-scoped-naming`](#parent-scoped-naming) | Namespace models by their parent scope to avoid naming confl... |
 | [`--reuse-model`](#reuse-model) | Reuse identical model definitions instead of generating dupl... |
@@ -22,12 +29,14 @@
 | [`--skip-root-model`](#skip-root-model) | Skip generation of root model when schema contains nested de... |
 | [`--strict-nullable`](#strict-nullable) | Treat default field as a non-nullable field. |
 | [`--strip-default-none`](#strip-default-none) | Remove fields with None as default value from generated mode... |
+| [`--target-pydantic-version`](#target-pydantic-version) | Target Pydantic version for generated code compatibility. |
 | [`--target-python-version`](#target-python-version) | Target Python version for generated code syntax and imports.... |
 | [`--union-mode`](#union-mode) | Union mode for combining anyOf/oneOf schemas (smart or left_... |
 | [`--use-default`](#use-default) | Use default values from schema in generated models. |
 | [`--use-default-factory-for-optional-nested-models`](#use-default-factory-for-optional-nested-models) | Generate default_factory for optional nested model fields. |
 | [`--use-default-kwarg`](#use-default-kwarg) | Use default= keyword argument instead of positional argument... |
 | [`--use-frozen-field`](#use-frozen-field) | Generate frozen (immutable) field definitions for readOnly p... |
+| [`--use-generic-base-class`](#use-generic-base-class) | Generate a shared base class with model configuration to avo... |
 | [`--use-one-literal-as-default`](#use-one-literal-as-default) | Use single literal value as default when enum has only one o... |
 | [`--use-serialize-as-any`](#use-serialize-as-any) | Wrap fields with subtypes in Pydantic's SerializeAsAny. |
 | [`--use-subclass-enum`](#use-subclass-enum) | Generate typed Enum subclasses for enums with specific field... |
@@ -762,9 +771,6 @@ The `--allow-population-by-field-name` flag configures the code generation behav
         
         
         class Pets(RootModel[list[Pet]]):
-            model_config = ConfigDict(
-                populate_by_name=True,
-            )
             root: list[Pet]
         
         
@@ -778,23 +784,14 @@ The `--allow-population-by-field-name` flag configures the code generation behav
         
         
         class Users(RootModel[list[User]]):
-            model_config = ConfigDict(
-                populate_by_name=True,
-            )
             root: list[User]
         
         
         class Id(RootModel[str]):
-            model_config = ConfigDict(
-                populate_by_name=True,
-            )
             root: str
         
         
         class Rules(RootModel[list[str]]):
-            model_config = ConfigDict(
-                populate_by_name=True,
-            )
             root: list[str]
         
         
@@ -825,9 +822,6 @@ The `--allow-population-by-field-name` flag configures the code generation behav
         
         
         class Apis(RootModel[list[Api]]):
-            model_config = ConfigDict(
-                populate_by_name=True,
-            )
             root: list[Api]
         
         
@@ -1123,6 +1117,59 @@ The `--base-class` flag configures the code generation behavior.
 
 ---
 
+## `--base-class-map` {#base-class-map}
+
+Specify different base classes for specific models via JSON mapping.
+
+The `--base-class-map` option allows you to assign different base classes
+to specific models. Priority: base-class-map > customBasePath > base-class.
+
+**Related:** [`--base-class`](model-customization.md#base-class)
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --base-class-map "{"Person": "custom.bases.PersonBase", "Animal": "custom.bases.AnimalBase"}" # (1)!
+    ```
+
+    1. :material-arrow-left: `--base-class-map` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```json
+    {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "Person": {
+          "type": "object",
+          "properties": {
+            "name": {"type": "string"}
+          }
+        },
+        "Animal": {
+          "type": "object",
+          "properties": {
+            "species": {"type": "string"}
+          }
+        },
+        "Car": {
+          "type": "object",
+          "properties": {
+            "model": {"type": "string"}
+          }
+        }
+      }
+    }
+    ```
+
+    **Output:**
+
+    > **Error:** File not found: base_class_map.py
+
+---
+
 ## `--class-name` {#class-name}
 
 Override the auto-generated class name with a custom name.
@@ -1195,6 +1242,76 @@ naming convention than what's in the schema.
         )
         friends: list[Any] | None = None
         comment: None = None
+    ```
+
+---
+
+## `--collapse-reuse-models` {#collapse-reuse-models}
+
+Collapse duplicate models by replacing references instead of inheritance.
+
+The `--collapse-reuse-models` flag, when used with `--reuse-model`,
+eliminates redundant empty subclasses (e.g., `class Foo(Bar): pass`)
+by replacing all references to duplicate models with the canonical model.
+
+**Related:** [`--reuse-model`](model-customization.md#reuse-model)
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --reuse-model --collapse-reuse-models # (1)!
+    ```
+
+    1. :material-arrow-left: `--collapse-reuse-models` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```json
+    {
+        "Arm Right": {
+            "Joint 1": 5,
+            "Joint 2": 3,
+            "Joint 3": 66
+        },
+        "Arm Left": {
+            "Joint 1": 55,
+            "Joint 2": 13,
+            "Joint 3": 6
+        },
+        "Head": {
+            "Joint 1": 10
+        }
+    }
+    ```
+
+    **Output:**
+
+    ```python
+    # generated by datamodel-codegen:
+    #   filename:  duplicate_models.json
+    #   timestamp: 2019-07-26T00:00:00+00:00
+    
+    from __future__ import annotations
+    
+    from pydantic import BaseModel, Field
+    
+    
+    class ArmRight(BaseModel):
+        Joint_1: int = Field(..., alias='Joint 1')
+        Joint_2: int = Field(..., alias='Joint 2')
+        Joint_3: int = Field(..., alias='Joint 3')
+    
+    
+    class Head(BaseModel):
+        Joint_1: int = Field(..., alias='Joint 1')
+    
+    
+    class Model(BaseModel):
+        Arm_Right: ArmRight = Field(..., alias='Arm Right')
+        Arm_Left: ArmRight = Field(..., alias='Arm Left')
+        Head: Head
     ```
 
 ---
@@ -1392,6 +1509,75 @@ model types (Pydantic v1/v2, dataclass, TypedDict, msgspec) handle const fields.
         class Model(BaseModel):
             field: Any = None
         ```
+
+---
+
+## `--collapse-root-models-name-strategy` {#collapse-root-models-name-strategy}
+
+Select which name to keep when collapsing root models with object references.
+
+The --collapse-root-models-name-strategy option controls naming when collapsing
+root models. 'child' keeps the inner model's name, 'parent' uses the wrapper's name.
+
+**Related:** [`--collapse-root-models`](model-customization.md#collapse-root-models)
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --collapse-root-models --collapse-root-models-name-strategy child # (1)!
+    ```
+
+    1. :material-arrow-left: `--collapse-root-models-name-strategy` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```json
+    {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {
+        "metadata": {
+          "$ref": "#/$defs/ISectionBlockMetadata"
+        }
+      },
+      "$defs": {
+        "ISectionBlockMetadata": {
+          "$ref": "#/$defs/FieldType2"
+        },
+        "FieldType2": {
+          "type": "object",
+          "properties": {
+            "asText": {
+              "type": "string"
+            }
+          },
+          "required": ["asText"]
+        }
+      }
+    }
+    ```
+
+    **Output:**
+
+    ```python
+    # generated by datamodel-codegen:
+    #   filename:  collapse_root_models_name_strategy_child.json
+    #   timestamp: 2019-07-26T00:00:00+00:00
+    
+    from __future__ import annotations
+    
+    from pydantic import BaseModel
+    
+    
+    class FieldType2(BaseModel):
+        asText: str
+    
+    
+    class Model(BaseModel):
+        metadata: FieldType2 | None = None
+    ```
 
 ---
 
@@ -1727,6 +1913,95 @@ control over dataclass generation.
         passengers: String | None = None
         vehicle_class: String | None = None
         typename__: Literal['Vehicle'] | None = 'Vehicle'
+    ```
+
+---
+
+## `--duplicate-name-suffix` {#duplicate-name-suffix}
+
+Customize suffix for duplicate model names.
+
+The `--duplicate-name-suffix` flag allows specifying custom suffixes for
+resolving duplicate names by type. The value is a JSON mapping where keys
+are type names ('model', 'enum', 'default') and values are suffix strings.
+For example, `{"model": "Schema"}` changes `Item1` to `ItemSchema`.
+
+**Related:** [`--naming-strategy`](model-customization.md#naming-strategy)
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --duplicate-name-suffix "{"model": "Schema"}" # (1)!
+    ```
+
+    1. :material-arrow-left: `--duplicate-name-suffix` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```json
+    {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "Order": {
+          "type": "object",
+          "properties": {
+            "item": {
+              "type": "object",
+              "properties": {
+                "name": {"type": "string"}
+              }
+            }
+          }
+        },
+        "Cart": {
+          "type": "object",
+          "properties": {
+            "item": {
+              "type": "object",
+              "properties": {
+                "quantity": {"type": "integer"}
+              }
+            }
+          }
+        }
+      }
+    }
+    ```
+
+    **Output:**
+
+    ```python
+    # generated by datamodel-codegen:
+    #   filename:  input.json
+    #   timestamp: 2019-07-26T00:00:00+00:00
+    
+    from __future__ import annotations
+    
+    from typing import Any
+    
+    from pydantic import BaseModel, RootModel
+    
+    
+    class Model(RootModel[Any]):
+        root: Any
+    
+    
+    class Item(BaseModel):
+        name: str | None = None
+    
+    
+    class Order(BaseModel):
+        item: Item | None = None
+    
+    
+    class ItemSchema(BaseModel):
+        quantity: int | None = None
+    
+    
+    class Cart(BaseModel):
+        item: ItemSchema | None = None
     ```
 
 ---
@@ -3059,6 +3334,204 @@ positional argument errors.
 
 ---
 
+## `--model-extra-keys` {#model-extra-keys}
+
+Add model-level schema extensions to ConfigDict json_schema_extra.
+
+The `--model-extra-keys` flag adds specified x-* extensions from the schema
+to the model's ConfigDict json_schema_extra.
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --model-extra-keys x-custom-metadata # (1)!
+    ```
+
+    1. :material-arrow-left: `--model-extra-keys` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```json
+    {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ModelExtras",
+      "type": "object",
+      "x-custom-metadata": {"key1": "value1"},
+      "x-version": 1,
+      "properties": {
+        "name": {"type": "string"}
+      }
+    }
+    ```
+
+    **Output:**
+
+    === "Pydantic v2"
+
+        ```python
+        # generated by datamodel-codegen:
+        #   filename:  model_extras.json
+        #   timestamp: 2019-07-26T00:00:00+00:00
+        
+        from __future__ import annotations
+        
+        from pydantic import BaseModel, ConfigDict
+        
+        
+        class ModelExtras(BaseModel):
+            model_config = ConfigDict(
+                json_schema_extra={'x-custom-metadata': {'key1': 'value1'}},
+            )
+            name: str | None = None
+        ```
+
+---
+
+## `--model-extra-keys-without-x-prefix` {#model-extra-keys-without-x-prefix}
+
+Strip x- prefix from model-level schema extensions and add to ConfigDict json_schema_extra.
+
+The `--model-extra-keys-without-x-prefix` flag adds specified x-* extensions
+from the schema to the model's ConfigDict json_schema_extra with the x- prefix stripped.
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --model-extra-keys-without-x-prefix x-custom-metadata x-version # (1)!
+    ```
+
+    1. :material-arrow-left: `--model-extra-keys-without-x-prefix` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```json
+    {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ModelExtras",
+      "type": "object",
+      "x-custom-metadata": {"key1": "value1"},
+      "x-version": 1,
+      "properties": {
+        "name": {"type": "string"}
+      }
+    }
+    ```
+
+    **Output:**
+
+    === "Pydantic v2"
+
+        ```python
+        # generated by datamodel-codegen:
+        #   filename:  model_extras.json
+        #   timestamp: 2019-07-26T00:00:00+00:00
+        
+        from __future__ import annotations
+        
+        from pydantic import BaseModel, ConfigDict
+        
+        
+        class ModelExtras(BaseModel):
+            model_config = ConfigDict(
+                json_schema_extra={'custom-metadata': {'key1': 'value1'}, 'version': 1},
+            )
+            name: str | None = None
+        ```
+
+---
+
+## `--naming-strategy` {#naming-strategy}
+
+Use parent-prefixed naming strategy for duplicate model names.
+
+The `--naming-strategy parent-prefixed` flag prefixes model names with their
+parent model name when duplicates occur. For example, if both `Order` and
+`Cart` have an inline `Item` definition, they become `OrderItem` and `CartItem`.
+
+**Related:** [`--duplicate-name-suffix`](model-customization.md#duplicate-name-suffix), [`--parent-scoped-naming`](model-customization.md#parent-scoped-naming)
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --naming-strategy parent-prefixed # (1)!
+    ```
+
+    1. :material-arrow-left: `--naming-strategy` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```json
+    {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "Order": {
+          "type": "object",
+          "properties": {
+            "item": {
+              "type": "object",
+              "properties": {
+                "name": {"type": "string"}
+              }
+            }
+          }
+        },
+        "Cart": {
+          "type": "object",
+          "properties": {
+            "item": {
+              "type": "object",
+              "properties": {
+                "quantity": {"type": "integer"}
+              }
+            }
+          }
+        }
+      }
+    }
+    ```
+
+    **Output:**
+
+    ```python
+    # generated by datamodel-codegen:
+    #   filename:  input.json
+    #   timestamp: 2019-07-26T00:00:00+00:00
+    
+    from __future__ import annotations
+    
+    from typing import Any
+    
+    from pydantic import BaseModel, RootModel
+    
+    
+    class Model(RootModel[Any]):
+        root: Any
+    
+    
+    class ModelOrderItem(BaseModel):
+        name: str | None = None
+    
+    
+    class ModelOrder(BaseModel):
+        item: ModelOrderItem | None = None
+    
+    
+    class ModelCartItem(BaseModel):
+        quantity: int | None = None
+    
+    
+    class ModelCart(BaseModel):
+        item: ModelCartItem | None = None
+    ```
+
+---
+
 ## `--output-model-type` {#output-model-type}
 
 Select the output model type (Pydantic v1/v2, dataclasses, TypedDict, msgspec).
@@ -3647,6 +4120,8 @@ The `--parent-scoped-naming` flag prefixes model names with their parent scope
 (operation/path/parameter) to prevent name collisions when the same model name
 appears in different contexts within an OpenAPI specification.
 
+**Deprecated:** Use --naming-strategy parent-prefixed instead.
+
 !!! tip "Usage"
 
     ```bash
@@ -4081,7 +4556,13 @@ object is just a container for $defs and not a meaningful model itself.
 
 Treat default field as a non-nullable field.
 
-The `--strict-nullable` flag configures the code generation behavior.
+The `--strict-nullable` flag ensures that fields with default values are generated
+with their exact schema type (non-nullable), rather than being made nullable.
+
+This is particularly useful when combined with `--use-default` to generate models
+where optional fields have defaults but cannot accept `None` values.
+
+**Related:** [`--use-default`](model-customization.md#use-default)
 
 !!! tip "Usage"
 
@@ -4584,6 +5065,87 @@ default to None.
 
 ---
 
+## `--target-pydantic-version` {#target-pydantic-version}
+
+Target Pydantic version for generated code compatibility.
+
+The `--target-pydantic-version` flag controls Pydantic version-specific config:
+
+- **2**: Uses `populate_by_name=True` (compatible with Pydantic 2.0-2.10)
+- **2.11**: Uses `validate_by_name=True` (for Pydantic 2.11+)
+
+This prevents breaking changes when generated code is used on older Pydantic versions.
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --target-pydantic-version 2.11 --allow-population-by-field-name --output-model-type pydantic_v2.BaseModel # (1)!
+    ```
+
+    1. :material-arrow-left: `--target-pydantic-version` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```json
+    {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Person",
+      "type": "object",
+      "properties": {
+        "firstName": {
+          "type": "string",
+          "description": "The person's first name."
+        },
+        "lastName": {
+          "type": ["string", "null"],
+          "description": "The person's last name."
+        },
+        "age": {
+          "description": "Age in years which must be equal to or greater than zero.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "friends": {
+          "type": "array"
+        },
+        "comment": {
+          "type": "null"
+        }
+      }
+    }
+    ```
+
+    **Output:**
+
+    ```python
+    # generated by datamodel-codegen:
+    #   filename:  person.json
+    #   timestamp: 2019-07-26T00:00:00+00:00
+    
+    from __future__ import annotations
+    
+    from typing import Any
+    
+    from pydantic import BaseModel, ConfigDict, Field, conint
+    
+    
+    class Person(BaseModel):
+        model_config = ConfigDict(
+            validate_by_name=True,
+        )
+        firstName: str | None = Field(None, description="The person's first name.")
+        lastName: str | None = Field(None, description="The person's last name.")
+        age: conint(ge=0) | None = Field(
+            None, description='Age in years which must be equal to or greater than zero.'
+        )
+        friends: list[Any] | None = None
+        comment: None = None
+    ```
+
+---
+
 ## `--target-python-version` {#target-python-version}
 
 Target Python version for generated code syntax and imports.
@@ -4788,7 +5350,10 @@ The `--union-mode` flag configures the code generation behavior.
 
 Use default values from schema in generated models.
 
-The `--use-default` flag configures the code generation behavior.
+The `--use-default` flag allows required fields with default values to be generated
+with their defaults, making them optional to provide when instantiating the model.
+
+**Related:** [`--strict-nullable`](model-customization.md#strict-nullable)
 
 !!! tip "Usage"
 
@@ -4797,6 +5362,21 @@ The `--use-default` flag configures the code generation behavior.
     ```
 
     1. :material-arrow-left: `--use-default` - the option documented here
+
+!!! warning "Fields with defaults become nullable"
+    When using `--use-default`, fields with default values are generated as nullable
+    types (e.g., `str | None` instead of `str`), even if the schema does not allow
+    null values.
+
+    If you want fields to strictly follow the schema's type definition (non-nullable),
+    use `--strict-nullable` together with `--use-default`.
+
+
+!!! note "Future behavior change"
+    In a future major version, the default behavior of `--use-default` may change to
+    generate non-nullable types that match the schema definition (equivalent to using
+    `--strict-nullable`). If you rely on the current nullable behavior, consider
+    explicitly handling this in your code.
 
 ??? example "Examples"
 
@@ -5161,6 +5741,109 @@ The `--use-frozen-field` flag generates frozen field definitions:
             password: str
             created_at: str | None = None
         ```
+
+---
+
+## `--use-generic-base-class` {#use-generic-base-class}
+
+Generate a shared base class with model configuration to avoid repetition (DRY).
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --extra-fields forbid --output-model-type pydantic_v2.BaseModel --use-generic-base-class # (1)!
+    ```
+
+    1. :material-arrow-left: `--use-generic-base-class` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```json
+    {
+      "title": "Test",
+      "type": "object",
+      "required": [
+        "foo"
+      ],
+      "properties": {
+        "foo": {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "integer"
+            }
+          },
+          "additionalProperties": true
+        },
+        "bar": {
+          "type": "object",
+          "properties": {
+            "y": {
+              "type": "integer"
+            }
+          },
+          "additionalProperties": false
+        },
+        "baz": {
+          "type": "object",
+          "properties": {
+            "z": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+    ```
+
+    **Output:**
+
+    ```python
+    # generated by datamodel-codegen:
+    #   filename:  extra_fields.json
+    #   timestamp: 2019-07-26T00:00:00+00:00
+    
+    from __future__ import annotations
+    
+    from pydantic import BaseModel as _BaseModel
+    from pydantic import ConfigDict
+    
+    
+    class BaseModel(_BaseModel):
+        model_config = ConfigDict(
+            extra='forbid',
+        )
+    
+    
+    class Foo(BaseModel):
+        model_config = ConfigDict(
+            extra='allow',
+        )
+        x: int | None = None
+    
+    
+    class Bar(BaseModel):
+        model_config = ConfigDict(
+            extra='forbid',
+        )
+        y: int | None = None
+    
+    
+    class Baz(BaseModel):
+        z: int | None = None
+    
+    
+    class Test(BaseModel):
+        model_config = ConfigDict(
+            extra='forbid',
+        )
+        foo: Foo
+        bar: Bar | None = None
+        baz: Baz | None = None
+    ```
 
 ---
 

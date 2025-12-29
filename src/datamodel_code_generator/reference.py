@@ -34,8 +34,8 @@ from packaging import version
 from pydantic import BaseModel, Field
 from typing_extensions import TypeIs
 
-from datamodel_code_generator import Error
-from datamodel_code_generator.util import PYDANTIC_V2, ConfigDict, camel_to_snake, model_validator
+from datamodel_code_generator import Error, NamingStrategy
+from datamodel_code_generator.util import ConfigDict, camel_to_snake, is_pydantic_v2, model_validator
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
@@ -84,7 +84,7 @@ class _BaseModel(BaseModel):
     _exclude_fields: ClassVar[set[str]] = set()
     _pass_fields: ClassVar[set[str]] = set()
 
-    if not TYPE_CHECKING:
+    if not TYPE_CHECKING:  # pragma: no branch
 
         def __init__(self, **values: Any) -> None:
             super().__init__(**values)
@@ -92,8 +92,8 @@ class _BaseModel(BaseModel):
                 if pass_field_name in values:
                     setattr(self, pass_field_name, values[pass_field_name])
 
-    if not TYPE_CHECKING:
-        if PYDANTIC_V2:
+    if not TYPE_CHECKING:  # pragma: no branch
+        if is_pydantic_v2():
 
             def dict(  # noqa: PLR0913
                 self,
@@ -165,7 +165,7 @@ class Reference(_BaseModel):
         values["original_name"] = values.get("name", original_name)
         return values
 
-    if PYDANTIC_V2:
+    if is_pydantic_v2():
         # TODO[pydantic]: The following keys were removed: `copy_on_model_validation`.
         # Check https://docs.pydantic.dev/dev-v2/migration/#changes-to-config for more information.
         model_config = ConfigDict(  # pyright: ignore[reportAssignmentType]
@@ -225,7 +225,7 @@ class FieldNameResolver:
 
     def __init__(  # noqa: PLR0913, PLR0917
         self,
-        aliases: Mapping[str, str] | None = None,
+        aliases: Mapping[str, str | list[str]] | None = None,
         snake_case_field: bool = False,  # noqa: FBT001, FBT002
         empty_field_name: str | None = None,
         original_delimiter: str | None = None,
@@ -235,7 +235,7 @@ class FieldNameResolver:
         no_alias: bool = False,  # noqa: FBT001, FBT002
     ) -> None:
         """Initialize field name resolver with transformation options."""
-        self.aliases: Mapping[str, str] = {} if aliases is None else {**aliases}
+        self.aliases: Mapping[str, str | list[str]] = {} if aliases is None else {**aliases}
         self.empty_field_name: str = empty_field_name or "_"
         self.snake_case_field = snake_case_field
         self.original_delimiter: str | None = original_delimiter
@@ -306,7 +306,7 @@ class FieldNameResolver:
         excludes: set[str] | None = None,
         path: list[str] | None = None,
         class_name: str | None = None,
-    ) -> tuple[str, str | None]:
+    ) -> tuple[str, str | list[str] | None]:
         """Get valid field name and original alias if different.
 
         Supports hierarchical alias resolution with the following priority:
@@ -318,15 +318,33 @@ class FieldNameResolver:
             excludes: Set of names to avoid when generating valid names.
             path: Unused, kept for backward compatibility.
             class_name: Optional class name for scoped alias resolution.
+
+        Returns:
+            A tuple of (python_field_name, alias_or_aliases) where:
+            - python_field_name: The valid Python identifier to use as the field name.
+            - alias_or_aliases: None if no alias needed, str for single alias,
+              or list[str] for multiple aliases (Pydantic v2 AliasChoices).
         """
         del path
         if class_name:
             scoped_key = f"{class_name}.{field_name}"
             if scoped_key in self.aliases:
-                return self.aliases[scoped_key], field_name
+                alias_value = self.aliases[scoped_key]
+                if isinstance(alias_value, list) and alias_value:
+                    # Multiple aliases: validate first alias as field name, return all aliases including original
+                    valid_name = self.get_valid_name(alias_value[0], excludes=excludes)
+                    return valid_name, [field_name, *alias_value]
+                if isinstance(alias_value, str):
+                    return alias_value, field_name
 
         if field_name in self.aliases:
-            return self.aliases[field_name], field_name
+            alias_value = self.aliases[field_name]
+            if isinstance(alias_value, list) and alias_value:
+                # Multiple aliases: validate first alias as field name, return all aliases including original
+                valid_name = self.get_valid_name(alias_value[0], excludes=excludes)
+                return valid_name, [field_name, *alias_value]
+            if isinstance(alias_value, str):
+                return alias_value, field_name
 
         valid_name = self.get_valid_name(field_name, excludes=excludes)
         return (
@@ -496,6 +514,12 @@ class ModelResolver:  # noqa: PLR0904
     name uniqueness, path resolution, and field name transformations.
     """
 
+    # Default suffixes for duplicate name resolution by model type
+    DEFAULT_DUPLICATE_NAME_SUFFIX: ClassVar[dict[str, str]] = {
+        "model": "Model",
+        "enum": "Enum",
+    }
+
     def __init__(  # noqa: PLR0913, PLR0917
         self,
         exclude_names: set[str] | None = None,
@@ -515,7 +539,9 @@ class ModelResolver:  # noqa: PLR0904
         no_alias: bool = False,  # noqa: FBT001, FBT002
         remove_suffix_number: bool = False,  # noqa: FBT001, FBT002
         parent_scoped_naming: bool = False,  # noqa: FBT001, FBT002
-        treat_dot_as_module: bool = False,  # noqa: FBT001, FBT002
+        treat_dot_as_module: bool | None = None,  # noqa: FBT001
+        naming_strategy: NamingStrategy | None = None,
+        duplicate_name_suffix_map: dict[str, str] | None = None,
     ) -> None:
         """Initialize model resolver with naming and resolution options."""
         self.references: dict[str, Reference] = {}
@@ -550,8 +576,34 @@ class ModelResolver:  # noqa: PLR0904
         self._base_path: Path = base_path or Path.cwd()
         self._current_base_path: Path | None = self._base_path
         self.remove_suffix_number: bool = remove_suffix_number
-        self.parent_scoped_naming = parent_scoped_naming
+
+        # Handle naming strategy with backward compatibility for parent_scoped_naming
+        if naming_strategy is None and parent_scoped_naming:
+            naming_strategy = NamingStrategy.ParentPrefixed
+        self.naming_strategy: NamingStrategy = naming_strategy or NamingStrategy.Numbered
+        self.parent_scoped_naming = parent_scoped_naming or (self.naming_strategy == NamingStrategy.ParentPrefixed)
         self.treat_dot_as_module = treat_dot_as_module
+
+        # Duplicate name suffix map for type-specific suffixes
+        # Only use suffixes when explicitly provided via --duplicate-name-suffix
+        self.duplicate_name_suffix_map: dict[str, str] = duplicate_name_suffix_map or {}
+
+        # Incrementally maintained set of reference names for O(1) uniqueness checking
+        self._reference_names_cache: set[str] = set()
+
+    def _get_reference_names(self) -> set[str]:
+        """Get the set of all reference names for uniqueness checking."""
+        return self._reference_names_cache
+
+    def _update_reference_name(self, old_name: str | None, new_name: str) -> None:
+        """Update the reference names cache when a reference name changes."""
+        if old_name and old_name != new_name:
+            self._reference_names_cache.discard(old_name)
+        self._reference_names_cache.add(new_name)
+
+    def _remove_reference_name(self, name: str) -> None:
+        """Remove a name from the reference names cache."""
+        self._reference_names_cache.discard(name)
 
     @property
     def current_base_path(self) -> Path | None:
@@ -635,7 +687,7 @@ class ModelResolver:  # noqa: PLR0904
 
     def resolve_ref(self, path: Sequence[str] | str) -> str:  # noqa: PLR0911, PLR0912, PLR0914
         """Resolve a reference path to its canonical form."""
-        joined_path = path if isinstance(path, str) else self.join_path(path)
+        joined_path = path if isinstance(path, str) else self.join_path(tuple(path))
         if joined_path == "#":
             return f"{'/'.join(self.current_root)}#"
         if self.current_base_path and not self.base_url and joined_path[0] != "#" and not is_url(joined_path):
@@ -735,12 +787,20 @@ class ModelResolver:  # noqa: PLR0904
         return bool(ref) and ref[-1] == "#"
 
     @staticmethod
-    def join_path(path: Sequence[str]) -> str:
+    @lru_cache(maxsize=4096)
+    def join_path(path: tuple[str, ...]) -> str:
         """Join path components with slashes and normalize anchors."""
         joined_path = "/".join(p for p in path if p).replace("/#", "#")
         if "#" not in joined_path:
             joined_path += "#"
         return joined_path
+
+    def _is_external_path(self, resolved_path: str) -> bool:
+        """Check if a resolved path belongs to an external file."""
+        current_root_path = self.join_path(tuple(self._current_root))
+        current_file = current_root_path.split("#")[0]
+        resolved_file = resolved_path.split("#", maxsplit=1)[0]
+        return current_file != resolved_file
 
     def add_ref(self, ref: str, resolved: bool = False) -> Reference:  # noqa: FBT001, FBT002
         """Add a reference and return the Reference object."""
@@ -752,7 +812,10 @@ class ModelResolver:  # noqa: PLR0904
             original_name = Path(split_ref[0].rstrip("#") if self.is_external_root_ref(path) else split_ref[0]).stem
         else:
             original_name = Path(split_ref[1].rstrip("#")).stem if self.is_external_root_ref(path) else split_ref[1]
-        name = self.get_class_name(original_name, unique=False).name
+        # For PrimaryFirst strategy, use unique=True for external references
+        # so that definitions in the main input file get priority for clean names
+        use_unique = self.naming_strategy == NamingStrategy.PrimaryFirst and self._is_external_path(path)
+        name = self.get_class_name(original_name, unique=use_unique).name
         reference = Reference(
             path=path,
             original_name=original_name,
@@ -761,16 +824,84 @@ class ModelResolver:  # noqa: PLR0904
         )
 
         self.references[path] = reference
+        self._update_reference_name(None, reference.name)
         return reference
 
+    def _find_parent_reference(self, path: Sequence[str]) -> Reference | None:
+        """Find the closest parent reference for a given path.
+
+        Traverses up the path hierarchy to find the first existing parent reference.
+        Returns None if no parent reference is found.
+        """
+        parent_path = list(path[:-1])
+        while parent_path:
+            if parent_reference := self.references.get(self.join_path(tuple(parent_path))):
+                return parent_reference
+            parent_path = parent_path[:-1]
+        return None
+
     def _check_parent_scope_option(self, name: str, path: Sequence[str]) -> str:
-        if self.parent_scoped_naming:
-            parent_path = path[:-1]
-            while parent_path:
-                if parent_reference := self.references.get(self.join_path(parent_path)):
-                    return f"{parent_reference.name}_{name}"
-                parent_path = parent_path[:-1]
+        # Check for parent-prefixed naming via either the legacy flag or the new naming strategy
+        use_parent_prefix = self.parent_scoped_naming or self.naming_strategy == NamingStrategy.ParentPrefixed
+        if use_parent_prefix and (parent_ref := self._find_parent_reference(path)):
+            return f"{parent_ref.name}_{name}"
         return name
+
+    def _apply_full_path_naming(self, name: str, path: Sequence[str]) -> str:
+        """Build name from full schema path for FullPath strategy.
+
+        Uses the immediate parent reference to build a unique name.
+        For example: Order > properties > item becomes OrderItem
+        """
+        if self.naming_strategy != NamingStrategy.FullPath:
+            return name
+
+        # Find the immediate parent reference to prefix the name
+        if parent_ref := self._find_parent_reference(path):
+            # Use immediate parent's name (CamelCase join without underscore)
+            return f"{parent_ref.name}{snake_to_upper_camel(name)}"
+
+        return name
+
+    @staticmethod
+    def _is_primary_definition(path: Sequence[str]) -> bool:
+        """Check if path represents a primary schema definition."""
+        # Primary definitions are directly under /definitions/ or /components/schemas/
+        path_str = "/".join(path)
+        primary_patterns = [
+            "#/definitions/",
+            "#/components/schemas/",
+            "#/$defs/",
+        ]
+        for pattern in primary_patterns:
+            if pattern in path_str:
+                # Check if it's a direct child (not nested)
+                after_pattern = path_str.split(pattern, 1)[-1]
+                # If there's no more "/" after the pattern part, it's a primary definition
+                if "/" not in after_pattern:
+                    return True
+        return False
+
+    def _rename_external_ref_with_same_name(self, name: str, current_path: str) -> None:
+        """Rename an external reference that has the same name as a primary definition.
+
+        For PrimaryFirst strategy, when a primary definition in the main file
+        has the same name as an external reference, rename the external reference
+        so the primary definition can use the clean name.
+        """
+        for ref_path, ref in self.references.items():
+            if ref.name == name and ref_path != current_path:
+                # Check if this is an external reference (different file)
+                ref_file = ref_path.split("#")[0]
+                current_file = current_path.split("#", maxsplit=1)[0]
+                if ref_file != current_file:
+                    # Rename this external reference
+                    new_name = self._get_unique_name(name, camel=True)
+                    old_name = ref.name
+                    ref.duplicate_name = ref.name
+                    ref.name = new_name
+                    self._update_reference_name(old_name, new_name)
+                    break
 
     def add(  # noqa: PLR0913
         self,
@@ -784,8 +915,9 @@ class ModelResolver:  # noqa: PLR0904
         loaded: bool = False,
     ) -> Reference:
         """Add or update a model reference with the given path and name."""
-        joined_path = self.join_path(path)
+        joined_path = self.join_path(tuple(path))
         reference: Reference | None = self.references.get(joined_path)
+        old_ref_name: str | None = reference.name if reference else None
         if reference:
             if loaded and not reference.loaded:
                 reference.loaded = True
@@ -794,14 +926,32 @@ class ModelResolver:  # noqa: PLR0904
         name = original_name
         duplicate_name: str | None = None
         if class_name:
+            # Apply naming strategy before further processing
             name = self._check_parent_scope_option(name, path)
-            name, duplicate_name = self.get_class_name(
-                name=name,
-                unique=unique,
-                reserved_name=reference.name if reference else None,
-                singular_name=singular_name,
-                singular_name_suffix=singular_name_suffix,
-            )
+            name = self._apply_full_path_naming(name, path)
+
+            # For PrimaryFirst strategy, check if this is a primary definition
+            # Primary definitions get priority (don't need suffix), others get suffix when there's conflict
+            is_primary = self._is_primary_definition(path)
+            if self.naming_strategy == NamingStrategy.PrimaryFirst and is_primary:
+                # For primary definitions, try to use the clean name first
+                # If an external reference has the same name, rename it
+                self._rename_external_ref_with_same_name(name, joined_path)
+                name, duplicate_name = self.get_class_name(
+                    name=name,
+                    unique=unique,
+                    reserved_name=reference.name if reference else None,
+                    singular_name=singular_name,
+                    singular_name_suffix=singular_name_suffix,
+                )
+            else:
+                name, duplicate_name = self.get_class_name(
+                    name=name,
+                    unique=unique,
+                    reserved_name=reference.name if reference else None,
+                    singular_name=singular_name,
+                    singular_name_suffix=singular_name_suffix,
+                )
         else:
             # TODO: create a validate for module name
             name = self.get_valid_field_name(name, model_type=ModelType.CLASS)
@@ -817,6 +967,7 @@ class ModelResolver:  # noqa: PLR0904
             reference.name = name
             reference.loaded = loaded
             reference.duplicate_name = duplicate_name
+            self._update_reference_name(old_ref_name, name)
         else:
             reference = Reference(
                 path=joined_path,
@@ -826,6 +977,7 @@ class ModelResolver:  # noqa: PLR0904
                 duplicate_name=duplicate_name,
             )
             self.references[joined_path] = reference
+            self._update_reference_name(None, name)
         return reference
 
     def get(self, path: Sequence[str] | str) -> Reference | None:
@@ -836,7 +988,9 @@ class ModelResolver:  # noqa: PLR0904
         """Delete a reference by path if it exists."""
         resolved = self.resolve_ref(path)
         if resolved in self.references:
+            old_name = self.references[resolved].name
             del self.references[resolved]
+            self._remove_reference_name(old_name)
 
     def default_class_name_generator(self, name: str) -> str:
         """Generate a valid class name from a string."""
@@ -854,7 +1008,7 @@ class ModelResolver:  # noqa: PLR0904
         singular_name_suffix: str | None = None,
     ) -> ClassName:
         """Generate a unique class name with optional singularization."""
-        if "." in name:
+        if "." in name and self.treat_dot_as_module is not False:
             split_name = name.split(".")
             prefix = ".".join(
                 # TODO: create a validate for class name
@@ -865,7 +1019,7 @@ class ModelResolver:  # noqa: PLR0904
             class_name = split_name[-1]
         else:
             prefix = ""
-            class_name = name
+            class_name = name.replace(".", "_") if "." in name else name
 
         class_name = self.class_name_generator(class_name)
 
@@ -882,23 +1036,30 @@ class ModelResolver:  # noqa: PLR0904
             class_name = unique_name
         return ClassName(name=f"{prefix}{class_name}", duplicate_name=duplicate_name)
 
-    def _get_unique_name(self, name: str, camel: bool = False) -> str:  # noqa: FBT001, FBT002
+    def _get_unique_name(self, name: str, camel: bool = False, model_type: str = "model") -> str:  # noqa: FBT001, FBT002
         unique_name: str = name
         count: int = 0 if self.remove_suffix_number else 1
-        reference_names = {r.name for r in self.references.values()} | self.exclude_names
+        # Use cached reference names for O(1) lookup instead of O(n) set creation
+        reference_names = self._get_reference_names() | self.exclude_names
+
+        # Determine the suffix to use
+        suffix = self._get_suffix_for_model_type(model_type)
+        if not suffix and self.duplicate_name_suffix:
+            suffix = self.duplicate_name_suffix
+
         while unique_name in reference_names:
-            if self.duplicate_name_suffix:
-                name_parts: list[str | int] = [
-                    name,
-                    self.duplicate_name_suffix,
-                    count - 1,
-                ]
+            if suffix:
+                name_parts: list[str | int] = [name, suffix, count - 1]
             else:
                 name_parts = [name, count]
             delimiter = "" if camel else "_"
             unique_name = delimiter.join(str(p) for p in name_parts if p) if count else name
             count += 1
         return unique_name
+
+    def _get_suffix_for_model_type(self, model_type: str) -> str:
+        """Get the suffix for a given model type from the suffix map."""
+        return self.duplicate_name_suffix_map.get(model_type, self.duplicate_name_suffix_map.get("default", ""))
 
     @classmethod
     def validate_name(cls, name: str) -> bool:
@@ -921,7 +1082,7 @@ class ModelResolver:  # noqa: PLR0904
         model_type: ModelType = ModelType.PYDANTIC,
         path: list[str] | None = None,
         class_name: str | None = None,
-    ) -> tuple[str, str | None]:
+    ) -> tuple[str, str | list[str] | None]:
         """Get a valid field name and alias for the specified model type.
 
         Args:
@@ -932,7 +1093,10 @@ class ModelResolver:  # noqa: PLR0904
             class_name: Optional class name for scoped alias resolution.
 
         Returns:
-            A tuple of (valid_field_name, alias_or_none).
+            A tuple of (python_field_name, alias_or_aliases) where:
+            - python_field_name: The valid Python identifier to use as the field name.
+            - alias_or_aliases: None if no alias needed, str for single alias,
+              or list[str] for multiple aliases (Pydantic v2 AliasChoices).
         """
         del path
         return self.field_name_resolvers[model_type].get_valid_field_name_and_alias(

@@ -10,8 +10,9 @@
 | [`--extra-fields`](#extra-fields) | Configure how generated models handle extra fields not defin... |
 | [`--field-constraints`](#field-constraints) | Generate Field() with validation constraints from schema. |
 | [`--field-extra-keys`](#field-extra-keys) | Include specific extra keys in Field() definitions. |
-| [`--field-extra-keys-without-x-prefix`](#field-extra-keys-without-x-prefix) | Include specified schema extension keys in Field() without r... |
+| [`--field-extra-keys-without-x-prefix`](#field-extra-keys-without-x-prefix) | Include schema extension keys in Field() without requiring '... |
 | [`--field-include-all-keys`](#field-include-all-keys) | Include all schema keys in Field() json_schema_extra. |
+| [`--field-type-collision-strategy`](#field-type-collision-strategy) | Rename type class instead of field when names collide (Pydan... |
 | [`--no-alias`](#no-alias) | Disable Field alias generation for non-Python-safe property ... |
 | [`--original-field-name-delimiter`](#original-field-name-delimiter) | Specify delimiter for original field names when using snake-... |
 | [`--remove-special-field-name-prefix`](#remove-special-field-name-prefix) | Remove the special prefix from field names. |
@@ -21,6 +22,7 @@
 | [`--use-attribute-docstrings`](#use-attribute-docstrings) | Generate field descriptions as attribute docstrings instead ... |
 | [`--use-enum-values-in-discriminator`](#use-enum-values-in-discriminator) | Use enum values in discriminator mappings for union types. |
 | [`--use-field-description`](#use-field-description) | Include schema descriptions as Field docstrings. |
+| [`--use-field-description-example`](#use-field-description-example) | Add field examples to docstrings. |
 | [`--use-inline-field-description`](#use-inline-field-description) | Add field descriptions as inline comments. |
 | [`--use-schema-description`](#use-schema-description) | Use schema description as class docstring. |
 | [`--use-title-as-name`](#use-title-as-name) | Use schema title as the generated class name. |
@@ -470,32 +472,31 @@ providing fine-grained control over generated names independent of schema defini
         
         from __future__ import annotations
         
-        from typing import Annotated, Literal
+        from typing import Literal, TypeAlias
         
         from pydantic import BaseModel, Field
-        from typing_extensions import TypeAliasType
         
-        Boolean = TypeAliasType("Boolean", bool)
+        Boolean: TypeAlias = bool
         """
         The `Boolean` scalar type represents `true` or `false`.
         """
         
         
-        DateTime = TypeAliasType("DateTime", str)
+        DateTime: TypeAlias = str
         
         
-        String = TypeAliasType("String", str)
+        String: TypeAlias = str
         """
         The `String` scalar type represents textual data, represented as UTF-8 character sequences. The String type is most often used by GraphQL to represent free-form human-readable text.
         """
         
         
         class DateTimePeriod(BaseModel):
-            periodFrom: Annotated[DateTime, Field(alias='from')]
-            periodTo: Annotated[DateTime, Field(alias='to')]
-            typename__: Annotated[
-                Literal['DateTimePeriod'] | None, Field(alias='__typename')
-            ] = 'DateTimePeriod'
+            periodFrom: DateTime = Field(..., alias='from')
+            periodTo: DateTime = Field(..., alias='to')
+            typename__: Literal['DateTimePeriod'] | None = Field(
+                'DateTimePeriod', alias='__typename'
+            )
         ```
 
 ---
@@ -1178,7 +1179,7 @@ Output differs between Pydantic v1 and v2 due to API changes.
                   rating:
                     type: number
                     minimum: 0
-                    exclusiveMinimum: True
+                    exclusiveMinimum: true
                     maximum: 5
         
             Id:
@@ -1555,6 +1556,12 @@ The `--field-extra-keys` flag configures the code generation behavior.
             13,
             20
           ]
+        },
+        "status": {
+          "type": "string",
+          "examples": [
+            "active"
+          ]
         }
       }
     }
@@ -1584,6 +1591,7 @@ The `--field-extra-keys` flag configures the code generation behavior.
                 repr=True,
             )
             age: int | None = Field(None, example=12, examples=[13, 20])
+            status: str | None = Field(None, examples=['active'])
         ```
 
     === "Pydantic v2"
@@ -1607,13 +1615,14 @@ The `--field-extra-keys` flag configures the code generation behavior.
                 repr=True,
             )
             age: int | None = Field(None, examples=[13, 20], json_schema_extra={'example': 12})
+            status: str | None = Field(None, examples=['active'])
         ```
 
 ---
 
 ## `--field-extra-keys-without-x-prefix` {#field-extra-keys-without-x-prefix}
 
-Include specified schema extension keys in Field() without requiring 'x-' prefix.
+Include schema extension keys in Field() without requiring 'x-' prefix.
 
 The --field-extra-keys-without-x-prefix option allows you to specify custom
 schema extension keys that should be included in Pydantic Field() extras without
@@ -1663,6 +1672,12 @@ in Field(). This is useful for custom schema extensions and vendor-specific meta
             13,
             20
           ]
+        },
+        "status": {
+          "type": "string",
+          "examples": [
+            "active"
+          ]
         }
       }
     }
@@ -1700,6 +1715,7 @@ in Field(). This is useful for custom schema extensions and vendor-specific meta
                 x_abc=True,
             )
             age: int | None = Field(None, example=12, examples=[13, 20], writeOnly=True)
+            status: str | None = Field(None, examples=['active'])
         ```
 
     === "Pydantic v2"
@@ -1736,6 +1752,7 @@ in Field(). This is useful for custom schema extensions and vendor-specific meta
             age: int | None = Field(
                 None, examples=[13, 20], json_schema_extra={'example': 12, 'writeOnly': True}
             )
+            status: str | None = Field(None, examples=['active'])
         ```
 
 ---
@@ -1809,6 +1826,66 @@ The `--field-include-all-keys` flag configures the code generation behavior.
         )
         friends: list[Any] | None = None
         comment: None = None
+    ```
+
+---
+
+## `--field-type-collision-strategy` {#field-type-collision-strategy}
+
+Rename type class instead of field when names collide (Pydantic v2 only).
+
+The `--field-type-collision-strategy` flag controls how field name and type name
+collisions are resolved. With `rename-type`, the type class is renamed with a suffix
+to preserve the original field name, instead of renaming the field and adding an alias.
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --output-model-type pydantic_v2.BaseModel --field-type-collision-strategy rename-type # (1)!
+    ```
+
+    1. :material-arrow-left: `--field-type-collision-strategy` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```json
+    {
+      "title": "Test",
+      "type": "object",
+      "properties": {
+        "TestObject": {
+          "title": "TestObject",
+          "type": "object",
+          "properties": {
+            "test_string": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+    ```
+
+    **Output:**
+
+    ```python
+    # generated by datamodel-codegen:
+    #   filename:  field_has_same_name.json
+    #   timestamp: 2019-07-26T00:00:00+00:00
+    
+    from __future__ import annotations
+    
+    from pydantic import BaseModel, Field
+    
+    
+    class TestObject_1(BaseModel):
+        test_string: str | None = None
+    
+    
+    class Test(BaseModel):
+        TestObject: TestObject_1 | None = Field(None, title='TestObject')
     ```
 
 ---
@@ -2798,6 +2875,101 @@ generated models, preserving documentation from the original schema.
 
 ---
 
+## `--use-field-description-example` {#use-field-description-example}
+
+Add field examples to docstrings.
+
+The `--use-field-description-example` flag adds the `example` or `examples`
+property from schema fields as docstrings. This provides documentation that
+is visible in IDE intellisense.
+
+**Related:** [`--use-field-description`](field-customization.md#use-field-description), [`--use-inline-field-description`](field-customization.md#use-inline-field-description)
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --use-field-description-example # (1)!
+    ```
+
+    1. :material-arrow-left: `--use-field-description-example` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```json
+    {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Extras",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "normal key",
+          "key1": 123,
+          "key2": 456,
+          "$exclude": 123,
+          "invalid-key-1": "abc",
+          "-invalid+key_2": "efg",
+          "$comment": "comment",
+          "$id": "#name",
+          "register": "hij",
+          "schema": "klm",
+          "x-repr": true,
+          "x-abc": true,
+          "example": "example",
+          "readOnly": true
+        },
+        "age": {
+          "type": "integer",
+          "example": 12,
+          "writeOnly": true,
+          "examples": [
+            13,
+            20
+          ]
+        },
+        "status": {
+          "type": "string",
+          "examples": [
+            "active"
+          ]
+        }
+      }
+    }
+    ```
+
+    **Output:**
+
+    ```python
+    # generated by datamodel-codegen:
+    #   filename:  extras.json
+    #   timestamp: 2022-11-11T00:00:00+00:00
+    
+    from __future__ import annotations
+    
+    from pydantic import BaseModel, Field
+    
+    
+    class Extras(BaseModel):
+        name: str | None = Field(None, description='normal key', example='example')
+        """
+        Example: 'example'
+        """
+        age: int | None = Field(None, example=12, examples=[13, 20])
+        """
+        Examples:
+        - 13
+        - 20
+        """
+        status: str | None = Field(None, examples=['active'])
+        """
+        Example: 'active'
+        """
+    ```
+
+---
+
 ## `--use-inline-field-description` {#use-inline-field-description}
 
 Add field descriptions as inline comments.
@@ -2818,272 +2990,319 @@ documentation without using Field() wrappers.
 
 ??? example "Examples"
 
-    **Input Schema:**
+    === "OpenAPI"
 
-    ```yaml
-    openapi: "3.0.0"
-    info:
-      version: 1.0.0
-      title: Swagger Petstore
-      license:
-        name: MIT
-    servers:
-      - url: http://petstore.swagger.io/v1
-    paths:
-      /pets:
-        get:
-          summary: List all pets
-          operationId: listPets
-          tags:
-            - pets
-          parameters:
-            - name: limit
-              in: query
-              description: How many items to return at one time (max 100)
-              required: false
-              schema:
-                type: integer
-                format: int32
-          responses:
-            '200':
-              description: A paged array of pets
-              headers:
-                x-next:
-                  description: A link to the next page of responses
+        **Input Schema:**
+
+        ```yaml
+        openapi: "3.0.0"
+        info:
+          version: 1.0.0
+          title: Swagger Petstore
+          license:
+            name: MIT
+        servers:
+          - url: http://petstore.swagger.io/v1
+        paths:
+          /pets:
+            get:
+              summary: List all pets
+              operationId: listPets
+              tags:
+                - pets
+              parameters:
+                - name: limit
+                  in: query
+                  description: How many items to return at one time (max 100)
+                  required: false
+                  schema:
+                    type: integer
+                    format: int32
+              responses:
+                '200':
+                  description: A paged array of pets
+                  headers:
+                    x-next:
+                      description: A link to the next page of responses
+                      schema:
+                        type: string
+                  content:
+                    application/json:
+                      schema:
+                        $ref: "#/components/schemas/Pets"
+                default:
+                  description: unexpected error
+                  content:
+                    application/json:
+                      schema:
+                        $ref: "#/components/schemas/Error"
+                        x-amazon-apigateway-integration:
+                          uri:
+                            Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PythonVersionFunction.Arn}/invocations
+                          passthroughBehavior: when_no_templates
+                          httpMethod: POST
+                          type: aws_proxy
+            post:
+              summary: Create a pet
+              operationId: createPets
+              tags:
+                - pets
+              responses:
+                '201':
+                  description: Null response
+                default:
+                  description: unexpected error
+                  content:
+                    application/json:
+                      schema:
+                        $ref: "#/components/schemas/Error"
+                        x-amazon-apigateway-integration:
+                          uri:
+                            Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PythonVersionFunction.Arn}/invocations
+                          passthroughBehavior: when_no_templates
+                          httpMethod: POST
+                          type: aws_proxy
+          /pets/{petId}:
+            get:
+              summary: Info for a specific pet
+              operationId: showPetById
+              tags:
+                - pets
+              parameters:
+                - name: petId
+                  in: path
+                  required: true
+                  description: The id of the pet to retrieve
                   schema:
                     type: string
-              content:
-                application/json:
-                  schema:
-                    $ref: "#/components/schemas/Pets"
-            default:
-              description: unexpected error
-              content:
-                application/json:
-                  schema:
-                    $ref: "#/components/schemas/Error"
-                    x-amazon-apigateway-integration:
-                      uri:
-                        Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PythonVersionFunction.Arn}/invocations
-                      passthroughBehavior: when_no_templates
-                      httpMethod: POST
-                      type: aws_proxy
-        post:
-          summary: Create a pet
-          operationId: createPets
-          tags:
-            - pets
-          responses:
-            '201':
-              description: Null response
-            default:
-              description: unexpected error
-              content:
-                application/json:
-                  schema:
-                    $ref: "#/components/schemas/Error"
-                    x-amazon-apigateway-integration:
-                      uri:
-                        Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PythonVersionFunction.Arn}/invocations
-                      passthroughBehavior: when_no_templates
-                      httpMethod: POST
-                      type: aws_proxy
-      /pets/{petId}:
-        get:
-          summary: Info for a specific pet
-          operationId: showPetById
-          tags:
-            - pets
-          parameters:
-            - name: petId
-              in: path
-              required: true
-              description: The id of the pet to retrieve
-              schema:
-                type: string
-          responses:
-            '200':
-              description: Expected response to a valid request
-              content:
-                application/json:
-                  schema:
-                    $ref: "#/components/schemas/Pets"
-            default:
-              description: unexpected error
-              content:
-                application/json:
-                  schema:
-                    $ref: "#/components/schemas/Error"
-        x-amazon-apigateway-integration:
-          uri:
-            Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PythonVersionFunction.Arn}/invocations
-          passthroughBehavior: when_no_templates
-          httpMethod: POST
-          type: aws_proxy
-    components:
-      schemas:
-        Pet:
-          required:
-            - id
-            - name
-          properties:
-            id:
-              type: integer
-              format: int64
-              default: 1
-            name:
+              responses:
+                '200':
+                  description: Expected response to a valid request
+                  content:
+                    application/json:
+                      schema:
+                        $ref: "#/components/schemas/Pets"
+                default:
+                  description: unexpected error
+                  content:
+                    application/json:
+                      schema:
+                        $ref: "#/components/schemas/Error"
+            x-amazon-apigateway-integration:
+              uri:
+                Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PythonVersionFunction.Arn}/invocations
+              passthroughBehavior: when_no_templates
+              httpMethod: POST
+              type: aws_proxy
+        components:
+          schemas:
+            Pet:
+              required:
+                - id
+                - name
+              properties:
+                id:
+                  type: integer
+                  format: int64
+                  default: 1
+                name:
+                  type: string
+                tag:
+                  type: string
+            Pets:
+              type: array
+              items:
+                $ref: "#/components/schemas/Pet"
+            Users:
+              type: array
+              items:
+                required:
+                  - id
+                  - name
+                properties:
+                  id:
+                    type: integer
+                    format: int64
+                  name:
+                    type: string
+                  tag:
+                    type: string
+            Id:
               type: string
-            tag:
-              type: string
-        Pets:
-          type: array
-          items:
-            $ref: "#/components/schemas/Pet"
-        Users:
-          type: array
-          items:
-            required:
-              - id
-              - name
-            properties:
-              id:
-                type: integer
-                format: int64
-              name:
+            Rules:
+              type: array
+              items:
                 type: string
-              tag:
-                type: string
-        Id:
-          type: string
-        Rules:
-          type: array
-          items:
-            type: string
-        Error:
-          description: "error result.\nNow with multi-line docstrings."
-          required:
-            - code
-            - message
-          properties:
-            code:
-              type: integer
-              format: int32
-            message:
-              type: string
-        apis:
-          type: array
-          items:
-            type: object
-            properties:
-              apiKey:
-                type: string
-                description: "To be used as a dataset parameter value.\nNow also with multi-line docstrings."
-              apiVersionNumber:
-                type: string
-                description: To be used as a version parameter value
-              apiUrl:
-                type: string
-                format: uri
-                description: "The URL describing the dataset's fields"
-              apiDocumentationUrl:
-                type: string
-                format: uri
-                description: A URL to the API console for each API
-        Event:
-          type: object
-          description: Event object
-          properties:
-            name:
-              type: string
-        Result:
-            type: object
-            properties:
-              event:
-                $ref: '#/components/schemas/Event'
-    ```
+            Error:
+              description: "error result.\nNow with multi-line docstrings."
+              required:
+                - code
+                - message
+              properties:
+                code:
+                  type: integer
+                  format: int32
+                message:
+                  type: string
+            apis:
+              type: array
+              items:
+                type: object
+                properties:
+                  apiKey:
+                    type: string
+                    description: "To be used as a dataset parameter value.\nNow also with multi-line docstrings."
+                  apiVersionNumber:
+                    type: string
+                    description: To be used as a version parameter value
+                  apiUrl:
+                    type: string
+                    format: uri
+                    description: "The URL describing the dataset's fields"
+                  apiDocumentationUrl:
+                    type: string
+                    format: uri
+                    description: A URL to the API console for each API
+            Event:
+              type: object
+              description: Event object
+              properties:
+                name:
+                  type: string
+            Result:
+                type: object
+                properties:
+                  event:
+                    $ref: '#/components/schemas/Event'
+        ```
 
-    **Output:**
+        **Output:**
 
-    ```python
-    # generated by datamodel-codegen:
-    #   filename:  api_multiline_docstrings.yaml
-    #   timestamp: 2022-11-11T00:00:00+00:00
-    
-    from __future__ import annotations
-    
-    from pydantic import AnyUrl, BaseModel, Field
-    
-    
-    class Pet(BaseModel):
-        id: int
-        name: str
-        tag: str | None = None
-    
-    
-    class Pets(BaseModel):
-        __root__: list[Pet]
-    
-    
-    class User(BaseModel):
-        id: int
-        name: str
-        tag: str | None = None
-    
-    
-    class Users(BaseModel):
-        __root__: list[User]
-    
-    
-    class Id(BaseModel):
-        __root__: str
-    
-    
-    class Rules(BaseModel):
-        __root__: list[str]
-    
-    
-    class Error(BaseModel):
-        code: int
-        message: str
-    
-    
-    class Api(BaseModel):
-        apiKey: str | None = Field(
-            None,
-            description='To be used as a dataset parameter value.\nNow also with multi-line docstrings.',
-        )
-        """
-        To be used as a dataset parameter value.
-        Now also with multi-line docstrings.
-        """
-    
-        apiVersionNumber: str | None = Field(
-            None, description='To be used as a version parameter value'
-        )
-        """To be used as a version parameter value"""
-    
-        apiUrl: AnyUrl | None = Field(
-            None, description="The URL describing the dataset's fields"
-        )
-        """The URL describing the dataset's fields"""
-    
-        apiDocumentationUrl: AnyUrl | None = Field(
-            None, description='A URL to the API console for each API'
-        )
-        """A URL to the API console for each API"""
-    
-    
-    class Apis(BaseModel):
-        __root__: list[Api]
-    
-    
-    class Event(BaseModel):
-        name: str | None = None
-    
-    
-    class Result(BaseModel):
-        event: Event | None = None
-    ```
+        ```python
+        # generated by datamodel-codegen:
+        #   filename:  api_multiline_docstrings.yaml
+        #   timestamp: 2022-11-11T00:00:00+00:00
+        
+        from __future__ import annotations
+        
+        from pydantic import AnyUrl, BaseModel, Field
+        
+        
+        class Pet(BaseModel):
+            id: int
+            name: str
+            tag: str | None = None
+        
+        
+        class Pets(BaseModel):
+            __root__: list[Pet]
+        
+        
+        class User(BaseModel):
+            id: int
+            name: str
+            tag: str | None = None
+        
+        
+        class Users(BaseModel):
+            __root__: list[User]
+        
+        
+        class Id(BaseModel):
+            __root__: str
+        
+        
+        class Rules(BaseModel):
+            __root__: list[str]
+        
+        
+        class Error(BaseModel):
+            code: int
+            message: str
+        
+        
+        class Api(BaseModel):
+            apiKey: str | None = Field(
+                None,
+                description='To be used as a dataset parameter value.\nNow also with multi-line docstrings.',
+            )
+            """
+            To be used as a dataset parameter value.
+            Now also with multi-line docstrings.
+            """
+        
+            apiVersionNumber: str | None = Field(
+                None, description='To be used as a version parameter value'
+            )
+            """To be used as a version parameter value"""
+        
+            apiUrl: AnyUrl | None = Field(
+                None, description="The URL describing the dataset's fields"
+            )
+            """The URL describing the dataset's fields"""
+        
+            apiDocumentationUrl: AnyUrl | None = Field(
+                None, description='A URL to the API console for each API'
+            )
+            """A URL to the API console for each API"""
+        
+        
+        class Apis(BaseModel):
+            __root__: list[Api]
+        
+        
+        class Event(BaseModel):
+            name: str | None = None
+        
+        
+        class Result(BaseModel):
+            event: Event | None = None
+        ```
+
+    === "JSON Schema"
+
+        **Input Schema:**
+
+        ```json
+        {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "title": "MultilineDescriptionWithExample",
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "User name.\nThis is a multi-line description.",
+              "example": "John Doe"
+            }
+          }
+        }
+        ```
+
+        **Output:**
+
+        ```python
+        # generated by datamodel-codegen:
+        #   filename:  multiline_description_with_example.json
+        #   timestamp: 2022-11-11T00:00:00+00:00
+        
+        from __future__ import annotations
+        
+        from pydantic import BaseModel, Field
+        
+        
+        class MultilineDescriptionWithExample(BaseModel):
+            name: str | None = Field(
+                None,
+                description='User name.\nThis is a multi-line description.',
+                example='John Doe',
+            )
+            """
+            User name.
+            This is a multi-line description.
+        
+            Example: 'John Doe'
+            """
+        ```
 
 ---
 

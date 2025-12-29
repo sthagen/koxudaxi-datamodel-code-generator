@@ -9,11 +9,12 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, TypedDict, cast
 
 import pytest
 import time_machine
 from inline_snapshot import external_file, register_format_alias
+from typing_extensions import Required
 
 from datamodel_code_generator import MIN_VERSION
 
@@ -23,6 +24,55 @@ if TYPE_CHECKING:
 CLI_DOC_COLLECTION_OUTPUT = Path(__file__).parent / "cli_doc" / ".cli_doc_collection.json"
 CLI_DOC_SCHEMA_VERSION = 1
 _VERSION_PATTERN = re.compile(r"^\d+\.\d+$")
+
+
+class CliDocKwargs(TypedDict, total=False):
+    """Type definition for @pytest.mark.cli_doc marker keyword arguments."""
+
+    options: Required[list[str]]
+    """CLI option names to document (e.g., ["--foo", "--bar"])."""
+
+    option_description: Required[str]
+    """User-facing description of the CLI option for generated documentation.
+
+    This text appears in the CLI reference docs. Write as if explaining
+    to end users what the option does and when to use it.
+    Do NOT describe what the test verifies - describe the feature itself.
+
+    Example (good): "Ignore pyproject.toml configuration file. This is useful
+                     when you want to override project defaults with CLI arguments."
+    Example (bad):  "Test that --ignore-pyproject flag works correctly."
+    """
+
+    cli_args: Required[list[str]]
+    """CLI arguments to pass to the command (e.g., ["--foo", "value"])."""
+
+    input_schema: str | None
+    """Path to input schema file relative to tests/data/."""
+
+    config_content: str | None
+    """Content of pyproject.toml config to create for the test."""
+
+    input_model: str | None
+    """Input model in 'module:name' format for --input-model tests."""
+
+    golden_output: str | None
+    """Path to expected output file relative to tests/data/expected/."""
+
+    version_outputs: dict[str, str] | None
+    """Version-specific outputs: {"3.10": "path/to/expected.py"}."""
+
+    model_outputs: dict[str, str] | None
+    """Model-type-specific outputs: {"pydantic_v2": "path/to/expected.py"}."""
+
+    expected_stdout: str | None
+    """Path to expected stdout file relative to tests/data/expected/."""
+
+    related_options: list[str] | None
+    """Related CLI options to link in documentation."""
+
+    aliases: list[str] | None
+    """Alternative option names (e.g., ["--capitalise-enum-members"])."""
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -39,21 +89,29 @@ def pytest_configure(config: pytest.Config) -> None:
     """Register the cli_doc marker."""
     config.addinivalue_line(
         "markers",
-        "cli_doc(options, input_schema=None, cli_args=None, golden_output=None, version_outputs=None, "
-        "model_outputs=None, expected_stdout=None, config_content=None, aliases=None, **kwargs): "
+        "cli_doc(options, option_description, cli_args, input_schema=None, golden_output=None, "
+        "version_outputs=None, model_outputs=None, expected_stdout=None, config_content=None, "
+        "aliases=None, **kwargs): "
         "Mark test as CLI documentation source. "
+        "option_description: User-facing description for CLI docs (required). "
         "Either golden_output, version_outputs, model_outputs, or expected_stdout is required. "
         "aliases: list of alternative option names (e.g., ['--capitalise-enum-members']).",
     )
     config._cli_doc_items: list[dict[str, Any]] = []
 
 
-def _validate_cli_doc_marker(node_id: str, kwargs: dict[str, Any]) -> list[str]:  # noqa: ARG001, PLR0912, PLR0914  # pragma: no cover
+def _validate_cli_doc_marker(node_id: str, kwargs: CliDocKwargs) -> list[str]:  # noqa: ARG001, PLR0912, PLR0914  # pragma: no cover
     """Validate marker required fields and types."""
     errors: list[str] = []
 
     if "options" not in kwargs:
         errors.append("Missing required field: 'options'")
+    if "option_description" not in kwargs:
+        errors.append("Missing required field: 'option_description'")
+    elif not isinstance(kwargs["option_description"], str):
+        errors.append(f"'option_description' must be a string, got {type(kwargs['option_description']).__name__}")
+    elif not kwargs["option_description"].strip():
+        errors.append("'option_description' must not be empty")
     if "cli_args" not in kwargs:
         errors.append("Missing required field: 'cli_args'")
 
@@ -66,9 +124,11 @@ def _validate_cli_doc_marker(node_id: str, kwargs: dict[str, Any]) -> list[str]:
 
     has_input_schema = "input_schema" in kwargs and kwargs["input_schema"] is not None
     has_config_content = "config_content" in kwargs and kwargs["config_content"] is not None
-    if not has_input_schema and not has_config_content and not has_stdout:
+    has_input_model = "input_model" in kwargs and kwargs["input_model"] is not None
+    if not has_input_schema and not has_config_content and not has_input_model and not has_stdout:
         errors.append(
-            "Either 'input_schema' or 'config_content' is required (or 'expected_stdout' with cli_args as input)"
+            "Either 'input_schema', 'config_content', or 'input_model' is required "
+            "(or 'expected_stdout' with cli_args as input)"
         )
 
     if "options" in kwargs:
@@ -91,6 +151,15 @@ def _validate_cli_doc_marker(node_id: str, kwargs: dict[str, Any]) -> list[str]:
         schema = kwargs["input_schema"]
         if not isinstance(schema, str):
             errors.append(f"'input_schema' must be a string, got {type(schema).__name__}")
+
+    if has_input_model:
+        input_model = kwargs["input_model"]
+        if not isinstance(input_model, str):
+            errors.append(f"'input_model' must be a string, got {type(input_model).__name__}")
+        else:
+            parts = input_model.split(":", 1)
+            if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+                errors.append(f"'input_model' must be in 'module:name' format, got {input_model!r}")
 
     if has_golden:
         golden = kwargs["golden_output"]
@@ -161,20 +230,18 @@ def pytest_collection_modifyitems(
             continue
 
         if collect_cli_docs:
-            errors = _validate_cli_doc_marker(item.nodeid, marker.kwargs)
+            errors = _validate_cli_doc_marker(item.nodeid, cast("CliDocKwargs", marker.kwargs))
             if errors:
                 validation_errors.append((item.nodeid, errors))
                 continue
 
-        docstring = ""
-        func = getattr(item, "function", None)
-        if func is not None:
-            docstring = func.__doc__ or ""
+        # Get option_description from marker kwargs (required field)
+        option_description = marker.kwargs.get("option_description", "")
 
         config._cli_doc_items.append({
             "node_id": item.nodeid,
             "marker_kwargs": marker.kwargs,
-            "docstring": docstring,
+            "option_description": option_description,
         })
 
     if validation_errors:
@@ -571,6 +638,25 @@ def assert_parser_modules(
     for paths, result in modules.items():
         expected_path = expected_dir.joinpath(*paths)
         _assert_with_external_file(_get_full_body(result), expected_path)
+
+
+def assert_error_message(
+    capsys: pytest.CaptureFixture[str],
+    expected: str,
+) -> None:
+    """Assert that stderr contains the expected error message.
+
+    Args:
+        capsys: pytest capsys fixture for capturing output.
+        expected: Expected substring in stderr.
+
+    Usage:
+        return_code = run_main_with_args([...], expected_exit=Exit.ERROR, capsys=capsys)
+        assert_error_message(capsys, "Error message")
+    """
+    __tracebackhide__ = True
+    captured = capsys.readouterr()
+    assert expected in captured.err, f"Expected '{expected}' in stderr, got: {captured.err}"
 
 
 @pytest.fixture(autouse=True)
