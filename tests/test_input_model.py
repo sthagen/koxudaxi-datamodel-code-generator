@@ -607,6 +607,155 @@ def test_input_model_optional_mapping_union_syntax(tmp_path: Path) -> None:
 
 
 # ============================================================================
+# Callable and unserializable type tests
+# ============================================================================
+
+
+@SKIP_PYDANTIC_V1
+def test_input_model_callable_basic(tmp_path: Path) -> None:
+    """Test that Callable[[str], str] is preserved when converting Pydantic model."""
+    run_input_model_and_assert(
+        input_model="tests.data.python.input_model.pydantic_models:ModelWithCallableTypes",
+        output_path=tmp_path / "output.py",
+        expected_output_contains=["Callable[[str], str]", "callback:"],
+    )
+
+
+@SKIP_PYDANTIC_V1
+def test_input_model_callable_multi_param(tmp_path: Path) -> None:
+    """Test that Callable[[int, int], bool] is preserved."""
+    run_input_model_and_assert(
+        input_model="tests.data.python.input_model.pydantic_models:ModelWithCallableTypes",
+        output_path=tmp_path / "output.py",
+        expected_output_contains=["Callable[[int, int], bool]", "multi_param_callback:"],
+    )
+
+
+@SKIP_PYDANTIC_V1
+def test_input_model_callable_variadic(tmp_path: Path) -> None:
+    """Test that Callable[..., Any] is preserved."""
+    run_input_model_and_assert(
+        input_model="tests.data.python.input_model.pydantic_models:ModelWithCallableTypes",
+        output_path=tmp_path / "output.py",
+        expected_output_contains=["Callable[..., Any]", "variadic_callback:"],
+    )
+
+
+@SKIP_PYDANTIC_V1
+def test_input_model_callable_no_param(tmp_path: Path) -> None:
+    """Test that Callable[[], None] is preserved."""
+    run_input_model_and_assert(
+        input_model="tests.data.python.input_model.pydantic_models:ModelWithCallableTypes",
+        output_path=tmp_path / "output.py",
+        expected_output_contains=["Callable[[], None]", "no_param_callback:"],
+    )
+
+
+@SKIP_PYDANTIC_V1
+def test_input_model_callable_optional(tmp_path: Path) -> None:
+    """Test that Callable[[str], str] | None is preserved."""
+    run_input_model_and_assert(
+        input_model="tests.data.python.input_model.pydantic_models:ModelWithCallableTypes",
+        output_path=tmp_path / "output.py",
+        expected_output_contains=["Callable[[str], str] | None", "optional_callback:"],
+    )
+
+
+@SKIP_PYDANTIC_V1
+def test_input_model_type_field(tmp_path: Path) -> None:
+    """Test that Type[BaseModel] is preserved with proper import."""
+    run_input_model_and_assert(
+        input_model="tests.data.python.input_model.pydantic_models:ModelWithCallableTypes",
+        output_path=tmp_path / "output.py",
+        expected_output_contains=[
+            "Type[BaseModel]",
+            "type_field:",
+            "from pydantic.main import BaseModel",
+        ],
+    )
+
+
+@SKIP_PYDANTIC_V1
+def test_input_model_nested_callable(tmp_path: Path) -> None:
+    """Test that list[Callable[[str], int]] is preserved."""
+    run_input_model_and_assert(
+        input_model="tests.data.python.input_model.pydantic_models:ModelWithCallableTypes",
+        output_path=tmp_path / "output.py",
+        expected_output_contains=["list[Callable[[str], int]]", "nested_callable:"],
+    )
+
+
+@SKIP_PYDANTIC_V1
+def test_input_model_nested_model_with_callable(tmp_path: Path) -> None:
+    """Test that nested models with Callable types in $defs are processed."""
+    run_input_model_and_assert(
+        input_model="tests.data.python.input_model.pydantic_models:ModelWithNestedCallable",
+        output_path=tmp_path / "output.py",
+        expected_output_contains=[
+            "Callable[[str], int]",
+            "Callable[[int], str]",
+            "NestedCallableModel",
+        ],
+    )
+
+
+@SKIP_PYDANTIC_V1
+def test_input_model_custom_class(tmp_path: Path) -> None:
+    """Test that custom classes trigger handle_invalid_for_json_schema."""
+    run_input_model_and_assert(
+        input_model="tests.data.python.input_model.pydantic_models:ModelWithCustomClass",
+        output_path=tmp_path / "output.py",
+        expected_output_contains=[
+            "CustomClass",
+            "custom_obj:",
+        ],
+    )
+
+
+@SKIP_PYDANTIC_V1
+def test_input_model_union_callable(tmp_path: Path) -> None:
+    """Test that Union[Callable, int] and raw Callable are preserved."""
+    run_input_model_and_assert(
+        input_model="tests.data.python.input_model.pydantic_models:ModelWithUnionCallable",
+        output_path=tmp_path / "output.py",
+        expected_output_contains=[
+            "Callable[[str], str] | int",
+            "union_callback:",
+            "Callable",
+            "raw_callable:",
+        ],
+    )
+
+
+@SKIP_PYDANTIC_V1
+def test_input_model_custom_generic_type_import(tmp_path: Path) -> None:
+    """Test that custom generic types are properly imported with full module path."""
+    run_input_model_and_assert(
+        input_model="tests.data.python.input_model.pydantic_models:ModelWithCustomGeneric",
+        output_path=tmp_path / "output.py",
+        expected_output_contains=[
+            "from tests.data.python.input_model.pydantic_models import CustomGenericDict",
+            "CustomGenericDict[str, int]",
+            "CustomGenericDict[str, str] | None",
+        ],
+    )
+
+
+@SKIP_PYDANTIC_V1
+def test_input_model_default_put_dict_import(tmp_path: Path) -> None:
+    """Test that DefaultPutDict generic type is properly imported from parser module."""
+    run_input_model_and_assert(
+        input_model="tests.data.python.input_model.pydantic_models:ModelWithDefaultPutDict",
+        output_path=tmp_path / "output.py",
+        expected_output_contains=[
+            "from datamodel_code_generator.parser import DefaultPutDict",
+            "DefaultPutDict[str, str]",
+            "DefaultPutDict[str, int] | None",
+        ],
+    )
+
+
+# ============================================================================
 # --input-model-ref-strategy tests
 # ============================================================================
 
@@ -661,7 +810,7 @@ def test_input_model_ref_strategy_regenerate_all_explicit(tmp_path: Path) -> Non
 
 @SKIP_PYDANTIC_V1
 def test_input_model_ref_strategy_reuse_foreign(tmp_path: Path) -> None:
-    """Test reuse-foreign strategy imports enums and dataclasses."""
+    """Test reuse-foreign imports enum (always) and same-family types."""
     run_input_model_and_assert(
         input_model="tests.data.python.input_model.nested_models:User",
         output_path=tmp_path / "output.py",
@@ -672,9 +821,8 @@ def test_input_model_ref_strategy_reuse_foreign(tmp_path: Path) -> None:
             "reuse-foreign",
         ],
         expected_output_contains=[
-            "from tests.data.python.input_model.nested_models import",
-            "Metadata",
-            "Status",
+            "from tests.data.python.input_model.nested_models import Status",
+            "class Metadata",
             "class Address",
             "class User",
         ],
@@ -683,7 +831,7 @@ def test_input_model_ref_strategy_reuse_foreign(tmp_path: Path) -> None:
 
 @SKIP_PYDANTIC_V1
 def test_input_model_ref_strategy_reuse_foreign_no_regeneration(tmp_path: Path) -> None:
-    """Test reuse-foreign strategy does not regenerate foreign types."""
+    """Test reuse-foreign imports only types compatible with output (enum always, same family)."""
     output_path = tmp_path / "output.py"
     run_input_model_and_assert(
         input_model="tests.data.python.input_model.nested_models:User",
@@ -695,12 +843,13 @@ def test_input_model_ref_strategy_reuse_foreign_no_regeneration(tmp_path: Path) 
             "reuse-foreign",
         ],
         expected_output_contains=[
-            "from tests.data.python.input_model.nested_models import",
+            "from tests.data.python.input_model.nested_models import Status",
+            "class Metadata",
+            "class Address",
         ],
     )
     content = output_path.read_text(encoding="utf-8")
     assert "Status: TypeAlias" not in content
-    assert "class Metadata" not in content
 
 
 @SKIP_PYDANTIC_V1
@@ -844,4 +993,150 @@ def test_input_model_ref_strategy_typeddict_reuse_foreign(tmp_path: Path) -> Non
             "class Member",
             "class Profile",
         ],
+    )
+
+
+@SKIP_PYDANTIC_V1
+def test_input_model_ref_strategy_reuse_foreign_same_family_typeddict(tmp_path: Path) -> None:
+    """Test reuse-foreign imports TypedDict when output is TypedDict (same family)."""
+    output_path = tmp_path / "output.py"
+    run_input_model_and_assert(
+        input_model="tests.data.python.input_model.mixed_nested:ModelWithTypedDict",
+        output_path=output_path,
+        extra_args=[
+            "--output-model-type",
+            "typing.TypedDict",
+            "--input-model-ref-strategy",
+            "reuse-foreign",
+        ],
+        expected_output_contains=[
+            "from tests.data.python.input_model.mixed_nested import",
+            "Category",
+            "NestedTypedDict",
+        ],
+    )
+    content = output_path.read_text(encoding="utf-8")
+    assert "class NestedTypedDict" not in content
+
+
+@SKIP_PYDANTIC_V1
+def test_input_model_ref_strategy_reuse_foreign_different_family_regenerate(tmp_path: Path) -> None:
+    """Test reuse-foreign regenerates Pydantic model when output is TypedDict."""
+    output_path = tmp_path / "output.py"
+    run_input_model_and_assert(
+        input_model="tests.data.python.input_model.mixed_nested:ModelWithPydantic",
+        output_path=output_path,
+        extra_args=[
+            "--output-model-type",
+            "typing.TypedDict",
+            "--input-model-ref-strategy",
+            "reuse-foreign",
+        ],
+        expected_output_contains=[
+            "from tests.data.python.input_model.mixed_nested import Category",
+            "class NestedPydantic",
+        ],
+    )
+
+
+@SKIP_PYDANTIC_V1
+def test_input_model_ref_strategy_reuse_foreign_same_family_dataclass(tmp_path: Path) -> None:
+    """Test reuse-foreign imports dataclass when output is dataclass (same family)."""
+    output_path = tmp_path / "output.py"
+    run_input_model_and_assert(
+        input_model="tests.data.python.input_model.mixed_nested:ModelWithDataclass",
+        output_path=output_path,
+        extra_args=[
+            "--output-model-type",
+            "dataclasses.dataclass",
+            "--input-model-ref-strategy",
+            "reuse-foreign",
+        ],
+        expected_output_contains=[
+            "from tests.data.python.input_model.mixed_nested import",
+            "Category",
+            "NestedDataclass",
+        ],
+    )
+    content = output_path.read_text(encoding="utf-8")
+    assert "class NestedDataclass" not in content
+
+
+@SKIP_PYDANTIC_V1
+def test_input_model_ref_strategy_reuse_foreign_mixed_types(tmp_path: Path) -> None:
+    """Test reuse-foreign with mixed nested types (TypedDict, Pydantic, dataclass)."""
+    output_path = tmp_path / "output.py"
+    run_input_model_and_assert(
+        input_model="tests.data.python.input_model.mixed_nested:ModelWithMixed",
+        output_path=output_path,
+        extra_args=[
+            "--output-model-type",
+            "typing.TypedDict",
+            "--input-model-ref-strategy",
+            "reuse-foreign",
+        ],
+        expected_output_contains=[
+            "from tests.data.python.input_model.mixed_nested import",
+            "Category",
+            "NestedTypedDict",
+            "class NestedPydantic",
+            "class NestedDataclass",
+        ],
+    )
+    content = output_path.read_text(encoding="utf-8")
+    assert "class NestedTypedDict" not in content
+
+
+@SKIP_PYDANTIC_V1
+def test_input_model_ref_strategy_reuse_foreign_pydantic_output(tmp_path: Path) -> None:
+    """Test reuse-foreign imports Pydantic when output is Pydantic (same family)."""
+    output_path = tmp_path / "output.py"
+    run_input_model_and_assert(
+        input_model="tests.data.python.input_model.mixed_nested:ModelWithPydantic",
+        output_path=output_path,
+        extra_args=[
+            "--output-model-type",
+            "pydantic.BaseModel",
+            "--input-model-ref-strategy",
+            "reuse-foreign",
+        ],
+        expected_output_contains=[
+            "from tests.data.python.input_model.mixed_nested import",
+            "Category",
+            "NestedPydantic",
+        ],
+    )
+    content = output_path.read_text(encoding="utf-8")
+    assert "class NestedPydantic" not in content
+
+
+@SKIP_PYDANTIC_V1
+def test_input_model_ref_strategy_reuse_foreign_msgspec_output(tmp_path: Path) -> None:
+    """Test reuse-foreign regenerates non-msgspec types when output is msgspec."""
+    output_path = tmp_path / "output.py"
+    run_input_model_and_assert(
+        input_model="tests.data.python.input_model.mixed_nested:ModelWithPydantic",
+        output_path=output_path,
+        extra_args=[
+            "--output-model-type",
+            "msgspec.Struct",
+            "--input-model-ref-strategy",
+            "reuse-foreign",
+        ],
+        expected_output_contains=[
+            "from tests.data.python.input_model.mixed_nested import Category",
+            "class NestedPydantic",
+            "class ModelWithPydantic",
+        ],
+    )
+
+
+@SKIP_PYDANTIC_V1
+def test_input_model_config_class(tmp_path: Path) -> None:
+    """Test that config classes like GenerateConfig are properly handled."""
+    run_input_model_and_assert(
+        input_model="datamodel_code_generator.config:GenerateConfig",
+        output_path=tmp_path / "output.py",
+        extra_args=["--output-model-type", "typing.TypedDict"],
+        expected_output_contains=["TypedDict", "Callable[[str], str]"],
     )

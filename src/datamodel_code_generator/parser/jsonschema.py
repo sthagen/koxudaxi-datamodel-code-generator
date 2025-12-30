@@ -7,6 +7,7 @@ Python data models. Supports draft-04 through draft-2020-12 schemas.
 from __future__ import annotations
 
 import enum as _enum
+import importlib
 import json
 import re
 from collections import defaultdict
@@ -76,6 +77,9 @@ from datamodel_code_generator.types import (
     StrictTypes,
     Types,
     UnionIntFloat,
+    extract_qualified_names,
+    get_subscript_args,
+    get_type_base_name,
 )
 from datamodel_code_generator.util import (
     BaseModel,
@@ -347,14 +351,14 @@ class JsonSchemaObject(BaseModel):
     unevaluatedProperties: Optional[Union[JsonSchemaObject, bool]] = None  # noqa: N815, UP007, UP045
     patternProperties: Optional[dict[str, Union[JsonSchemaObject, bool]]] = None  # noqa: N815, UP007, UP045
     propertyNames: Optional[JsonSchemaObject] = None  # noqa: N815, UP045
-    oneOf: list[JsonSchemaObject] = []  # noqa: N815, RUF012
-    anyOf: list[JsonSchemaObject] = []  # noqa: N815, RUF012
-    allOf: list[JsonSchemaObject] = []  # noqa: N815, RUF012
-    enum: list[Any] = []  # noqa: RUF012
+    oneOf: list[JsonSchemaObject] = Field(default_factory=list)  # noqa: N815
+    anyOf: list[JsonSchemaObject] = Field(default_factory=list)  # noqa: N815
+    allOf: list[JsonSchemaObject] = Field(default_factory=list)  # noqa: N815
+    enum: list[Any] = Field(default_factory=list)
     writeOnly: Optional[bool] = None  # noqa: N815, UP045
     readOnly: Optional[bool] = None  # noqa: N815, UP045
     properties: Optional[dict[str, Union[JsonSchemaObject, bool]]] = None  # noqa: UP007, UP045
-    required: list[str] = []  # noqa: RUF012
+    required: list[str] = Field(default_factory=list)
     ref: Optional[str] = Field(default=None, alias="$ref")  # noqa: UP045
     nullable: Optional[bool] = None  # noqa: UP045
     x_enum_varnames: list[str] = Field(default_factory=list, alias="x-enum-varnames")
@@ -558,6 +562,7 @@ class JsonSchemaParser(Parser):
     }
 
     PYTHON_TYPE_IMPORTS: ClassVar[dict[str, Import]] = {
+        # collections.abc
         "Callable": Import.from_full_path("collections.abc.Callable"),
         "Iterable": Import.from_full_path("collections.abc.Iterable"),
         "Iterator": Import.from_full_path("collections.abc.Iterator"),
@@ -567,9 +572,70 @@ class JsonSchemaParser(Parser):
         "AsyncIterable": Import.from_full_path("collections.abc.AsyncIterable"),
         "AsyncIterator": Import.from_full_path("collections.abc.AsyncIterator"),
         "AsyncGenerator": Import.from_full_path("collections.abc.AsyncGenerator"),
+        "Mapping": Import.from_full_path("collections.abc.Mapping"),
+        "MutableMapping": Import.from_full_path("collections.abc.MutableMapping"),
+        "Sequence": Import.from_full_path("collections.abc.Sequence"),
+        "MutableSequence": Import.from_full_path("collections.abc.MutableSequence"),
+        "Set": Import.from_full_path("collections.abc.Set"),
+        "MutableSet": Import.from_full_path("collections.abc.MutableSet"),
+        "Collection": Import.from_full_path("collections.abc.Collection"),
+        "Reversible": Import.from_full_path("collections.abc.Reversible"),
+        # collections
+        "defaultdict": Import.from_full_path("collections.defaultdict"),
+        "OrderedDict": Import.from_full_path("collections.OrderedDict"),
+        "Counter": Import.from_full_path("collections.Counter"),
+        "deque": Import.from_full_path("collections.deque"),
+        "ChainMap": Import.from_full_path("collections.ChainMap"),
+        # re
         "Pattern": Import.from_full_path("re.Pattern"),
         "Match": Import.from_full_path("re.Match"),
+        # typing
+        "Any": Import.from_full_path("typing.Any"),
+        "Type": Import.from_full_path("typing.Type"),
+        "Union": Import.from_full_path("typing.Union"),
+        "Optional": Import.from_full_path("typing.Optional"),
+        "Literal": Import.from_full_path("typing.Literal"),
+        "Final": Import.from_full_path("typing.Final"),
+        "ClassVar": Import.from_full_path("typing.ClassVar"),
+        "Annotated": Import.from_full_path("typing.Annotated"),
+        "TypeVar": Import.from_full_path("typing.TypeVar"),
+        "TypeAlias": Import.from_full_path("typing.TypeAlias"),
+        "Never": Import.from_full_path("typing.Never"),
+        "NoReturn": Import.from_full_path("typing.NoReturn"),
+        "Self": Import.from_full_path("typing.Self"),
+        "LiteralString": Import.from_full_path("typing.LiteralString"),
+        "TypeGuard": Import.from_full_path("typing.TypeGuard"),
+        # pathlib
+        "Path": Import.from_full_path("pathlib.Path"),
+        "PurePath": Import.from_full_path("pathlib.PurePath"),
+        # decimal
+        "Decimal": Import.from_full_path("decimal.Decimal"),
+        # uuid
+        "UUID": Import.from_full_path("uuid.UUID"),
+        # datetime
+        "datetime": Import.from_full_path("datetime.datetime"),
+        "date": Import.from_full_path("datetime.date"),
+        "time": Import.from_full_path("datetime.time"),
+        "timedelta": Import.from_full_path("datetime.timedelta"),
+        # enum
+        "Enum": Import.from_full_path("enum.Enum"),
+        "IntEnum": Import.from_full_path("enum.IntEnum"),
+        "StrEnum": Import.from_full_path("enum.StrEnum"),
+        "Flag": Import.from_full_path("enum.Flag"),
+        "IntFlag": Import.from_full_path("enum.IntFlag"),
     }
+
+    # Types that require x-python-type override regardless of schema type
+    PYTHON_TYPE_OVERRIDE_ALWAYS: ClassVar[frozenset[str]] = frozenset({
+        "Callable",
+        "Type",
+        # collections types that have no JSON Schema equivalent
+        "defaultdict",
+        "OrderedDict",
+        "Counter",
+        "deque",
+        "ChainMap",
+    })
 
     def __init__(  # noqa: PLR0913
         self,
@@ -1196,9 +1262,10 @@ class JsonSchemaParser(Parser):
         if python_type_override:
             return python_type_override
 
+        if "const" in obj.extras:
+            return self.data_type(literals=[obj.extras["const"]])
+
         if obj.type is None:
-            if "const" in obj.extras:
-                return self.data_type_manager.get_data_type_from_value(obj.extras["const"])
             return self.data_type_manager.get_data_type(
                 Types.any,
             )
@@ -1307,59 +1374,76 @@ class JsonSchemaParser(Parser):
             "MutableSet": {"is_set": True},
         }
 
-        base_type = x_python_type.split("[")[0].strip()
+        base_type = get_type_base_name(x_python_type)
         if base_type in type_to_flag:
             return type_to_flag[base_type]
 
-        if base_type in {"Union", "Optional"}:
-            bracket_start = x_python_type.find("[")
-            if bracket_start != -1:
-                inner = x_python_type[bracket_start + 1 : -1]
-                depth = 0
-                current = ""
-                for char in inner:
-                    if char == "[":
-                        depth += 1
-                    elif char == "]":
-                        depth -= 1
-                    if char == "," and depth == 0:
-                        arg_base = current.strip().split("[")[0]
-                        if arg_base in type_to_flag:
-                            return type_to_flag[arg_base]
-                        current = ""
-                    else:
-                        current += char
-                if current.strip():
-                    arg_base = current.strip().split("[")[0]
-                    if arg_base in type_to_flag:
-                        return type_to_flag[arg_base]
+        if base_type in {"Union", "Optional"} or " | " in x_python_type:
+            for arg in get_subscript_args(x_python_type):
+                arg_base = get_type_base_name(arg)
+                if arg_base in type_to_flag:
+                    return type_to_flag[arg_base]
 
         return {}
 
     def _get_python_type_base(self, python_type: str) -> str:  # noqa: PLR6301
         """Extract base type from a Python type annotation string."""
-        if "." in python_type.split("[", maxsplit=1)[0]:
-            base = python_type.split("[", maxsplit=1)[0].rsplit(".", 1)[-1]
-        else:
-            base = python_type.split("[", maxsplit=1)[0].strip()
-        return base
+        return get_type_base_name(python_type)
 
     def _is_compatible_python_type(self, schema_type: str | None, python_type: str) -> bool:
         """Check if x-python-type is compatible with the JSON Schema type."""
+        base_type = self._get_python_type_base(python_type)
+        if base_type in self.PYTHON_TYPE_OVERRIDE_ALWAYS:
+            return False
+        all_type_names = self._extract_all_type_names(python_type)
+        if any(t in self.PYTHON_TYPE_OVERRIDE_ALWAYS for t in all_type_names):
+            return False
         if schema_type is None:
             return True
-        base_type = self._get_python_type_base(python_type)
         if base_type in {"Union", "Optional"}:
             return True
         compatible = self.COMPATIBLE_PYTHON_TYPES.get(schema_type, frozenset())
         return base_type in compatible
 
     def _extract_all_type_names(self, type_str: str) -> list[str]:  # noqa: PLR6301
-        """Extract all type names from a type annotation string."""
-        # Match type names: word characters starting with uppercase, not preceded by a dot
-        # This handles cases like Callable[[Iterable[str]], str]
-        pattern = r"(?<![.\w])([A-Z]\w*)"
-        return re.findall(pattern, type_str)
+        """Extract all type names from a type annotation string using AST parsing."""
+        import ast  # noqa: PLC0415
+
+        try:
+            tree = ast.parse(type_str, mode="eval")
+            return [node.id for node in ast.walk(tree) if isinstance(node, ast.Name)]
+        except SyntaxError:  # pragma: no cover
+            # Fallback to regex for non-standard type strings
+            pattern = r"(?<![.\w])([A-Za-z_]\w*)"
+            return re.findall(pattern, type_str)
+
+    @staticmethod
+    @lru_cache(maxsize=256)
+    def _resolve_type_import_dynamic(type_name: str) -> Import | None:
+        """Dynamically resolve import for a type name from known modules."""
+        modules_to_check = (
+            "typing",
+            "collections.abc",
+            "collections",
+            "pathlib",
+            "decimal",
+            "uuid",
+            "datetime",
+            "enum",
+            "re",
+        )
+        for module_name in modules_to_check:
+            with suppress(ImportError):
+                module = importlib.import_module(module_name)
+                if hasattr(module, type_name):
+                    return Import.from_full_path(f"{module_name}.{type_name}")
+        return None
+
+    def _resolve_type_import(self, type_name: str) -> Import | None:
+        """Resolve import for a type name, with dynamic fallback."""
+        if type_name in self.PYTHON_TYPE_IMPORTS:
+            return self.PYTHON_TYPE_IMPORTS[type_name]
+        return self._resolve_type_import_dynamic(type_name)
 
     def _get_python_type_override(self, obj: JsonSchemaObject) -> DataType | None:
         """Get DataType from x-python-type if it's incompatible with schema type."""
@@ -1372,7 +1456,7 @@ class JsonSchemaParser(Parser):
             return None
 
         base_type = self._get_python_type_base(x_python_type)
-        import_ = self.PYTHON_TYPE_IMPORTS.get(base_type)
+        import_ = self._resolve_type_import(base_type)
 
         # Convert fully qualified path to short name when import is added
         type_str = x_python_type
@@ -1384,11 +1468,18 @@ class JsonSchemaParser(Parser):
                 # If not in predefined imports, create import from the full path
                 import_ = Import.from_full_path(prefix)
 
-        # Collect imports for all nested types (e.g., Iterable inside Callable[[Iterable[str]], str])
+        # Collect imports for qualified names (e.g., module.path.ClassName)
         nested_imports: list[DataType] = []
+        for qualified_name in extract_qualified_names(type_str):
+            class_name = qualified_name.rsplit(".", 1)[-1]
+            nested_import = Import.from_full_path(qualified_name)
+            nested_imports.append(self.data_type(import_=nested_import))
+            type_str = type_str.replace(qualified_name, class_name)
+
+        # Collect imports for all nested types (e.g., Iterable inside Callable[[Iterable[str]], str])
         for type_name in self._extract_all_type_names(type_str):
             if type_name != base_type:
-                nested_import = self.PYTHON_TYPE_IMPORTS.get(type_name)
+                nested_import = self._resolve_type_import(type_name)
                 if nested_import:
                     nested_imports.append(self.data_type(import_=nested_import))
 
@@ -1822,19 +1913,23 @@ class JsonSchemaParser(Parser):
             except Exception:  # pragma: no cover  # noqa: BLE001, S112
                 continue
 
+            result: DataType | None = None
             if parent_schema.properties:
                 prop_schema = parent_schema.properties.get(prop_name)
                 if isinstance(prop_schema, JsonSchemaObject):
                     result = self._build_lightweight_type(prop_schema)
-                    if result is not None:
-                        return result
+            # In case of a missing type, continue searching up the inheritance chain
+            if result is not None and not (result.type == ANY or self._is_list_with_any_item_type(result)):
+                return result
 
+            parent_result: DataType | None = None
             if parent_schema.allOf:
                 grandparent_refs = [self.model_resolver.add_ref(item.ref) for item in parent_schema.allOf if item.ref]
                 if grandparent_refs:
-                    result = self._get_inherited_field_type(prop_name, grandparent_refs, visited)
-                    if result is not None:
-                        return result
+                    parent_result = self._get_inherited_field_type(prop_name, grandparent_refs, visited)
+                    if parent_result is not None:
+                        return parent_result
+                    return result
 
         return None
 
@@ -2717,7 +2812,7 @@ class JsonSchemaParser(Parser):
             dict_key=key_type,
         )
 
-    def parse_item(  # noqa: PLR0911, PLR0912
+    def parse_item(  # noqa: PLR0911, PLR0912, PLR0914
         self,
         name: str,
         item: JsonSchemaObject,
@@ -2726,6 +2821,9 @@ class JsonSchemaParser(Parser):
         parent: JsonSchemaObject | None = None,
     ) -> DataType:
         """Parse a single JSON Schema item into a data type."""
+        python_type_override = self._get_python_type_override(item)
+        if python_type_override:
+            return python_type_override
         if self.use_title_as_name and item.title:
             name = sanitize_module_name(item.title, treat_dot_as_module=self.treat_dot_as_module)
             singular_name = False
