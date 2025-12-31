@@ -19,6 +19,7 @@ if TYPE_CHECKING:
         DataclassArguments,
         FieldTypeCollisionStrategy,
         NamingStrategy,
+        OpenAPIScope,
         ReadOnlyWriteOnlyModelType,
         ReuseScope,
         StrictTypes,
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
     from datamodel_code_generator.types import DataTypeManager
 
 
-class ParserConfigDict(TypedDict):
+class OpenAPIParserConfigDict(TypedDict):
     data_model_type: NotRequired[type[DataModel]]
     data_model_root_type: NotRequired[type[DataModel]]
     data_type_manager_type: NotRequired[type[DataTypeManager]]
@@ -142,3 +143,6 @@ class ParserConfigDict(TypedDict):
     read_only_write_only_model_type: NotRequired[ReadOnlyWriteOnlyModelType | None]
     field_type_collision_strategy: NotRequired[FieldTypeCollisionStrategy | None]
     target_pydantic_version: NotRequired[TargetPydanticVersion | None]
+    openapi_scopes: NotRequired[list[OpenAPIScope] | None]
+    include_path_parameters: NotRequired[bool]
+    use_status_code_in_response_name: NotRequired[bool]

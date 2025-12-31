@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from datamodel_code_generator.types import DataTypeManager
 
 
-class ParserConfigDict(TypedDict):
+class JSONSchemaParserConfigDict(TypedDict):
     data_model_type: NotRequired[type[DataModel]]
     data_model_root_type: NotRequired[type[DataModel]]
     data_type_manager_type: NotRequired[type[DataTypeManager]]
