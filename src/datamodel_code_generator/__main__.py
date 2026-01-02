@@ -39,7 +39,7 @@ import signal
 import tempfile
 import warnings
 from collections import defaultdict
-from collections.abc import Sequence  # noqa: TC003  # pydantic needs it
+from collections.abc import Callable, Sequence  # noqa: TC003  # pydantic needs it
 from enum import IntEnum
 from io import TextIOBase
 from pathlib import Path
@@ -54,6 +54,7 @@ from datamodel_code_generator import (
     AllExportsScope,
     AllOfClassHierarchy,
     AllOfMergeMode,
+    ClassNameAffixScope,
     CollapseRootModelsNameStrategy,
     DataclassArguments,
     DataModelType,
@@ -73,7 +74,6 @@ from datamodel_code_generator import (
 )
 from datamodel_code_generator.arguments import DEFAULT_ENCODING, arg_parser, namespace
 from datamodel_code_generator.format import (
-    DEFAULT_FORMATTERS,
     DateClassType,
     DatetimeClassType,
     Formatter,
@@ -176,7 +176,7 @@ class Config(BaseModel):
             """Get model fields."""
             return cls.__fields__
 
-    @field_validator("aliases", "extra_template_data", "custom_formatters_kwargs", mode="before")
+    @field_validator("aliases", "extra_template_data", "custom_formatters_kwargs", "default_values", mode="before")
     def validate_file(cls, value: Any) -> TextIOBase | None:  # noqa: N805
         """Validate and open file path."""
         if value is None:  # pragma: no cover
@@ -395,6 +395,16 @@ class Config(BaseModel):
                 return [v]
             return v
 
+        @_field_validator("class_name_affix_scope", mode="before")
+        @classmethod
+        def validate_class_name_affix_scope(cls, v: str | ClassNameAffixScope | None) -> ClassNameAffixScope:  # pyright: ignore[reportRedeclaration]
+            """Convert string to ClassNameAffixScope enum."""
+            if v is None:  # pragma: no cover
+                return ClassNameAffixScope.All
+            if isinstance(v, str):
+                return ClassNameAffixScope(v)
+            return v  # pragma: no cover
+
     else:
 
         @model_validator()  # pyright: ignore[reportArgumentType]
@@ -461,6 +471,16 @@ class Config(BaseModel):
                 return [v]
             return v
 
+        @field_validator("class_name_affix_scope", mode="before")  # pragma: no cover
+        @classmethod
+        def validate_class_name_affix_scope(cls, v: str | ClassNameAffixScope | None) -> ClassNameAffixScope:
+            """Convert string to ClassNameAffixScope enum."""
+            if v is None:
+                return ClassNameAffixScope.All
+            if isinstance(v, str):
+                return ClassNameAffixScope(v)
+            return v
+
     input: Optional[Union[Path, str]] = None  # noqa: UP007, UP045
     input_model: Optional[list[str]] = None  # noqa: UP045
     input_model_ref_strategy: Optional[InputModelRefStrategy] = None  # noqa: UP045
@@ -483,6 +503,7 @@ class Config(BaseModel):
     snake_case_field: bool = False
     strip_default_none: bool = False
     aliases: Optional[TextIOBase] = None  # noqa: UP045
+    default_values: Optional[TextIOBase] = None  # noqa: UP045
     disable_timestamp: bool = False
     enable_version_header: bool = False
     enable_command_header: bool = False
@@ -493,6 +514,9 @@ class Config(BaseModel):
     use_default: bool = False
     force_optional: bool = False
     class_name: Optional[str] = None  # noqa: UP045
+    class_name_prefix: Optional[str] = None  # noqa: UP045
+    class_name_suffix: Optional[str] = None  # noqa: UP045
+    class_name_affix_scope: ClassNameAffixScope = ClassNameAffixScope.All
     use_standard_collections: bool = True
     use_schema_description: bool = False
     use_field_description: bool = False
@@ -527,6 +551,8 @@ class Config(BaseModel):
     model_extra_keys_without_x_prefix: Optional[set[str]] = None  # noqa: UP045
     openapi_scopes: Optional[list[OpenAPIScope]] = [OpenAPIScope.Schemas]  # noqa: UP045
     include_path_parameters: bool = False
+    openapi_include_paths: Optional[list[str]] = None  # noqa: UP045
+    graphql_no_typename: bool = False
     wrap_string_literal: Optional[bool] = None  # noqa: UP045
     use_title_as_name: bool = False
     use_operation_id_as_name: bool = False
@@ -569,9 +595,10 @@ class Config(BaseModel):
     frozen_dataclasses: bool = False
     dataclass_arguments: Optional[DataclassArguments] = None  # noqa: UP045
     no_alias: bool = False
+    use_serialization_alias: bool = False
     use_frozen_field: bool = False
     use_default_factory_for_optional_nested_models: bool = False
-    formatters: list[Formatter] = DEFAULT_FORMATTERS
+    formatters: list[Formatter] | None = None
     parent_scoped_naming: bool = False
     naming_strategy: Optional[NamingStrategy] = None  # noqa: UP045
     duplicate_name_suffix: Optional[dict[str, str]] = None  # noqa: UP045
@@ -829,6 +856,38 @@ def generate_cli_command(config: dict[str, TomlValue]) -> str:
     return " ".join(parts) + "\n"
 
 
+def _load_json_config(
+    file_handle: TextIOBase | None,
+    name: str,
+    validator: Callable[[Any], str | None],
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Load and validate a JSON configuration file.
+
+    Args:
+        file_handle: The file handle to read from, or None.
+        name: The name of the config for error messages.
+        validator: A function that validates the loaded data and returns an error message or None.
+
+    Returns:
+        A tuple of (loaded_dict, error_message). If successful, error_message is None.
+        If file_handle is None, returns (None, None).
+    """
+    if file_handle is None:
+        return None, None
+
+    with file_handle as data:
+        try:
+            result = json.load(data)
+        except json.JSONDecodeError as e:
+            return None, f"Unable to load {name}: {e}"
+
+    error = validator(result)
+    if error:
+        return None, f"Unable to load {name}: {error}"
+
+    return result, None
+
+
 def run_generate_from_config(  # noqa: PLR0913, PLR0917
     config: Config,
     input_: Path | str | ParseResult,
@@ -838,6 +897,7 @@ def run_generate_from_config(  # noqa: PLR0913, PLR0917
     command_line: str | None,
     custom_formatters_kwargs: dict[str, str] | None,
     settings_path: Path | None = None,
+    default_value_overrides: dict[str, Any] | None = None,
 ) -> None:
     """Run code generation with the given config and parameters."""
     result = generate(
@@ -869,6 +929,9 @@ def run_generate_from_config(  # noqa: PLR0913, PLR0917
         apply_default_values_for_required_fields=config.use_default,
         force_optional_for_required_fields=config.force_optional,
         class_name=config.class_name,
+        class_name_prefix=config.class_name_prefix,
+        class_name_suffix=config.class_name_suffix,
+        class_name_affix_scope=config.class_name_affix_scope,
         use_standard_collections=config.use_standard_collections,
         use_schema_description=config.use_schema_description,
         use_field_description=config.use_field_description,
@@ -901,6 +964,8 @@ def run_generate_from_config(  # noqa: PLR0913, PLR0917
         model_extra_keys_without_x_prefix=config.model_extra_keys_without_x_prefix,
         openapi_scopes=config.openapi_scopes,
         include_path_parameters=config.include_path_parameters,
+        openapi_include_paths=config.openapi_include_paths,
+        graphql_no_typename=config.graphql_no_typename,
         wrap_string_literal=config.wrap_string_literal,
         use_title_as_name=config.use_title_as_name,
         use_operation_id_as_name=config.use_operation_id_as_name,
@@ -943,6 +1008,7 @@ def run_generate_from_config(  # noqa: PLR0913, PLR0917
         keyword_only=config.keyword_only,
         frozen_dataclasses=config.frozen_dataclasses,
         no_alias=config.no_alias,
+        use_serialization_alias=config.use_serialization_alias,
         use_frozen_field=config.use_frozen_field,
         use_default_factory_for_optional_nested_models=config.use_default_factory_for_optional_nested_models,
         formatters=config.formatters,
@@ -960,6 +1026,7 @@ def run_generate_from_config(  # noqa: PLR0913, PLR0917
         all_exports_collision_strategy=config.all_exports_collision_strategy,
         field_type_collision_strategy=config.field_type_collision_strategy,
         module_split_mode=config.module_split_mode,
+        default_value_overrides=default_value_overrides,
     )
 
     if output is None and result is not None:  # pragma: no cover
@@ -972,6 +1039,9 @@ def run_generate_from_config(  # noqa: PLR0913, PLR0917
 
 def main(args: Sequence[str] | None = None) -> Exit:  # noqa: PLR0911, PLR0912, PLR0914, PLR0915
     """Execute datamodel code generation from command-line arguments."""
+    vars(namespace).clear()
+    namespace.no_color = False
+
     if "_ARGCOMPLETE" in os.environ:  # pragma: no cover
         import argcomplete  # noqa: PLC0415
 
@@ -1142,46 +1212,45 @@ def main(args: Sequence[str] | None = None) -> Exit:  # noqa: PLR0911, PLR0912, 
             else:
                 config.additional_imports = list(config.additional_imports) + additional_imports_from_template_data
 
-    if config.aliases is None:
-        aliases = None
-    else:
-        with config.aliases as data:
-            try:
-                aliases = json.load(data)
-            except json.JSONDecodeError as e:
-                print(f"Unable to load alias mapping: {e}", file=sys.stderr)  # noqa: T201
-                return Exit.ERROR
-        if not isinstance(aliases, dict) or not all(
+    def _validate_aliases(data: Any) -> str | None:
+        if not isinstance(data, dict) or not all(
             isinstance(k, str) and (isinstance(v, str) or (isinstance(v, list) and all(isinstance(i, str) for i in v)))
-            for k, v in aliases.items()
+            for k, v in data.items()
         ):
-            print(  # noqa: T201
-                "Alias mapping must be a JSON mapping with string keys and string or list of strings values "
-                '(e.g. {"from": "to", "field": ["alias1", "alias2"]})',
-                file=sys.stderr,
+            return (
+                "must be a JSON mapping with string keys and string or list of strings values "
+                '(e.g. {"from": "to", "field": ["alias1", "alias2"]})'
             )
-            return Exit.ERROR
+        return None
 
-    if config.custom_formatters_kwargs is None:
-        custom_formatters_kwargs = None
-    else:
-        with config.custom_formatters_kwargs as data:
-            try:
-                custom_formatters_kwargs = json.load(data)
-            except json.JSONDecodeError as e:  # pragma: no cover
-                print(  # noqa: T201
-                    f"Unable to load custom_formatters_kwargs mapping: {e}",
-                    file=sys.stderr,
-                )
-                return Exit.ERROR
-        if not isinstance(custom_formatters_kwargs, dict) or not all(
-            isinstance(k, str) and isinstance(v, str) for k, v in custom_formatters_kwargs.items()
-        ):  # pragma: no cover
-            print(  # noqa: T201
-                'Custom formatters kwargs mapping must be a JSON string mapping (e.g. {"from": "to", ...})',
-                file=sys.stderr,
-            )
-            return Exit.ERROR
+    def _validate_string_key_dict(data: Any) -> str | None:
+        if not isinstance(data, dict) or not all(isinstance(k, str) for k in data):
+            return "must be a JSON object with string keys"
+        return None
+
+    def _validate_string_mapping(data: Any) -> str | None:
+        if not isinstance(data, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in data.items()):
+            return 'must be a JSON string mapping (e.g. {"key": "value", ...})'
+        return None
+
+    aliases, error = _load_json_config(config.aliases, "alias mapping", _validate_aliases)
+    if error:
+        print(error, file=sys.stderr)  # noqa: T201
+        return Exit.ERROR
+
+    default_value_overrides, error = _load_json_config(
+        config.default_values, "default values mapping", _validate_string_key_dict
+    )
+    if error:
+        print(error, file=sys.stderr)  # noqa: T201
+        return Exit.ERROR
+
+    custom_formatters_kwargs, error = _load_json_config(
+        config.custom_formatters_kwargs, "custom_formatters_kwargs mapping", _validate_string_mapping
+    )
+    if error:
+        print(error, file=sys.stderr)  # noqa: T201
+        return Exit.ERROR
 
     if config.check:
         config_output = cast("Path", config.output)
@@ -1227,6 +1296,7 @@ def main(args: Sequence[str] | None = None) -> Exit:  # noqa: PLR0911, PLR0912, 
             command_line=shlex.join(["datamodel-codegen", *args]) if config.enable_command_header else None,
             custom_formatters_kwargs=custom_formatters_kwargs,
             settings_path=config.output,
+            default_value_overrides=default_value_overrides,
         )
     except InvalidClassNameError as e:
         print(f"{e} You have to set `--class-name` option", file=sys.stderr)  # noqa: T201
@@ -1275,7 +1345,9 @@ def main(args: Sequence[str] | None = None) -> Exit:  # noqa: PLR0911, PLR0912, 
         try:
             from datamodel_code_generator.watch import watch_and_regenerate  # noqa: PLC0415
 
-            return watch_and_regenerate(config, extra_template_data, aliases, custom_formatters_kwargs)
+            return watch_and_regenerate(
+                config, extra_template_data, aliases, custom_formatters_kwargs, default_value_overrides
+            )
         except Exception as e:  # noqa: BLE001
             print(str(e), file=sys.stderr)  # noqa: T201
             return Exit.ERROR

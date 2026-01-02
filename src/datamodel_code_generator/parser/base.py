@@ -893,6 +893,11 @@ class Parser(ABC, Generic[ParserConfigT]):
             treat_dot_as_module=config.treat_dot_as_module,
             naming_strategy=config.naming_strategy,
             duplicate_name_suffix_map=config.duplicate_name_suffix,
+            class_name_prefix=config.class_name_prefix,
+            class_name_suffix=config.class_name_suffix,
+            class_name_affix_scope=config.class_name_affix_scope,
+            skip_affix_for_root=config.class_name is not None,
+            default_value_overrides=config.default_value_overrides,
         )
         self.class_name: str | None = config.class_name
         self.wrap_string_literal: bool | None = config.wrap_string_literal
@@ -924,7 +929,7 @@ class Parser(ABC, Generic[ParserConfigT]):
         self.custom_formatters_kwargs = config.custom_formatters_kwargs
         self.treat_dot_as_module = config.treat_dot_as_module
         self.default_field_extras: dict[str, Any] | None = config.default_field_extras
-        self.formatters: list[Formatter] = config.formatters
+        self.formatters: list[Formatter] | None = config.formatters
         self.defer_formatting: bool = config.defer_formatting
         self.type_mappings: dict[tuple[str, str], str] = Parser._parse_type_mappings(config.type_mappings)
         self.type_overrides: dict[str, str] = config.type_overrides or {}
@@ -933,6 +938,7 @@ class Parser(ABC, Generic[ParserConfigT]):
         }
         self.read_only_write_only_model_type: ReadOnlyWriteOnlyModelType | None = config.read_only_write_only_model_type
         self.use_frozen_field: bool = config.use_frozen_field
+        self.use_serialization_alias: bool = config.use_serialization_alias
         self.use_default_factory_for_optional_nested_models: bool = (
             config.use_default_factory_for_optional_nested_models
         )
@@ -1120,6 +1126,38 @@ class Parser(ABC, Generic[ParserConfigT]):
                         {f"{c.module_name}.{c.type_hint}": c for c in child.base_classes}.values()
                     )
                 models_to_remove.add(duplicate_model)
+
+        if self.reuse_model and self.collapse_reuse_models:
+            max_iterations, iteration = len(models), 0
+            while True:
+                iteration += 1
+                if iteration > max_iterations:  # pragma: no cover
+                    msg = f"Deduplication exceeded max iterations ({max_iterations})"
+                    raise RuntimeError(msg)
+
+                content_key_to_models: dict[tuple[Any, ...], list[DataModel]] = defaultdict(list)
+                for model in models:
+                    if model not in models_to_remove and not isinstance(model, self.data_model_root_type):
+                        model._dedup_key_cache.clear()  # noqa: SLF001
+                        content_key_to_models[model.get_dedup_key(None, use_default=True)].append(model)
+
+                if not (
+                    duplicates := [
+                        (canonical := group[0], dup)
+                        for group in content_key_to_models.values()
+                        if len(group) > 1
+                        for dup in group[1:]
+                        if dup not in models_to_remove
+                    ]
+                ):
+                    break
+
+                for canonical, duplicate in duplicates:
+                    duplicate.replace_children_in_models(models, canonical.reference)
+                    for child in duplicate.reference.iter_data_model_children():  # pragma: no cover
+                        child.base_classes = list({c.reference: c for c in child.base_classes}.values())
+                    models_to_remove.add(duplicate)
+
         # Batch removal: O(n) instead of O(n²)
         if models_to_remove:
             models[:] = [m for m in models if m not in models_to_remove]
@@ -1458,6 +1496,7 @@ class Parser(ABC, Generic[ParserConfigT]):
                                 required=True,
                                 alias=single_alias,
                                 validation_aliases=validation_aliases,
+                                use_serialization_alias=self.use_serialization_alias,
                             )
                         )
             has_imported_literal = any(import_ == IMPORT_LITERAL for import_ in imports)

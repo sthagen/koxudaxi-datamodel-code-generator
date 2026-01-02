@@ -24,6 +24,7 @@ class OptionCategory(str, Enum):
     MODEL = "Model Customization"
     TEMPLATE = "Template Customization"
     OPENAPI = "OpenAPI-only Options"
+    GRAPHQL = "GraphQL-only Options"
     GENERAL = "General Options"
 
 
@@ -78,6 +79,9 @@ CLI_OPTION_META: dict[str, CLIOptionMeta] = {
     "--base-class": CLIOptionMeta(name="--base-class", category=OptionCategory.MODEL),
     "--base-class-map": CLIOptionMeta(name="--base-class-map", category=OptionCategory.MODEL),
     "--class-name": CLIOptionMeta(name="--class-name", category=OptionCategory.MODEL),
+    "--class-name-prefix": CLIOptionMeta(name="--class-name-prefix", category=OptionCategory.MODEL),
+    "--class-name-suffix": CLIOptionMeta(name="--class-name-suffix", category=OptionCategory.MODEL),
+    "--class-name-affix-scope": CLIOptionMeta(name="--class-name-affix-scope", category=OptionCategory.MODEL),
     "--frozen-dataclasses": CLIOptionMeta(name="--frozen-dataclasses", category=OptionCategory.MODEL),
     "--keyword-only": CLIOptionMeta(name="--keyword-only", category=OptionCategory.MODEL),
     "--reuse-model": CLIOptionMeta(name="--reuse-model", category=OptionCategory.MODEL),
@@ -136,7 +140,9 @@ CLI_OPTION_META: dict[str, CLIOptionMeta] = {
     "--empty-enum-field-name": CLIOptionMeta(name="--empty-enum-field-name", category=OptionCategory.FIELD),
     "--set-default-enum-member": CLIOptionMeta(name="--set-default-enum-member", category=OptionCategory.FIELD),
     "--aliases": CLIOptionMeta(name="--aliases", category=OptionCategory.FIELD),
+    "--default-values": CLIOptionMeta(name="--default-values", category=OptionCategory.FIELD),
     "--no-alias": CLIOptionMeta(name="--no-alias", category=OptionCategory.FIELD),
+    "--use-serialization-alias": CLIOptionMeta(name="--use-serialization-alias", category=OptionCategory.FIELD),
     "--use-title-as-name": CLIOptionMeta(name="--use-title-as-name", category=OptionCategory.FIELD),
     "--use-schema-description": CLIOptionMeta(name="--use-schema-description", category=OptionCategory.FIELD),
     "--use-field-description": CLIOptionMeta(name="--use-field-description", category=OptionCategory.FIELD),
@@ -233,12 +239,17 @@ CLI_OPTION_META: dict[str, CLIOptionMeta] = {
         name="--read-only-write-only-model-type", category=OptionCategory.OPENAPI
     ),
     "--include-path-parameters": CLIOptionMeta(name="--include-path-parameters", category=OptionCategory.OPENAPI),
+    "--openapi-include-paths": CLIOptionMeta(name="--openapi-include-paths", category=OptionCategory.OPENAPI),
     "--validation": CLIOptionMeta(
         name="--validation",
         category=OptionCategory.OPENAPI,
         deprecated=True,
         deprecated_message="Use --field-constraints instead",
     ),
+    # ==========================================================================
+    # GraphQL-only Options
+    # ==========================================================================
+    "--graphql-no-typename": CLIOptionMeta(name="--graphql-no-typename", category=OptionCategory.GRAPHQL),
     # ==========================================================================
     # General Options
     # ==========================================================================

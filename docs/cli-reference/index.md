@@ -10,10 +10,11 @@ This documentation is auto-generated from test cases.
 |----------|---------|-------------|
 | 📁 [Base Options](base-options.md) | 7 | Input/output configuration |
 | 🔧 [Typing Customization](typing-customization.md) | 27 | Type annotation and import behavior |
-| 🏷️ [Field Customization](field-customization.md) | 22 | Field naming and docstring behavior |
-| 🏗️ [Model Customization](model-customization.md) | 36 | Model generation behavior |
+| 🏷️ [Field Customization](field-customization.md) | 24 | Field naming and docstring behavior |
+| 🏗️ [Model Customization](model-customization.md) | 39 | Model generation behavior |
 | 🎨 [Template Customization](template-customization.md) | 18 | Output formatting and custom rendering |
-| 📘 [OpenAPI-only Options](openapi-only-options.md) | 6 | OpenAPI-specific features |
+| 📘 [OpenAPI-only Options](openapi-only-options.md) | 7 | OpenAPI-specific features |
+| 📋 [GraphQL-only Options](graphql-only-options.md) | 1 |  |
 | ⚙️ [General Options](general-options.md) | 15 | Utilities and meta options |
 | 📝 [Utility Options](utility-options.md) | 6 | Help, version, debug options |
 
@@ -44,6 +45,9 @@ This documentation is auto-generated from test cases.
 - [`--check`](general-options.md#check)
 - [`--class-decorators`](template-customization.md#class-decorators)
 - [`--class-name`](model-customization.md#class-name)
+- [`--class-name-affix-scope`](model-customization.md#class-name-affix-scope)
+- [`--class-name-prefix`](model-customization.md#class-name-prefix)
+- [`--class-name-suffix`](model-customization.md#class-name-suffix)
 - [`--collapse-reuse-models`](model-customization.md#collapse-reuse-models)
 - [`--collapse-root-models`](model-customization.md#collapse-root-models)
 - [`--collapse-root-models-name-strategy`](model-customization.md#collapse-root-models-name-strategy)
@@ -57,6 +61,7 @@ This documentation is auto-generated from test cases.
 
 - [`--dataclass-arguments`](model-customization.md#dataclass-arguments)
 - [`--debug`](utility-options.md#debug)
+- [`--default-values`](field-customization.md#default-values)
 - [`--disable-appending-item-suffix`](template-customization.md#disable-appending-item-suffix)
 - [`--disable-future-imports`](typing-customization.md#disable-future-imports)
 - [`--disable-timestamp`](template-customization.md#disable-timestamp)
@@ -91,6 +96,7 @@ This documentation is auto-generated from test cases.
 - [`--generate-cli-command`](general-options.md#generate-cli-command)
 - [`--generate-prompt`](utility-options.md#generate-prompt)
 - [`--generate-pyproject-config`](general-options.md#generate-pyproject-config)
+- [`--graphql-no-typename`](graphql-only-options.md#graphql-no-typename)
 
 ### H {#h}
 
@@ -133,6 +139,7 @@ This documentation is auto-generated from test cases.
 
 ### O {#o}
 
+- [`--openapi-include-paths`](openapi-only-options.md#openapi-include-paths)
 - [`--openapi-scopes`](openapi-only-options.md#openapi-scopes)
 - [`--original-field-name-delimiter`](field-customization.md#original-field-name-delimiter)
 - [`--output`](base-options.md#output)
@@ -196,6 +203,7 @@ This documentation is auto-generated from test cases.
 - [`--use-pendulum`](typing-customization.md#use-pendulum)
 - [`--use-root-model-type-alias`](typing-customization.md#use-root-model-type-alias)
 - [`--use-schema-description`](field-customization.md#use-schema-description)
+- [`--use-serialization-alias`](field-customization.md#use-serialization-alias)
 - [`--use-serialize-as-any`](model-customization.md#use-serialize-as-any)
 - [`--use-specialized-enum`](typing-customization.md#use-specialized-enum)
 - [`--use-standard-collections`](typing-customization.md#use-standard-collections)

@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from datamodel_code_generator.enums import (
         AllOfClassHierarchy,
         AllOfMergeMode,
+        ClassNameAffixScope,
         CollapseRootModelsNameStrategy,
         DataclassArguments,
         FieldTypeCollisionStrategy,
@@ -31,7 +32,7 @@ if TYPE_CHECKING:
     from datamodel_code_generator.types import DataTypeManager
 
 
-class ParserConfig(TypedDict):
+class ParserConfigDict(TypedDict):
     data_model_type: NotRequired[type[DataModel]]
     data_model_root_type: NotRequired[type[DataModel]]
     data_type_manager_type: NotRequired[type[DataTypeManager]]
@@ -56,6 +57,9 @@ class ParserConfig(TypedDict):
     use_generic_base_class: NotRequired[bool]
     force_optional_for_required_fields: NotRequired[bool]
     class_name: NotRequired[str | None]
+    class_name_prefix: NotRequired[str | None]
+    class_name_suffix: NotRequired[str | None]
+    class_name_affix_scope: NotRequired[ClassNameAffixScope]
     use_standard_collections: NotRequired[bool]
     base_path: NotRequired[Path | None]
     use_schema_description: NotRequired[bool]
@@ -130,9 +134,10 @@ class ParserConfig(TypedDict):
     keyword_only: NotRequired[bool]
     frozen_dataclasses: NotRequired[bool]
     no_alias: NotRequired[bool]
+    use_serialization_alias: NotRequired[bool]
     use_frozen_field: NotRequired[bool]
     use_default_factory_for_optional_nested_models: NotRequired[bool]
-    formatters: NotRequired[list[Formatter]]
+    formatters: NotRequired[list[Formatter] | None]
     defer_formatting: NotRequired[bool]
     parent_scoped_naming: NotRequired[bool]
     naming_strategy: NotRequired[NamingStrategy | None]
@@ -143,21 +148,24 @@ class ParserConfig(TypedDict):
     read_only_write_only_model_type: NotRequired[ReadOnlyWriteOnlyModelType | None]
     field_type_collision_strategy: NotRequired[FieldTypeCollisionStrategy | None]
     target_pydantic_version: NotRequired[TargetPydanticVersion | None]
+    default_value_overrides: NotRequired[Mapping[str, Any] | None]
 
 
-class GraphQLParserConfig(ParserConfig):
+class GraphQLParserConfigDict(ParserConfigDict):
     data_model_scalar_type: NotRequired[type[DataModel]]
     data_model_union_type: NotRequired[type[DataModel]]
+    graphql_no_typename: NotRequired[bool]
 
 
-class JSONSchemaParserConfig(ParserConfig):
+class JSONSchemaParserConfigDict(ParserConfigDict):
     pass
 
 
-class OpenAPIParserConfig(JSONSchemaParserConfig):
+class OpenAPIParserConfigDict(JSONSchemaParserConfigDict):
     openapi_scopes: NotRequired[list[OpenAPIScope] | None]
     include_path_parameters: NotRequired[bool]
     use_status_code_in_response_name: NotRequired[bool]
+    openapi_include_paths: NotRequired[list[str] | None]
 
 
-Model: TypeAlias = ParserConfig | GraphQLParserConfig | JSONSchemaParserConfig | OpenAPIParserConfig
+ModelDict: TypeAlias = ParserConfigDict | GraphQLParserConfigDict | JSONSchemaParserConfigDict | OpenAPIParserConfigDict

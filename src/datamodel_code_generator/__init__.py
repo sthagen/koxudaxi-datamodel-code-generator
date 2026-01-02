@@ -35,6 +35,7 @@ from datamodel_code_generator.enums import (
     AllExportsScope,
     AllOfClassHierarchy,
     AllOfMergeMode,
+    ClassNameAffixScope,
     CollapseRootModelsNameStrategy,
     DataclassArguments,
     DataModelType,
@@ -456,13 +457,17 @@ def _create_parser_config(
 ) -> _ConfigT:
     """Create a parser config from GenerateConfig with additional options.
 
-    For Pydantic v2: Uses model_validate with extra='ignore' and model_copy.
-    For Pydantic v1: Uses dict comprehension to filter fields.
+    Filters GenerateConfig fields to only those expected by the parser config class,
+    then merges with additional_options.
     """
     if is_pydantic_v2():
-        return config_class.model_validate(generate_config, from_attributes=True, extra="ignore").model_copy(
-            update=additional_options
-        )
+        parser_config_fields = set(config_class.model_fields.keys())
+        all_options = {
+            k: v
+            for k, v in generate_config.model_dump().items()
+            if k in parser_config_fields and k not in additional_options
+        } | dict(additional_options)
+        return config_class.model_validate(all_options)
     parser_config_fields = set(config_class.__fields__.keys())
     all_options = {
         k: v for k, v in generate_config.dict().items() if k in parser_config_fields and k not in additional_options
@@ -734,6 +739,7 @@ def generate(  # noqa: PLR0912, PLR0914, PLR0915
             "openapi_scopes": config.openapi_scopes,
             "include_path_parameters": config.include_path_parameters,
             "use_status_code_in_response_name": config.use_status_code_in_response_name,
+            "openapi_include_paths": config.openapi_include_paths,
             **additional_options,
         }
         parser_config = _create_parser_config(OpenAPIParserConfig, config, openapi_additional_options)
@@ -874,7 +880,11 @@ def generate(  # noqa: PLR0912, PLR0914, PLR0915
 
         file.close()
 
-    if defer_formatting and (Formatter.RUFF_CHECK in config.formatters or Formatter.RUFF_FORMAT in config.formatters):
+    if (
+        defer_formatting
+        and config.formatters
+        and (Formatter.RUFF_CHECK in config.formatters or Formatter.RUFF_FORMAT in config.formatters)
+    ):
         code_formatter = CodeFormatter(
             config.target_python_version,
             config.settings_path,
@@ -926,6 +936,7 @@ __all__ = [
     "AllExportsScope",
     "AllOfClassHierarchy",
     "AllOfMergeMode",
+    "ClassNameAffixScope",
     "CollapseRootModelsNameStrategy",
     "DateClassType",
     "DatetimeClassType",

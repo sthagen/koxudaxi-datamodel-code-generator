@@ -17,6 +17,7 @@ if TYPE_CHECKING:
         AllExportsScope,
         AllOfClassHierarchy,
         AllOfMergeMode,
+        ClassNameAffixScope,
         CollapseRootModelsNameStrategy,
         DataclassArguments,
         DataModelType,
@@ -65,6 +66,9 @@ class GenerateConfigDict(TypedDict):
     apply_default_values_for_required_fields: NotRequired[bool]
     force_optional_for_required_fields: NotRequired[bool]
     class_name: NotRequired[str | None]
+    class_name_prefix: NotRequired[str | None]
+    class_name_suffix: NotRequired[str | None]
+    class_name_affix_scope: NotRequired[ClassNameAffixScope]
     use_standard_collections: NotRequired[bool]
     use_schema_description: NotRequired[bool]
     use_field_description: NotRequired[bool]
@@ -98,7 +102,9 @@ class GenerateConfigDict(TypedDict):
     model_extra_keys_without_x_prefix: NotRequired[set[str] | None]
     openapi_scopes: NotRequired[list[OpenAPIScope] | None]
     include_path_parameters: NotRequired[bool]
+    openapi_include_paths: NotRequired[list[str] | None]
     graphql_scopes: NotRequired[list[GraphQLScope] | None]
+    graphql_no_typename: NotRequired[bool]
     wrap_string_literal: NotRequired[bool | None]
     use_title_as_name: NotRequired[bool]
     use_operation_id_as_name: NotRequired[bool]
@@ -141,9 +147,10 @@ class GenerateConfigDict(TypedDict):
     keyword_only: NotRequired[bool]
     frozen_dataclasses: NotRequired[bool]
     no_alias: NotRequired[bool]
+    use_serialization_alias: NotRequired[bool]
     use_frozen_field: NotRequired[bool]
     use_default_factory_for_optional_nested_models: NotRequired[bool]
-    formatters: NotRequired[list[Formatter]]
+    formatters: NotRequired[list[Formatter] | None]
     settings_path: NotRequired[Path | None]
     parent_scoped_naming: NotRequired[bool]
     naming_strategy: NotRequired[NamingStrategy | None]
@@ -158,3 +165,4 @@ class GenerateConfigDict(TypedDict):
     all_exports_collision_strategy: NotRequired[AllExportsCollisionStrategy | None]
     field_type_collision_strategy: NotRequired[FieldTypeCollisionStrategy | None]
     module_split_mode: NotRequired[ModuleSplitMode | None]
+    default_value_overrides: NotRequired[Mapping[str, Any] | None]

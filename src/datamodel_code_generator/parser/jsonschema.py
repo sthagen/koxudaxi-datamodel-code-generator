@@ -477,6 +477,27 @@ class JsonSchemaObject(BaseModel):
                 schema_affecting_fields |= {"extras"}
         return bool(schema_affecting_fields)
 
+    @cached_property
+    def is_ref_with_nullable_only(self) -> bool:
+        """Check if schema has $ref with only nullable: true (no other schema-affecting keywords).
+
+        This is used to avoid creating duplicate models when a $ref is combined
+        with nullable: true. In such cases, the reference should be used directly
+        with Optional type annotation instead of merging schemas.
+        """
+        if not self.ref or self.nullable is not True:
+            return False
+        other_fields = get_fields_set(self) - {"ref", "nullable"} - self.__metadata_only_fields__ - {"extras"}
+        if other_fields:
+            return False
+        if self.extras:
+            schema_affecting_extras = {
+                k for k in self.extras if k not in self.__metadata_only_fields__ and not k.startswith("x-")
+            }
+            if schema_affecting_extras:
+                return False
+        return True
+
 
 @lru_cache
 def get_ref_type(ref: str) -> JSONReference:
@@ -1016,8 +1037,13 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
         field_type: DataType,
         alias: str | list[str] | None,
         original_field_name: str | None,
+        effective_default: Any = None,
+        effective_has_default: bool | None = None,
     ) -> DataModelFieldBase:
         """Create a data model field from a JSON Schema object field."""
+        default_value = effective_default if effective_has_default is not None else field.default
+        has_default = effective_has_default if effective_has_default is not None else field.has_default
+
         constraints = model_dump(field, exclude_none=True) if self.is_constraints_field(field) else None
         if constraints is not None and self.field_constraints and field.format == "hostname":
             constraints["pattern"] = self.data_type_manager.HOSTNAME_REGEX
@@ -1034,7 +1060,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
             single_alias = alias
         return self.data_model_field_type(
             name=field_name,
-            default=field.default,
+            default=default_value,
             data_type=field_type,
             required=required,
             alias=single_alias,
@@ -1042,7 +1068,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
             constraints=constraints,
             nullable=field.nullable
             if self.strict_nullable and field.nullable is not None
-            else (False if self.strict_nullable and (field.has_default or required) else None),
+            else (False if self.strict_nullable and (has_default or required) else None),
             strip_default_none=self.strip_default_none,
             extras=self.get_field_extras(field),
             use_annotated=self.use_annotated,
@@ -1052,11 +1078,12 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
             use_inline_field_description=self.use_inline_field_description,
             use_default_kwarg=self.use_default_kwarg,
             original_name=original_field_name,
-            has_default=field.has_default,
+            has_default=has_default,
             type_has_null=field.type_has_null,
             read_only=self._resolve_field_flag(field, "readOnly"),
             write_only=self._resolve_field_flag(field, "writeOnly"),
             use_frozen_field=self.use_frozen_field,
+            use_serialization_alias=self.use_serialization_alias,
             use_default_factory_for_optional_nested_models=self.use_default_factory_for_optional_nested_models,
         )
 
@@ -1805,7 +1832,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
         if ref_value is None:
             return None  # pragma: no cover
 
-        if ref_item.has_ref_with_schema_keywords:
+        if ref_item.has_ref_with_schema_keywords and not ref_item.is_ref_with_nullable_only:
             ref_schema = self._merge_ref_with_schema(ref_item)
         else:
             ref_schema = self._load_ref_schema_object(ref_value)
@@ -1891,12 +1918,12 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
         target_attribute_name: str,
     ) -> list[DataType]:
         """Parse combined schema (anyOf, oneOf, allOf) into a list of data types."""
-        base_object = model_dump(obj, exclude={target_attribute_name}, exclude_unset=True, by_alias=True)
+        base_object = model_dump(obj, exclude={target_attribute_name, "title"}, exclude_unset=True, by_alias=True)
         combined_schemas: list[JsonSchemaObject] = []
         refs = []
         for index, target_attribute in enumerate(getattr(obj, target_attribute_name, [])):
             if target_attribute.ref:
-                if target_attribute.has_ref_with_schema_keywords:
+                if target_attribute.has_ref_with_schema_keywords and not target_attribute.is_ref_with_nullable_only:
                     merged_attr = self._merge_ref_with_schema(target_attribute)
                     combined_schemas.append(
                         model_validate(
@@ -2195,6 +2222,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
                                     alias=single_alias,
                                     validation_aliases=validation_aliases,
                                     data_type=data_type,
+                                    use_serialization_alias=self.use_serialization_alias,
                                 )
                             )
                             existing_field_names.update({request, field_name})
@@ -2391,8 +2419,15 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
 
             field_type = self.parse_item(modular_name, field, [*path, field_name])
 
+            effective_default, effective_has_default = self.model_resolver.resolve_default_value(
+                original_field_name,
+                field.default,
+                field.has_default,
+                class_name=class_name,
+            )
+
             if self.force_optional_for_required_fields or (
-                self.apply_default_values_for_required_fields and field.has_default
+                self.apply_default_values_for_required_fields and effective_has_default
             ):
                 required: bool = False
             else:
@@ -2405,6 +2440,8 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
                     field_type=field_type,
                     alias=alias,
                     original_field_name=original_field_name,
+                    effective_default=effective_default,
+                    effective_has_default=effective_has_default,
                 )
             )
         return fields
@@ -2636,6 +2673,59 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
             dict_key=key_type,
         )
 
+    def _should_create_type_alias_for_title(  # noqa: PLR0911
+        self, item: JsonSchemaObject, name: str
+    ) -> bool:
+        """Check if a type alias should be created for an inline type with title.
+
+        When use_title_as_name is enabled and the item has a title, certain inline types
+        (array, dict, oneOf/anyOf unions, enum as literal, primitive types) should create
+        a type alias instead of being inlined.
+        """
+        if not (self.use_title_as_name and item.title):
+            return False
+
+        if item.is_array:
+            return True
+        if item.anyOf or item.oneOf:
+            combined_items = item.anyOf or item.oneOf
+            const_enum_data = self._extract_const_enum_from_combined(combined_items, item.type)
+            if const_enum_data is None:
+                return True
+            enum_values, varnames, enum_type, nullable = const_enum_data
+            synthetic_obj = self._create_synthetic_enum_obj(item, enum_values, varnames, enum_type, nullable)
+            if self.should_parse_enum_as_literal(synthetic_obj, property_name=name, property_obj=item):
+                return True
+        if (
+            item.is_object
+            and not item.properties
+            and not item.patternProperties
+            and not item.propertyNames
+            and isinstance(item.additionalProperties, JsonSchemaObject)
+        ):
+            return True
+        if item.patternProperties:
+            return True
+        if item.propertyNames:
+            return True
+        if (
+            item.enum
+            and not self.ignore_enum_constraints
+            and self.should_parse_enum_as_literal(item, property_name=name)
+        ):
+            return True
+        is_primitive = (
+            item.type
+            and not item.is_array
+            and not item.is_object
+            and not item.anyOf
+            and not item.oneOf
+            and not item.allOf
+            and not item.ref
+            and not (item.enum and not self.ignore_enum_constraints)
+        )
+        return bool(is_primitive)
+
     def parse_item(  # noqa: PLR0911, PLR0912, PLR0914
         self,
         name: str,
@@ -2651,6 +2741,8 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
         if self.use_title_as_name and item.title:
             name = sanitize_module_name(item.title, treat_dot_as_module=self.treat_dot_as_module)
             singular_name = False
+        if self._should_create_type_alias_for_title(item, name):
+            return self.parse_root_type(name, item, path)
         if parent and not item.enum and item.has_constraint and (parent.has_constraint or self.field_constraints):
             root_type_path = get_special_path("array", path)
             return self.parse_root_type(
@@ -2663,6 +2755,11 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
                 item,
                 root_type_path,
             )
+        if item.is_ref_with_nullable_only and item.ref:
+            ref_data_type = self.get_ref_data_type(item.ref)
+            if self.strict_nullable:
+                return self.data_type(data_types=[ref_data_type], is_optional=True)
+            return ref_data_type
         if item.has_ref_with_schema_keywords:
             item = self._merge_ref_with_schema(item)
         if item.ref:
@@ -2692,6 +2789,10 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
                 return self.parse_enum(name, synthetic_obj, get_special_path("enum", path), singular_name=singular_name)
             return self.data_type(data_types=self.parse_one_of(name, item, get_special_path("oneOf", path)))
         if item.allOf:
+            if len(item.allOf) == 1 and not item.properties:
+                single_item = item.allOf[0]
+                if single_item.ref:
+                    return self.get_ref_data_type(single_item.ref)
             all_of_path = get_special_path("allOf", path)
             all_of_path = [self.model_resolver.resolve_ref(all_of_path)]
             return self.parse_all_of(
@@ -2726,7 +2827,11 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
                 python_type_flags = self._get_python_type_flags(item)
                 dict_flags = python_type_flags or {"is_dict": True}
                 return self.data_type(
-                    data_types=[self.parse_item(name, item.additionalProperties, object_path)],
+                    data_types=[
+                        self.parse_item(
+                            name, item.additionalProperties, get_special_path("additionalProperties", object_path)
+                        )
+                    ],
                     **dict_flags,
                 )
             return self.data_type_manager.get_data_type(
@@ -2893,7 +2998,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
         self.results.append(data_model_root)
         return self.data_type(reference=reference)
 
-    def parse_root_type(  # noqa: PLR0912, PLR0915
+    def parse_root_type(  # noqa: PLR0912, PLR0914, PLR0915
         self,
         name: str,
         obj: JsonSchemaObject,
@@ -2939,6 +3044,15 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
         elif obj.propertyNames:
             data_type = self.parse_property_names(
                 name, obj.propertyNames, obj.additionalProperties, path, parent_obj=obj
+            )
+        elif obj.is_object and not obj.properties and isinstance(obj.additionalProperties, JsonSchemaObject):
+            python_type_flags = self._get_python_type_flags(obj)
+            dict_flags = python_type_flags or {"is_dict": True}
+            data_type = self.data_type(
+                data_types=[
+                    self.parse_item(name, obj.additionalProperties, get_special_path("additionalProperties", path))
+                ],
+                **dict_flags,
             )
         elif obj.enum and not self.ignore_enum_constraints:
             if self.should_parse_enum_as_literal(obj, property_name=name):
@@ -3149,6 +3263,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
                 singular_name=singular_name,
                 singular_name_suffix="Enum",
                 loaded=True,
+                model_type="enum",
             )
             self.set_schema_extensions(reference.path, obj)
             data_model_root_type = self.data_model_root_type(
@@ -3219,6 +3334,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
             singular_name=singular_name,
             singular_name_suffix="Enum",
             loaded=True,
+            model_type="enum",
         )
 
         if not nullable:
@@ -3232,6 +3348,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
             singular_name=singular_name,
             singular_name_suffix="Enum",
             loaded=True,
+            model_type="enum",
         )
 
         data_model_root_type = self.data_model_root_type(
@@ -3476,7 +3593,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
         path: list[str],
     ) -> None:
         """Parse a JsonSchemaObject by dispatching to appropriate parse methods."""
-        if obj.has_ref_with_schema_keywords:
+        if obj.has_ref_with_schema_keywords and not obj.is_ref_with_nullable_only:
             obj = self._merge_ref_with_schema(obj)
 
         if obj.is_array:

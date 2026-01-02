@@ -29,6 +29,7 @@ from tests.main.conftest import (
     ALIASES_DATA_PATH,
     BLACK_PY313_SKIP,
     DATA_PATH,
+    DEFAULT_VALUES_DATA_PATH,
     EXPECTED_MAIN_PATH,
     JSON_SCHEMA_DATA_PATH,
     LEGACY_BLACK_SKIP,
@@ -674,6 +675,143 @@ def test_main_invalid_model_name(output_file: Path) -> None:
     )
 
 
+@pytest.mark.cli_doc(
+    options=["--class-name-prefix"],
+    option_description="""Add a prefix to all generated class names.
+
+The --class-name-prefix option allows you to add a prefix to all generated class
+names, including both models and enums. This is useful for namespacing generated
+code or avoiding conflicts with existing classes.""",
+    input_schema="jsonschema/class_name_affix.json",
+    cli_args=["--class-name-prefix", "Api"],
+    golden_output="main/jsonschema/class_name_prefix/output.py",
+    related_options=["--class-name-suffix", "--class-name-affix-scope"],
+)
+@freeze_time("2019-07-26")
+def test_main_class_name_prefix(output_file: Path) -> None:
+    """Add a prefix to all generated class names.
+
+    The --class-name-prefix option allows you to add a prefix to all generated class
+    names, including both models and enums. This is useful for namespacing generated
+    code or avoiding conflicts with existing classes.
+    """
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "class_name_affix.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="class_name_prefix/output.py",
+        extra_args=["--class-name-prefix", "Api"],
+    )
+
+
+@pytest.mark.cli_doc(
+    options=["--class-name-suffix"],
+    option_description="""Add a suffix to all generated class names.
+
+The --class-name-suffix option allows you to add a suffix to all generated class
+names, including both models and enums. This is useful for distinguishing generated
+classes (e.g., adding 'Schema' or 'Model' suffix).""",
+    input_schema="jsonschema/class_name_affix.json",
+    cli_args=["--class-name-suffix", "Schema"],
+    golden_output="main/jsonschema/class_name_suffix/output.py",
+    related_options=["--class-name-prefix", "--class-name-affix-scope"],
+)
+@freeze_time("2019-07-26")
+def test_main_class_name_suffix(output_file: Path) -> None:
+    """Add a suffix to all generated class names.
+
+    The --class-name-suffix option allows you to add a suffix to all generated class
+    names, including both models and enums. This is useful for distinguishing generated
+    classes (e.g., adding 'Schema' or 'Model' suffix).
+    """
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "class_name_affix.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="class_name_suffix/output.py",
+        extra_args=["--class-name-suffix", "Schema"],
+    )
+
+
+@pytest.mark.cli_doc(
+    options=["--class-name-affix-scope"],
+    option_description="""Control which classes receive the prefix/suffix.
+
+The --class-name-affix-scope option controls which types of classes receive the
+prefix or suffix specified by --class-name-prefix or --class-name-suffix:
+- 'all': Apply to all classes (models and enums) - this is the default
+- 'models': Apply only to model classes (BaseModel, dataclass, TypedDict, etc.)
+- 'enums': Apply only to enum classes""",
+    input_schema="jsonschema/class_name_affix.json",
+    cli_args=["--class-name-suffix", "Schema", "--class-name-affix-scope", "models"],
+    golden_output="main/jsonschema/class_name_affix_scope_models/output.py",
+    related_options=["--class-name-prefix", "--class-name-suffix"],
+)
+@freeze_time("2019-07-26")
+def test_main_class_name_affix_scope_models(output_file: Path) -> None:
+    """Control which classes receive the prefix/suffix.
+
+    The --class-name-affix-scope option controls which types of classes receive the
+    prefix or suffix specified by --class-name-prefix or --class-name-suffix:
+    - 'all': Apply to all classes (models and enums) - this is the default
+    - 'models': Apply only to model classes (BaseModel, dataclass, TypedDict, etc.)
+    - 'enums': Apply only to enum classes
+    """
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "class_name_affix.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="class_name_affix_scope_models/output.py",
+        extra_args=["--class-name-suffix", "Schema", "--class-name-affix-scope", "models"],
+    )
+
+
+@freeze_time("2019-07-26")
+def test_main_class_name_suffix_with_class_name(output_file: Path) -> None:
+    """Test that --class-name-suffix does not apply to root when --class-name is specified.
+
+    When --class-name is explicitly set, the suffix should not be applied to the root model
+    because the user has explicitly chosen the root model name.
+    """
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "class_name_affix.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="class_name_suffix_with_class_name/output.py",
+        extra_args=["--class-name-suffix", "Schema", "--class-name", "MyRootModel"],
+    )
+
+
+def test_main_class_name_prefix_invalid(output_file: Path) -> None:
+    """Test that invalid --class-name-prefix is rejected."""
+    return_code: Exit = main([
+        "--input",
+        str(JSON_SCHEMA_DATA_PATH / "class_name_affix.json"),
+        "--output",
+        str(output_file),
+        "--class-name-prefix",
+        "123Invalid",
+    ])
+    assert return_code == Exit.ERROR
+
+
+def test_main_class_name_suffix_invalid(output_file: Path) -> None:
+    """Test that invalid --class-name-suffix is rejected."""
+    return_code: Exit = main([
+        "--input",
+        str(JSON_SCHEMA_DATA_PATH / "class_name_affix.json"),
+        "--output",
+        str(output_file),
+        "--class-name-suffix",
+        "Schema!",
+    ])
+    assert return_code == Exit.ERROR
+
+
 def test_main_jsonschema_reserved_field_names(output_file: Path) -> None:
     """Test reserved names are safely suffixed and aliased."""
     run_main_and_assert(
@@ -991,6 +1129,54 @@ def test_main_json_reuse_enum(output_file: Path) -> None:
         input_file_type="jsonschema",
         assert_func=assert_file_content,
         extra_args=["--reuse-model"],
+    )
+
+
+def test_main_reuse_model_collapse_inline_definitions(output_file: Path) -> None:
+    """Test --reuse-model --collapse-reuse-models deduplicates identical inline definitions."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "reuse_model_inline_definitions.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=[
+            "--reuse-model",
+            "--collapse-reuse-models",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
+    )
+
+
+def test_main_reuse_model_collapse_with_root(output_file: Path) -> None:
+    """Test --reuse-model --collapse-reuse-models skips RootModel deduplication."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "reuse_model_collapse_with_root.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=[
+            "--reuse-model",
+            "--collapse-reuse-models",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
+    )
+
+
+def test_main_reuse_model_collapse_nested(output_file: Path) -> None:
+    """Test --reuse-model --collapse-reuse-models with deeply nested identical structures."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "reuse_model_collapse_nested.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=[
+            "--reuse-model",
+            "--collapse-reuse-models",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
     )
 
 
@@ -2910,6 +3096,110 @@ def test_jsonschema_title_with_dots(output_file: Path) -> None:
         assert_func=assert_file_content,
         expected_file="title_with_dots.py",
         extra_args=["--use-title-as-name"],
+    )
+
+
+@BLACK_PY313_SKIP
+def test_jsonschema_use_title_as_name_inline_types(output_file: Path) -> None:
+    """Test use-title-as-name creates type aliases for inline types.
+
+    When use_title_as_name is enabled and inline types (array, dict, oneOf, anyOf, enum)
+    have a title, type aliases should be created instead of using inline types directly.
+
+    Fixes: https://github.com/koxudaxi/datamodel-code-generator/issues/2887
+    """
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "use_title_as_name_inline_types.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="use_title_as_name_inline_types.py",
+        extra_args=[
+            "--use-title-as-name",
+            "--output-model-type",
+            "typing.TypedDict",
+            "--target-python-version",
+            "3.13",
+            "--use-union-operator",
+            "--use-standard-collections",
+            "--skip-root-model",
+        ],
+    )
+
+
+@BLACK_PY313_SKIP
+def test_jsonschema_use_title_as_name_inline_types_pydantic(output_file: Path) -> None:
+    """Test use-title-as-name with Pydantic v2 creates named types for inline types.
+
+    This test covers the case where should_parse_enum_as_literal returns False
+    (for oneOf with const values), exercising the False branch in
+    _should_create_type_alias_for_title.
+    """
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "use_title_as_name_inline_types.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="use_title_as_name_inline_types_pydantic.py",
+        extra_args=[
+            "--use-title-as-name",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--target-python-version",
+            "3.13",
+            "--use-union-operator",
+            "--use-standard-collections",
+        ],
+    )
+
+
+@BLACK_PY313_SKIP
+def test_jsonschema_use_title_as_name_nested_titles(output_file: Path) -> None:
+    """Test use-title-as-name creates type aliases for nested elements with titles.
+
+    When use_title_as_name is enabled, nested elements like array items,
+    additionalProperties values, and oneOf/anyOf branches that have their own
+    titles should also create type aliases.
+
+    Fixes: https://github.com/koxudaxi/datamodel-code-generator/issues/2887
+    """
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "use_title_as_name_nested_titles.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="use_title_as_name_nested_titles.py",
+        extra_args=[
+            "--use-title-as-name",
+            "--output-model-type",
+            "typing.TypedDict",
+            "--target-python-version",
+            "3.13",
+            "--use-union-operator",
+            "--use-standard-collections",
+            "--skip-root-model",
+        ],
+    )
+
+
+@BLACK_PY313_SKIP
+def test_jsonschema_use_title_as_name_nested_titles_pydantic(output_file: Path) -> None:
+    """Test use-title-as-name with Pydantic v2 creates named types for nested elements."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "use_title_as_name_nested_titles.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="use_title_as_name_nested_titles_pydantic.py",
+        extra_args=[
+            "--use-title-as-name",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--target-python-version",
+            "3.13",
+            "--use-union-operator",
+            "--use-standard-collections",
+        ],
     )
 
 
@@ -7213,4 +7503,147 @@ def test_x_python_type_union_anyof(output_file: Path) -> None:
         output_path=output_file,
         input_file_type=None,
         assert_func=assert_file_content,
+    )
+
+
+@pytest.mark.cli_doc(
+    options=["--default-values"],
+    option_description="""Override field default values from external JSON file.
+
+The `--default-values` option allows specifying default values for fields via a JSON file.
+Supports scoped format (ClassName.field) for hierarchical overrides.""",
+    input_schema="jsonschema/default_values_override.json",
+    cli_args=["--default-values", "default_values/scoped_defaults.json"],
+    golden_output="jsonschema/jsonschema_default_values_override.py",
+)
+def test_main_jsonschema_default_values_override(output_file: Path) -> None:
+    """Test default value overrides from external JSON file."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "default_values_override.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="jsonschema_default_values_override.py",
+        extra_args=[
+            "--default-values",
+            str(DEFAULT_VALUES_DATA_PATH / "scoped_defaults.json"),
+        ],
+    )
+
+
+def test_main_jsonschema_default_values_allof(output_file: Path) -> None:
+    """Test default value overrides with allOf inheritance."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "default_values_allof.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="jsonschema_default_values_allof.py",
+        extra_args=[
+            "--use-default",
+            "--default-values",
+            str(DEFAULT_VALUES_DATA_PATH / "allof_defaults.json"),
+        ],
+    )
+
+
+def test_ref_nullable_only_no_duplicate_model(output_file: Path) -> None:
+    """Test that $ref + nullable: true does not create duplicate models.
+
+    When a property has $ref with nullable: true, it should use the referenced
+    type directly (e.g., User) with Optional type annotation, not create a new
+    model with a derived name (e.g., UserA, UserB).
+
+    See: https://github.com/koxudaxi/datamodel-code-generator/discussions/1792
+    """
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "ref_nullable_only.yaml",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="ref_nullable_only.py",
+        extra_args=["--output-model-type", "pydantic_v2.BaseModel"],
+    )
+
+
+def test_ref_nullable_only_strict_nullable(output_file: Path) -> None:
+    """Test $ref + nullable: true with --strict-nullable flag.
+
+    The output should be the same as without strict-nullable for this case,
+    using the referenced type directly with Optional annotation.
+    """
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "ref_nullable_only.yaml",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="ref_nullable_only_strict.py",
+        extra_args=["--output-model-type", "pydantic_v2.BaseModel", "--strict-nullable"],
+    )
+
+
+def test_ref_nullable_with_metadata_no_duplicate_model(output_file: Path) -> None:
+    """Test $ref + nullable: true + metadata (title/description) does not merge.
+
+    When a property has $ref with nullable: true and metadata-only fields like
+    title or description, it should not create a new model. The metadata should
+    be applied to the field, and the reference should be used directly.
+    """
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "ref_nullable_with_metadata.yaml",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="ref_nullable_with_metadata.py",
+        extra_args=["--output-model-type", "pydantic_v2.BaseModel", "--strict-nullable"],
+    )
+
+
+def test_ref_nullable_with_constraint_creates_model(output_file: Path) -> None:
+    """Test $ref + nullable: true + constraint DOES create a merged model.
+
+    When a property has $ref with nullable: true AND a schema constraint like
+    minLength, it should merge the schemas and create a new model because the
+    constraint affects the schema structure.
+    """
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "ref_nullable_with_constraint.yaml",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="ref_nullable_with_constraint.py",
+        extra_args=["--output-model-type", "pydantic_v2.BaseModel", "--strict-nullable"],
+    )
+
+
+def test_ref_nullable_with_extra_creates_model(output_file: Path) -> None:
+    """Test $ref + nullable: true + schema-affecting extras DOES create a merged model.
+
+    When a property has $ref with nullable: true AND schema-affecting extras like
+    'if', 'then', 'else', it should merge the schemas and create a new model.
+    """
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "ref_nullable_with_extra.yaml",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="ref_nullable_with_extra.py",
+        extra_args=["--output-model-type", "pydantic_v2.BaseModel", "--strict-nullable"],
+    )
+
+
+def test_reduce_duplicate_field_types(output_file: Path) -> None:
+    """Test reducing duplicate field types using $ref and --use-type-alias.
+
+    When multiple classes share the same field type defined in $defs,
+    using --use-type-alias creates a single TypeAlias that's reused across classes.
+    This is the recommended pattern to avoid duplicate Annotated field definitions.
+    """
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "reduce_duplicate_field_types.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="reduce_duplicate_field_types.py",
+        extra_args=["--output-model-type", "pydantic_v2.BaseModel", "--use-type-alias"],
     )

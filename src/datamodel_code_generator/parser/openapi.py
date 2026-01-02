@@ -6,6 +6,7 @@ specifications, including paths, operations, parameters, and request/response bo
 
 from __future__ import annotations
 
+import fnmatch
 import re
 from collections import defaultdict
 from contextlib import nullcontext
@@ -208,6 +209,12 @@ class OpenAPIParser(JsonSchemaParser):
         self.open_api_scopes: list[OpenAPIScope] = self.config.openapi_scopes or [OpenAPIScope.Schemas]
         self.include_path_parameters: bool = self.config.include_path_parameters
         self.use_status_code_in_response_name: bool = self.config.use_status_code_in_response_name
+        self.openapi_include_paths: list[str] | None = self.config.openapi_include_paths
+        if self.openapi_include_paths and OpenAPIScope.Paths not in self.open_api_scopes:
+            warn(
+                "--openapi-include-paths has no effect without --openapi-scopes paths",
+                stacklevel=2,
+            )
         self._discriminator_schemas: dict[str, dict[str, Any]] = {}
         self._discriminator_subtypes: dict[str, list[str]] = defaultdict(list)
 
@@ -338,6 +345,25 @@ class OpenAPIParser(JsonSchemaParser):
         self.resolve_ref(schema.ref)
         return self.get_ref_data_type(schema.ref)
 
+    def _normalize_path(self, path: str) -> str:  # noqa: PLR6301
+        """Normalize path for consistent matching.
+
+        Note: This is an instance method (not static) due to the snooper_to_methods
+        class decorator which does not preserve staticmethod descriptors.
+        """
+        if not path.startswith("/"):
+            path = f"/{path}"
+        return path
+
+    def _matches_path_pattern(self, path: str) -> bool:
+        """Check if path matches any of the include patterns."""
+        if not self.openapi_include_paths:
+            return True
+        normalized_path = self._normalize_path(path)
+        return any(
+            fnmatch.fnmatch(normalized_path, self._normalize_path(pattern)) for pattern in self.openapi_include_paths
+        )
+
     def _process_path_items(  # noqa: PLR0913
         self,
         items: dict[str, dict[str, Any]],
@@ -347,10 +373,13 @@ class OpenAPIParser(JsonSchemaParser):
         security: list[dict[str, list[str]]] | None,
         *,
         strip_leading_slash: bool = True,
+        apply_path_filter: bool = True,
     ) -> None:
         """Process path or webhook items with operations."""
         scope_path = [*base_path, f"#/{scope_name}"]
         for item_name, methods_ in items.items():
+            if apply_path_filter and not self._matches_path_pattern(item_name):
+                continue
             item_ref = methods_.get("$ref")
             if item_ref:
                 methods = self.get_ref_model(item_ref)
@@ -473,7 +502,7 @@ class OpenAPIParser(JsonSchemaParser):
         camel_path_name = snake_to_upper_camel(normalized)
         return f"{camel_path_name}{method.capitalize()}{suffix}"
 
-    def parse_all_parameters(  # noqa: PLR0912
+    def parse_all_parameters(  # noqa: PLR0912, PLR0914
         self,
         name: str,
         parameters: list[ReferenceObject | ParameterObject],
@@ -506,14 +535,25 @@ class OpenAPIParser(JsonSchemaParser):
                 class_name=name,
             )
             if parameter.schema_:
+                effective_default, effective_has_default = self.model_resolver.resolve_default_value(
+                    parameter_name,
+                    parameter.schema_.default,
+                    parameter.schema_.has_default,
+                    class_name=reference.name,
+                )
+                effective_required = parameter.required
+                if self.apply_default_values_for_required_fields and effective_has_default:
+                    effective_required = False
                 fields.append(
                     self.get_object_field(
                         field_name=field_name,
                         field=parameter.schema_,
                         field_type=self.parse_item(field_name, parameter.schema_, [*path, name, parameter_name]),
                         original_field_name=parameter_name,
-                        required=parameter.required,
+                        required=effective_required,
                         alias=alias,
+                        effective_default=effective_default,
+                        effective_has_default=effective_has_default,
                     )
                 )
             else:
@@ -542,6 +582,17 @@ class OpenAPIParser(JsonSchemaParser):
                     data_type = self.data_type(data_types=data_types)
                     # multiple data_type parse as non-constraints field
                     object_schema = None
+                original_default = object_schema.default if object_schema else None
+                original_has_default = object_schema.has_default if object_schema else False
+                effective_default, effective_has_default = self.model_resolver.resolve_default_value(
+                    parameter_name,
+                    original_default,
+                    original_has_default,
+                    class_name=reference.name,
+                )
+                effective_required = parameter.required
+                if self.apply_default_values_for_required_fields and effective_has_default:
+                    effective_required = False
                 # Handle multiple aliases (Pydantic v2 AliasChoices)
                 single_alias: str | None = None
                 validation_aliases: list[str] | None = None
@@ -552,9 +603,9 @@ class OpenAPIParser(JsonSchemaParser):
                 fields.append(
                     self.data_model_field_type(
                         name=field_name,
-                        default=object_schema.default if object_schema else None,
+                        default=effective_default,
                         data_type=data_type,
-                        required=parameter.required,
+                        required=effective_required,
                         alias=single_alias,
                         validation_aliases=validation_aliases,
                         constraints=model_dump(object_schema, exclude_none=True)
@@ -564,9 +615,7 @@ class OpenAPIParser(JsonSchemaParser):
                         if object_schema and self.strict_nullable and object_schema.nullable is not None
                         else (
                             False
-                            if object_schema
-                            and self.strict_nullable
-                            and (object_schema.has_default or parameter.required)
+                            if object_schema and self.strict_nullable and (effective_has_default or effective_required)
                             else None
                         ),
                         strip_default_none=self.strip_default_none,
@@ -578,8 +627,9 @@ class OpenAPIParser(JsonSchemaParser):
                         use_inline_field_description=self.use_inline_field_description,
                         use_default_kwarg=self.use_default_kwarg,
                         original_name=parameter_name,
-                        has_default=object_schema.has_default if object_schema else False,
+                        has_default=effective_has_default,
                         type_has_null=object_schema.type_has_null if object_schema else None,
+                        use_serialization_alias=self.use_serialization_alias,
                     )
                 )
 
@@ -716,7 +766,9 @@ class OpenAPIParser(JsonSchemaParser):
 
             if OpenAPIScope.Webhooks in self.open_api_scopes:
                 webhooks: dict[str, dict[str, Any]] = specification.get("webhooks", {})
-                self._process_path_items(webhooks, path_parts, "webhooks", [], security, strip_leading_slash=False)
+                self._process_path_items(
+                    webhooks, path_parts, "webhooks", [], security, strip_leading_slash=False, apply_path_filter=False
+                )
 
             if OpenAPIScope.RequestBodies in self.open_api_scopes:
                 request_bodies: dict[str, Any] = specification.get("components", {}).get("requestBodies", {})
