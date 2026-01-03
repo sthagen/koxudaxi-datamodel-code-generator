@@ -40,6 +40,7 @@ from datamodel_code_generator.format import (
 from datamodel_code_generator.imports import (
     IMPORT_ABC_MAPPING,
     IMPORT_ABC_SEQUENCE,
+    IMPORT_ANNOTATED,
     IMPORT_ANY,
     IMPORT_DICT,
     IMPORT_FROZEN_SET,
@@ -92,14 +93,14 @@ READ_ONLY = "ReadOnly"
 READ_ONLY_PREFIX = f"{READ_ONLY}["
 
 
-def __getattr__(name: str) -> Any:
-    """Provide lazy access to StrictTypes for backwards compatibility."""
-    if name == "StrictTypes":
-        from datamodel_code_generator.enums import StrictTypes  # noqa: PLC0415
+from datamodel_code_generator.util import create_module_getattr  # noqa: E402
 
-        return StrictTypes
-    msg = f"module {__name__!r} has no attribute {name!r}"
-    raise AttributeError(msg)
+__getattr__ = create_module_getattr(
+    __name__,
+    {
+        "StrictTypes": ("datamodel_code_generator.enums", "StrictTypes"),
+    },
+)
 
 
 if TYPE_CHECKING:
@@ -454,6 +455,7 @@ class DataType(_BaseModel):
     dict_key: Optional[DataType] = None  # noqa: UP045
     treat_dot_as_module: bool = False
     use_serialize_as_any: bool = False
+    discriminator: Optional[str] = None  # noqa: UP045
 
     _exclude_fields: ClassVar[set[str]] = {"parent", "children"}
     _pass_fields: ClassVar[set[str]] = {"parent", "children", "data_types", "reference"}
@@ -621,11 +623,11 @@ class DataType(_BaseModel):
         if self.import_:
             yield self.import_
 
-        # Define required imports based on type features and conditions
         imports: tuple[tuple[bool, Import], ...] = (
             (self.is_optional and not self.use_union_operator, IMPORT_OPTIONAL),
             (len(self.data_types) > 1 and not self.use_union_operator, IMPORT_UNION),
             (bool(self.literals) or bool(self.enum_member_literals), IMPORT_LITERAL),
+            (bool(self.discriminator), IMPORT_ANNOTATED),
         )
 
         imports = (
@@ -748,6 +750,8 @@ class DataType(_BaseModel):
                     type_ = UNION_OPERATOR_DELIMITER.join(data_types)
                 else:
                     type_ = f"{UNION_PREFIX}{UNION_DELIMITER.join(data_types)}]"
+                if self.discriminator:
+                    type_ = f"Annotated[{type_}, Field(discriminator={self.discriminator!r})]"
             elif len(self.data_types) == 1:
                 type_ = self.data_types[0].type_hint
             elif self.enum_member_literals:

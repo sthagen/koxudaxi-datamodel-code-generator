@@ -184,6 +184,7 @@ lint.per-file-ignores."scripts/*.py" = [
 lint.per-file-ignores."tests/**/*.py" = [
   "FBT",     # don't care about booleans as positional arguments in tests
   "INP001",  # no implicit namespace
+  "N806",    # variable names for model classes can be uppercase
   "PLC0415", # local imports in tests are fine
   "PLC2701", # private import is fine
   "PLR0904", # too many public methods in test classes is fine
@@ -206,12 +207,13 @@ lint.pydocstyle.convention = "pep257"
 lint.preview = true
 
 [tool.codespell]
-skip = '.git,*.lock,tests,docs/cli-reference,CHANGELOG.md,docs/changelog.md'
+skip = '.git,*.lock,tests,docs/cli-reference,CHANGELOG.md,docs/changelog.md,docs/llms.txt,docs/llms-full.txt'
 
 [tool.pytest.ini_options]
 filterwarnings = [
   "error",
   "ignore:^.*Pydantic v1 runtime support is deprecated.*:DeprecationWarning",
+  "ignore:^.*No --output-model-type specified.*:DeprecationWarning",
   "ignore:^.*`--validation` option is deprecated.*",
   "ignore:^.*--parent-scoped-naming is deprecated.*",
   "ignore:^.*Field name `name` is duplicated on Pet.*",
