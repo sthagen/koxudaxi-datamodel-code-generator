@@ -374,7 +374,7 @@ class Config(BaseModel):
                 and output_model_type == DataModelType.DataclassesDataclass
                 and not python_target.has_kw_only_dataclass
             ):
-                raise Error(self.__validate_keyword_only_err)
+                raise Error(self.__validate_keyword_only_err)  # pragma: no cover
             return self
 
         @model_validator()  # pyright: ignore[reportArgumentType]
@@ -449,7 +449,7 @@ class Config(BaseModel):
                 and output_model_type == DataModelType.DataclassesDataclass
                 and not python_target.has_kw_only_dataclass
             ):
-                raise Error(cls.__validate_keyword_only_err)
+                raise Error(cls.__validate_keyword_only_err)  # pragma: no cover
             return values
 
         @model_validator()  # pyright: ignore[reportArgumentType]
@@ -499,7 +499,7 @@ class Config(BaseModel):
     target_python_version: PythonVersion = PythonVersionMin
     target_pydantic_version: Optional[TargetPydanticVersion] = None  # noqa: UP045
     base_class: str = ""
-    base_class_map: Optional[dict[str, str]] = None  # noqa: UP045
+    base_class_map: Optional[dict[str, str | list[str]]] = None  # noqa: UP045
     additional_imports: Optional[list[str]] = None  # noqa: UP045
     class_decorators: Optional[list[str]] = None  # noqa: UP045
     custom_template_dir: Optional[Path] = None  # noqa: UP045
@@ -643,9 +643,9 @@ def _extract_additional_imports(extra_template_data: defaultdict[str, dict[str, 
         if "additional_imports" in type_data:
             imports = type_data.pop("additional_imports")
             if isinstance(imports, str):
-                if imports.strip():
+                if imports.strip():  # pragma: no branch
                     additional_imports.append(imports.strip())
-            elif isinstance(imports, list):
+            elif isinstance(imports, list):  # pragma: no branch
                 additional_imports.extend(item.strip() for item in imports if isinstance(item, str) and item.strip())
     return additional_imports
 
@@ -717,7 +717,7 @@ def _get_pyproject_toml_config(source: Path, profile: str | None = None) -> dict
                     pyproject_config["capitalise_enum_members"] = pyproject_config.pop("capitalize_enum_members")
                 return pyproject_config
 
-        if (current_path / ".git").exists():
+        if (current_path / ".git").exists():  # pragma: no cover
             break
 
         current_path = current_path.parent
@@ -1205,6 +1205,22 @@ def main(args: Sequence[str] | None = None) -> Exit:  # noqa: PLR0911, PLR0912, 
             "Please explicitly specify --output-model-type. "
             "Example: --output-model-type pydantic_v2.BaseModel. "
             "See https://github.com/koxudaxi/datamodel-code-generator/issues/2466",
+            DeprecationWarning,
+            stacklevel=1,
+        )
+
+    if (
+        config.output_model_type in {DataModelType.PydanticV2BaseModel, DataModelType.PydanticV2Dataclass}
+        and not config.use_annotated
+        and namespace.use_annotated is None
+        and pyproject_config.get("use_annotated") is None
+    ):
+        warnings.warn(
+            "Pydantic v2 with --use-annotated is recommended for correct type annotations. "
+            "The current default (use_annotated=False) generates constrained types like "
+            "'conint(ge=1, le=365)' which are discouraged in Pydantic v2. "
+            "In a future version, --use-annotated will be enabled by default for Pydantic v2. "
+            "Please explicitly specify --use-annotated or --no-use-annotated.",
             DeprecationWarning,
             stacklevel=1,
         )

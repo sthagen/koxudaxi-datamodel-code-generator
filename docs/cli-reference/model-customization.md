@@ -1125,7 +1125,20 @@ The `--base-class` flag configures the code generation behavior.
 Specify different base classes for specific models via JSON mapping.
 
 The `--base-class-map` option allows you to assign different base classes
-to specific models. Priority: base-class-map > customBasePath > base-class.
+to specific models. This is useful when you want selective base class inheritance,
+for example, applying custom base classes only to specific models while leaving
+others with the default `BaseModel`.
+
+Priority: `--base-class-map` > `customBasePath` (schema extension) > `--base-class`
+
+You can specify either a single base class as a string, or multiple base classes
+(mixins) as a list:
+
+- Single: `{"Person": "custom.bases.PersonBase"}`
+- Multiple: `{"User": ["mixins.AuditMixin", "mixins.TimestampMixin"]}`
+
+When using multiple base classes, the specified classes are used directly without
+adding `BaseModel`. Ensure your mixins inherit from `BaseModel` if needed.
 
 **Related:** [`--base-class`](model-customization.md#base-class)
 
@@ -4945,6 +4958,10 @@ where optional fields have defaults but cannot accept `None` values.
                     - type: string
                     - type: number
                    nullable: true
+            simpleUnion:
+              oneOf:
+                - type: string
+                - type: number
           required:
             - comments
             - oneOfComments
@@ -5034,6 +5051,7 @@ where optional fields have defaults but cannot accept `None` values.
     class Options(BaseModel):
         comments: list[str | None]
         oneOfComments: list[str | float | None]
+        simpleUnion: str | float | None = None
     ```
 
 ---

@@ -120,7 +120,7 @@ class DataModelField(DataModelFieldBase):
         if "e" in str_value.lower():  # pragma: no cover
             # Scientific notation like 1e-08 - keep as float
             return float(value)
-        if isinstance(value, int) and not isinstance(value, bool):  # pragma: no branch
+        if isinstance(value, int) and not isinstance(value, bool):
             return value
         return int(value)
 
@@ -286,7 +286,7 @@ class BaseModelBase(DataModel, ABC):
         fields: list[DataModelFieldBase],
         decorators: list[str] | None = None,
         base_classes: list[Reference] | None = None,
-        custom_base_class: str | None = None,
+        custom_base_class: str | list[str] | None = None,
         custom_template_dir: Path | None = None,
         extra_template_data: defaultdict[str, Any] | None = None,
         path: Path | None = None,
@@ -343,7 +343,7 @@ class BaseModel(BaseModelBase):
         fields: list[DataModelFieldBase],
         decorators: list[str] | None = None,
         base_classes: list[Reference] | None = None,
-        custom_base_class: str | None = None,
+        custom_base_class: str | list[str] | None = None,
         custom_template_dir: Path | None = None,
         extra_template_data: defaultdict[str, Any] | None = None,
         path: Path | None = None,

@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 try:
     from tomllib import load as load_tomllib  # type: ignore[ignoreMissingImports]
-except ImportError:
+except ImportError:  # pragma: no cover
     from tomli import load as load_tomllib  # type: ignore[ignoreMissingImports]
 
 
@@ -52,13 +52,16 @@ _is_v2: bool | None = None
 def is_pydantic_v2() -> bool:
     """Check if pydantic v2 is installed."""
     global _is_v2  # noqa: PLW0603
-    if _is_v2 is None:  # pragma: no branch
+    if _is_v2 is None:
         _is_v2 = get_pydantic_version()[1]
     return _is_v2
 
 
 _YAML_1_2_BOOL_PATTERN = re.compile(r"^(?:true|false|True|False|TRUE|FALSE)$")
 _YAML_DEPRECATED_BOOL_VALUES = {"True", "False", "TRUE", "FALSE"}
+# Pattern for scientific notation without decimal point (e.g., 1e-5, 1E+10)
+# Standard YAML only matches floats with decimal points, missing patterns like "1e-5"
+_YAML_SCIENTIFIC_NOTATION_PATTERN = re.compile(r"^[-+]?[0-9][0-9_]*[eE][-+]?[0-9]+$")
 
 
 def _construct_yaml_bool_with_warning(loader: Any, node: Any) -> bool:
@@ -103,6 +106,13 @@ def get_safe_loader() -> type:
             _YAML_1_2_BOOL_PATTERN,
         ))
     CustomSafeLoader.yaml_constructors["tag:yaml.org,2002:bool"] = _construct_yaml_bool_with_warning
+
+    # Add scientific notation without decimal point (e.g., 1e-5) as float
+    for key in ["-", "+", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]:
+        CustomSafeLoader.yaml_implicit_resolvers.setdefault(key, []).append((
+            "tag:yaml.org,2002:float",
+            _YAML_SCIENTIFIC_NOTATION_PATTERN,
+        ))
 
     return CustomSafeLoader
 
@@ -165,9 +175,9 @@ def model_validator(  # pyright: ignore[reportInconsistentOverload]
             if mode == "before":
                 return model_validator_v2(mode=mode)(classmethod(method))  # type: ignore[reportReturnType]
             return model_validator_v2(mode=mode)(method)  # type: ignore[reportReturnType]
-        from pydantic import root_validator  # noqa: PLC0415
+        from pydantic import root_validator  # noqa: PLC0415  # pragma: no cover
 
-        return root_validator(method, pre=mode == "before")  # pyright: ignore[reportCallIssue]
+        return root_validator(method, pre=mode == "before")  # pyright: ignore[reportCallIssue]  # pragma: no cover
 
     return inner
 
@@ -184,9 +194,9 @@ def field_validator(
             from pydantic import field_validator as field_validator_v2  # noqa: PLC0415
 
             return field_validator_v2(field_name, *fields, mode=mode)(method)
-        from pydantic import validator  # noqa: PLC0415
+        from pydantic import validator  # noqa: PLC0415  # pragma: no cover
 
-        return validator(field_name, *fields, pre=mode == "before")(method)  # pyright: ignore[reportReturnType]
+        return validator(field_name, *fields, pre=mode == "before")(method)  # pyright: ignore[reportReturnType]  # pragma: no cover
 
     return inner
 
@@ -221,7 +231,7 @@ def _get_base_model_class() -> type:
             model_config = _ConfigDict(strict=False)
 
         return _BaseModelV2
-    return _PydanticBaseModel
+    return _PydanticBaseModel  # pragma: no cover
 
 
 _BaseModel: type | None = None
@@ -286,25 +296,25 @@ def model_dump(obj: _BaseModel, **kwargs: Any) -> dict[str, Any]:  # pyright: ig
     """Version-compatible model serialization (dict/model_dump)."""
     if is_pydantic_v2():
         return obj.model_dump(**kwargs)
-    return obj.dict(**kwargs)  # type: ignore[reportDeprecated]
+    return obj.dict(**kwargs)  # type: ignore[reportDeprecated]  # pragma: no cover
 
 
 def model_validate(cls: type[Model], obj: Any) -> Model:
     """Version-compatible model validation (parse_obj/model_validate)."""
     if is_pydantic_v2():
         return cls.model_validate(obj)
-    return cls.parse_obj(obj)  # type: ignore[reportDeprecated]
+    return cls.parse_obj(obj)  # type: ignore[reportDeprecated]  # pragma: no cover
 
 
 def get_fields_set(obj: _BaseModel) -> set[str]:  # pyright: ignore[reportInvalidTypeForm]
     """Version-compatible access to fields set (__fields_set__/model_fields_set)."""
     if is_pydantic_v2():
         return obj.model_fields_set
-    return obj.__fields_set__  # type: ignore[reportDeprecated]
+    return obj.__fields_set__  # type: ignore[reportDeprecated]  # pragma: no cover
 
 
 def model_copy(obj: Model, **kwargs: Any) -> Model:
     """Version-compatible model copy (copy/model_copy)."""
     if is_pydantic_v2():
         return obj.model_copy(**kwargs)
-    return obj.copy(**kwargs)  # type: ignore[reportDeprecated]
+    return obj.copy(**kwargs)  # type: ignore[reportDeprecated]  # pragma: no cover

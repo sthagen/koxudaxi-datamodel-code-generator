@@ -120,6 +120,7 @@ class DataModelField(DataModelFieldV1):
         "min_length",
         "max_length",
         "union_mode",
+        "deprecated",
     }
     constraints: Optional[Constraints] = None  # pyright: ignore[reportIncompatibleVariableOverride]  # noqa: UP045
     _PARSE_METHOD: ClassVar[str] = "model_validate"
@@ -244,7 +245,7 @@ class BaseModel(BaseModelBase):
         fields: list[DataModelFieldBase],
         decorators: list[str] | None = None,
         base_classes: list[Reference] | None = None,
-        custom_base_class: str | None = None,
+        custom_base_class: str | list[str] | None = None,
         custom_template_dir: Path | None = None,
         extra_template_data: defaultdict[str, Any] | None = None,
         path: Path | None = None,
