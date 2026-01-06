@@ -28,8 +28,10 @@ from datamodel_code_generator import (
     AllOfClassHierarchy,
     AllOfMergeMode,
     InvalidClassNameError,
+    JsonSchemaVersion,
     ReadOnlyWriteOnlyModelType,
     SchemaParseError,
+    VersionMode,
     YamlValue,
     load_data,
     load_data_from_path,
@@ -87,6 +89,7 @@ if TYPE_CHECKING:
 
     from datamodel_code_generator._types import JSONSchemaParserConfigDict
     from datamodel_code_generator.config import JSONSchemaParserConfig
+    from datamodel_code_generator.parser.schema_version import JsonSchemaFeatures
 
 
 def unescape_json_pointer_segment(segment: str) -> str:
@@ -190,7 +193,12 @@ class JSONReference(_enum.Enum):
 
 
 class Discriminator(BaseModel):
-    """Represent OpenAPI discriminator object."""
+    """Represent OpenAPI discriminator object.
+
+    This is an OpenAPI-specific concept for supporting polymorphism.
+    It identifies which schema applies based on a property value.
+    Kept in jsonschema.py to avoid circular imports with openapi.py.
+    """
 
     propertyName: str  # noqa: N815
     mapping: Optional[dict[str, str]] = None  # noqa: UP045
@@ -509,15 +517,21 @@ def get_ref_type(ref: str) -> JSONReference:
     return JSONReference.REMOTE
 
 
-def _get_type(type_: str, format__: str | None = None) -> Types:
+def _get_type(
+    type_: str,
+    format__: str | None = None,
+    data_formats: dict[str, dict[str, Types]] | None = None,
+) -> Types:
     """Get the appropriate Types enum for a given JSON Schema type and format."""
-    if type_ not in json_schema_data_formats:
+    if data_formats is None:  # pragma: no cover
+        data_formats = json_schema_data_formats
+    if type_ not in data_formats:
         return Types.any
-    if (data_formats := json_schema_data_formats[type_].get("default" if format__ is None else format__)) is not None:
-        return data_formats
+    if (type_format := data_formats[type_].get("default" if format__ is None else format__)) is not None:
+        return type_format
 
     warn(f"format of {format__!r} not understood for {type_!r} - using default", stacklevel=2)
-    return json_schema_data_formats[type_]["default"]
+    return data_formats[type_]["default"]
 
 
 JsonSchemaObject.model_rebuild()
@@ -550,7 +564,7 @@ EXCLUDE_FIELD_KEYS = (
 
 
 @snooper_to_methods()  # noqa: PLR0904
-class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
+class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
     """Parser for JSON Schema, JSON, YAML, Dict, and CSV formats."""
 
     SCHEMA_PATHS: ClassVar[list[str]] = ["#/definitions", "#/$defs"]
@@ -655,32 +669,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
         "ChainMap",
     })
 
-    @classmethod
-    def _create_default_config(cls, options: JSONSchemaParserConfigDict) -> JSONSchemaParserConfig:
-        """Create a JSONSchemaParserConfig from options."""
-        from datamodel_code_generator import types as types_module  # noqa: PLC0415
-        from datamodel_code_generator.config import JSONSchemaParserConfig  # noqa: PLC0415
-        from datamodel_code_generator.model import base as model_base  # noqa: PLC0415
-
-        if is_pydantic_v2():
-            JSONSchemaParserConfig.model_rebuild(
-                _types_namespace={
-                    "StrictTypes": types_module.StrictTypes,
-                    "DataModel": model_base.DataModel,
-                    "DataModelFieldBase": model_base.DataModelFieldBase,
-                    "DataTypeManager": types_module.DataTypeManager,
-                }
-            )
-            return JSONSchemaParserConfig.model_validate(options)
-        JSONSchemaParserConfig.update_forward_refs(
-            StrictTypes=types_module.StrictTypes,
-            DataModel=model_base.DataModel,
-            DataModelFieldBase=model_base.DataModelFieldBase,
-            DataTypeManager=types_module.DataTypeManager,
-        )
-        defaults = {name: field.default for name, field in JSONSchemaParserConfig.__fields__.items()}  # ty: ignore
-        defaults.update(options)  # ty: ignore
-        return JSONSchemaParserConfig.construct(**defaults)  # type: ignore[return-value]  # pragma: no cover
+    _config_class_name: ClassVar[str] = "JSONSchemaParserConfig"
 
     def __init__(
         self,
@@ -732,26 +721,73 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
             extras.update(self.default_field_extras)
         return extras
 
+    @cached_property
+    def _data_formats(self) -> dict[str, dict[str, Types]]:
+        """Get data format mappings for this parser type.
+
+        Returns all formats for backward compatibility.
+        OpenAPI-specific formats will be separated in Strict mode (future).
+        """
+        return json_schema_data_formats
+
     def _get_type_with_mappings(self, type_: str, format_: str | None = None) -> Types:
         """Get the Types enum for a given type and format, applying custom type mappings.
 
         Custom mappings from --type-mappings are checked first, then falls back to
-        the default json_schema_data_formats mappings.
+        the parser's data format mappings.
         """
+        data_formats = self._data_formats
         if self.type_mappings and format_ is not None and (type_, format_) in self.type_mappings:
             target_format = self.type_mappings[type_, format_]
-            for type_formats in json_schema_data_formats.values():
+            for type_formats in data_formats.values():
                 if target_format in type_formats:
                     return type_formats[target_format]
-            if target_format in json_schema_data_formats:
-                return json_schema_data_formats[target_format]["default"]
+            if target_format in data_formats:
+                return data_formats[target_format]["default"]
 
-        return _get_type(type_, format_)
+        return _get_type(type_, format_, data_formats)
 
     @cached_property
     def schema_paths(self) -> list[tuple[str, list[str]]]:
-        """Get schema paths for definitions and defs."""
-        return [(s, s.lstrip("#/").split("/")) for s in self.SCHEMA_PATHS]
+        """Get schema paths for definitions and defs.
+
+        For JsonSchema, uses schema_features.definitions_key to determine
+        the primary path, with fallback to the alternative in Lenient mode.
+        OpenAPI subclass uses its own SCHEMA_PATHS (#/components/schemas).
+        """
+        # OpenAPI and other subclasses use their own SCHEMA_PATHS
+        if self.SCHEMA_PATHS != ["#/definitions", "#/$defs"]:
+            return [(s, s.lstrip("#/").split("/")) for s in self.SCHEMA_PATHS]
+
+        # JsonSchema: use definitions_key from schema_features
+        primary_key = self.schema_features.definitions_key
+        primary_path = f"#/{primary_key}"
+        fallback_key = "$defs" if primary_key == "definitions" else "definitions"
+        fallback_path = f"#/{fallback_key}"
+
+        # Strict mode: only use version-specific path
+        if self.config.schema_version_mode == VersionMode.Strict:
+            return [(str(primary_path), [str(primary_key)])]
+
+        # Lenient mode (default): check both paths, primary first
+        return [
+            (str(primary_path), [str(primary_key)]),
+            (str(fallback_path), [str(fallback_key)]),
+        ]
+
+    @cached_property
+    def schema_features(self) -> JsonSchemaFeatures:
+        """Get schema features based on config or detected version."""
+        from datamodel_code_generator.parser.schema_version import (  # noqa: PLC0415
+            JsonSchemaFeatures,
+            detect_jsonschema_version,
+        )
+
+        config_version = getattr(self.config, "jsonschema_version", None)
+        if config_version is not None and config_version != JsonSchemaVersion.Auto:
+            return JsonSchemaFeatures.from_version(config_version)
+        version = detect_jsonschema_version(self.raw_obj) if self.raw_obj else JsonSchemaVersion.Auto
+        return JsonSchemaFeatures.from_version(version)
 
     @property
     def root_id(self) -> str | None:
@@ -957,11 +993,138 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
 
     def _should_generate_base_model(self, *, generates_separate_models: bool = False) -> bool:
         """Determine if Base model should be generated."""
+        if getattr(self, "_force_base_model_generation", False):
+            return True
         if self.read_only_write_only_model_type is None:
             return True
         if self.read_only_write_only_model_type == ReadOnlyWriteOnlyModelType.All:
             return True
         return not generates_separate_models
+
+    def _ref_schema_generates_variant(self, ref_path: str, suffix: str) -> bool:
+        """Check if a referenced schema will generate a specific variant (Request or Response).
+
+        For Request variant: schema must have readOnly fields AND at least one non-readOnly field.
+        For Response variant: schema must have writeOnly fields AND at least one non-writeOnly field.
+        """
+        try:
+            ref_schema = self._load_ref_schema_object(ref_path)
+        except Exception:  # noqa: BLE001  # pragma: no cover
+            return False
+
+        has_read_only = False
+        has_write_only = False
+        has_non_read_only = False
+        has_non_write_only = False
+
+        for prop in (ref_schema.properties or {}).values():
+            if not isinstance(prop, JsonSchemaObject):  # pragma: no cover
+                continue
+            is_read_only = self._resolve_field_flag(prop, "readOnly")
+            is_write_only = self._resolve_field_flag(prop, "writeOnly")
+            if is_read_only:
+                has_read_only = True
+            else:
+                has_non_read_only = True
+            if is_write_only:
+                has_write_only = True
+            else:
+                has_non_write_only = True
+
+        if suffix == "Request":
+            return has_read_only and has_non_read_only
+        if suffix == "Response":
+            return has_write_only and has_non_write_only
+        return False  # pragma: no cover
+
+    def _ref_schema_has_model(self, ref_path: str) -> bool:
+        """Check if a referenced schema will have a model (base or variant) generated.
+
+        Returns False if the schema has only readOnly or only writeOnly fields in request-response mode,
+        which would result in no model being generated at all.
+        """
+        try:
+            ref_schema = self._load_ref_schema_object(ref_path)
+        except Exception:  # noqa: BLE001  # pragma: no cover
+            return True
+
+        has_read_only = False
+        has_write_only = False
+
+        for prop in (ref_schema.properties or {}).values():
+            if not isinstance(prop, JsonSchemaObject):  # pragma: no cover
+                continue
+            is_read_only = self._resolve_field_flag(prop, "readOnly")
+            is_write_only = self._resolve_field_flag(prop, "writeOnly")
+            if is_read_only:
+                has_read_only = True
+            elif is_write_only:
+                has_write_only = True
+            else:  # pragma: no cover
+                return True
+
+        if has_read_only and not has_write_only:
+            return False
+        return not (has_write_only and not has_read_only)
+
+    def _update_data_type_ref_for_variant(self, data_type: DataType, suffix: str) -> None:
+        """Recursively update data type references to point to variant models."""
+        if data_type.reference:
+            ref_path = data_type.reference.path
+            if self._ref_schema_generates_variant(ref_path, suffix):
+                path_parts = ref_path.split("/")
+                base_name = path_parts[-1]
+                variant_name = f"{base_name}{suffix}"
+                unique_name = self.model_resolver.get_class_name(variant_name, unique=False).name
+                path_parts[-1] = unique_name
+                variant_ref = self.model_resolver.add(path_parts, unique_name, class_name=True, unique=False)
+                data_type.reference = variant_ref
+            elif not self._ref_schema_has_model(ref_path):  # pragma: no branch
+                if not hasattr(self, "_force_base_model_refs"):
+                    self._force_base_model_refs: set[str] = set()
+                self._force_base_model_refs.add(ref_path)
+        for nested_dt in data_type.data_types:
+            self._update_data_type_ref_for_variant(nested_dt, suffix)
+
+    def _update_field_refs_for_variant(
+        self, model_fields: list[DataModelFieldBase], suffix: str
+    ) -> list[DataModelFieldBase]:
+        """Update field references in model_fields to point to variant models.
+
+        For Request models, refs should point to Request variants.
+        For Response models, refs should point to Response variants.
+        """
+        if self.read_only_write_only_model_type != ReadOnlyWriteOnlyModelType.RequestResponse:
+            return model_fields
+        for field in model_fields:
+            if field.data_type:  # pragma: no branch
+                self._update_data_type_ref_for_variant(field.data_type, suffix)
+        return model_fields
+
+    def _generate_forced_base_models(self) -> None:
+        """Generate base models for schemas that are referenced as property types but lack models."""
+        if not hasattr(self, "_force_base_model_refs"):
+            return
+        if not self._force_base_model_refs:  # pragma: no cover
+            return
+
+        existing_model_paths = {result.path for result in self.results}
+
+        for ref_path in sorted(self._force_base_model_refs):
+            if ref_path in existing_model_paths:  # pragma: no cover
+                continue
+            try:
+                ref_schema = self._load_ref_schema_object(ref_path)
+                path_parts = ref_path.split("/")
+                schema_name = path_parts[-1]
+
+                self._force_base_model_generation = True
+                try:
+                    self.parse_obj(schema_name, ref_schema, path_parts)
+                finally:
+                    self._force_base_model_generation = False
+            except Exception:  # noqa: BLE001, S110  # pragma: no cover
+                pass
 
     def _create_variant_model(  # noqa: PLR0913, PLR0917
         self,
@@ -975,6 +1138,8 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
         """Create a Request or Response model variant."""
         if not model_fields:
             return
+        # Update field refs to point to variant models when in request-response mode
+        self._update_field_refs_for_variant(model_fields, suffix)
         variant_name = f"{base_name}{suffix}"
         unique_name = self.model_resolver.get_class_name(variant_name, unique=True).name
         model_path = [*path[:-1], unique_name]
@@ -2889,6 +3054,9 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
         singular_name: bool = True,  # noqa: FBT001, FBT002
     ) -> DataModelFieldBase:
         """Parse array schema into a data model field with list type."""
+        # Strict mode: check for version-specific array features
+        self._check_array_version_features(obj, path)
+
         if self.force_optional_for_required_fields:
             required: bool = False
             nullable: Optional[bool] = None  # noqa: UP045
@@ -3560,9 +3728,15 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
 
     @contextmanager
     def root_id_context(self, root_raw: dict[str, Any]) -> Generator[None, None, None]:
-        """Context manager to temporarily set the root $id during parsing."""
+        """Context manager to temporarily set the root $id during parsing.
+
+        Uses schema_features.id_field to support both "id" (Draft 4) and "$id" (Draft 6+).
+        Falls back to checking both fields for lenient compatibility.
+        """
         previous_root_id = self.root_id
-        self.root_id = root_raw.get("$id") or None
+        # Try version-specific field first, then fallback to alternative for compatibility
+        id_field = self.schema_features.id_field
+        self.root_id = root_raw.get(id_field) or root_raw.get("$id") or root_raw.get("id") or None
         yield
         self.root_id = previous_root_id
 
@@ -3593,8 +3767,117 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
         if isinstance(raw, dict) and "x-python-import" in raw:
             self._handle_python_import(name, path)
             return
+
+        # Strict mode: check for version-specific features before validation
+        self._check_version_specific_features(raw, path)
+
         obj = self._validate_schema_object(raw, path)
         self.parse_obj(name, obj, path)
+
+    def _check_version_specific_features(  # noqa: PLR0912
+        self,
+        raw: dict[str, YamlValue] | YamlValue,
+        path: list[str],
+    ) -> None:
+        """Check for version-specific features and warn in Strict mode.
+
+        This method checks the raw schema data before Pydantic validation
+        to detect features that may not be valid for the declared version.
+        """
+        if self.config.schema_version_mode != VersionMode.Strict:
+            return
+
+        # Check boolean schemas (Draft 6+)
+        if isinstance(raw, bool):
+            if not self.schema_features.boolean_schemas:
+                version_name = "Draft 4" if self.schema_features.id_field == "id" else "this version"
+                warn(
+                    f"Boolean schemas are not supported in {version_name}. Schema path: {'/'.join(path)}",
+                    stacklevel=3,
+                )
+            return
+
+        # Check null in type array (Draft 2020-12 / OpenAPI 3.1+)
+        type_value = raw.get("type")
+        if isinstance(type_value, list) and "null" in type_value and not self.schema_features.null_in_type_array:
+            warn(
+                'null in type array (e.g., type: ["string", "null"]) is not supported '
+                f"in this schema version. Use nullable: true instead. Schema path: {'/'.join(path)}",
+                stacklevel=3,
+            )
+
+        # Check exclusive min/max format (Draft 4 uses boolean, Draft 6+ uses number)
+        exclusive_min = raw.get("exclusiveMinimum")
+        exclusive_max = raw.get("exclusiveMaximum")
+        if self.schema_features.exclusive_as_number:
+            # Draft 6+: should be numeric, not boolean
+            if isinstance(exclusive_min, bool):
+                warn(
+                    f"exclusiveMinimum as boolean is Draft 4 style, but schema version uses numeric style. "
+                    f"Schema path: {'/'.join(path)}",
+                    stacklevel=3,
+                )
+            if isinstance(exclusive_max, bool):
+                warn(
+                    f"exclusiveMaximum as boolean is Draft 4 style, but schema version uses numeric style. "
+                    f"Schema path: {'/'.join(path)}",
+                    stacklevel=3,
+                )
+        else:
+            # Draft 4: should be boolean, not numeric
+            if exclusive_min is not None and not isinstance(exclusive_min, bool):
+                warn(
+                    f"exclusiveMinimum as number is Draft 6+ style, but schema version is Draft 4. "
+                    f"Schema path: {'/'.join(path)}",
+                    stacklevel=3,
+                )
+            if exclusive_max is not None and not isinstance(exclusive_max, bool):
+                warn(
+                    f"exclusiveMaximum as number is Draft 6+ style, but schema version is Draft 4. "
+                    f"Schema path: {'/'.join(path)}",
+                    stacklevel=3,
+                )
+
+        if not self.schema_features.read_only_write_only:
+            if raw.get("readOnly") is True:
+                warn(
+                    f"readOnly is not supported in this schema version (Draft 7+ only). Schema path: {'/'.join(path)}",
+                    stacklevel=3,
+                )
+            if raw.get("writeOnly") is True:
+                warn(
+                    f"writeOnly is not supported in this schema version (Draft 7+ only). Schema path: {'/'.join(path)}",
+                    stacklevel=3,
+                )
+
+    def _check_array_version_features(
+        self,
+        obj: JsonSchemaObject,
+        path: list[str],
+    ) -> None:
+        """Check for version-specific array features and warn in Strict mode.
+
+        Warns when prefixItems is used in versions that don't support it,
+        or when items as array (tuple style) is used in Draft 2020-12+.
+        """
+        if self.config.schema_version_mode != VersionMode.Strict:
+            return
+
+        # Check prefixItems usage (Draft 2020-12+ only)
+        if obj.prefixItems is not None and not self.schema_features.prefix_items:
+            warn(
+                f"prefixItems is not supported in this schema version. "
+                f"Use items as array for tuple validation. Schema path: {'/'.join(path)}",
+                stacklevel=4,
+            )
+
+        # Check items as array usage (deprecated in Draft 2020-12)
+        if isinstance(obj.items, list) and self.schema_features.prefix_items:
+            warn(
+                f"items as array (tuple validation) is deprecated in Draft 2020-12. "
+                f"Use prefixItems instead. Schema path: {'/'.join(path)}",
+                stacklevel=4,
+            )
 
     def _handle_python_import(
         self,
@@ -3704,6 +3987,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig"]):
             self._parse_file(self.raw_obj, obj_name, path_parts)
 
         self._resolve_unparsed_json_pointer()
+        self._generate_forced_base_models()
 
     def _resolve_unparsed_json_pointer(self) -> None:
         """Resolve any remaining unparsed JSON pointer references recursively."""
