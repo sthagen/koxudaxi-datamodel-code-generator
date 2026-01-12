@@ -6182,7 +6182,7 @@ where optional fields have defaults but cannot accept `None` values.
     
     
     class Id(BaseModel):
-        __root__: int
+        __root__: int = 1
     
     
     class Description(BaseModel):
@@ -11680,7 +11680,7 @@ This is useful when schemas have descriptive titles that should be preserved.
     class ProcessingStatusUnionTitle(BaseModel):
         __root__: (
             ProcessingStatusDetail | ExtendedProcessingTask | ProcessingStatusTitle
-        ) = Field(..., title='Processing Status Union Title')
+        ) = Field('COMPLETED', title='Processing Status Union Title')
     
     
     class ProcessingTaskTitle(BaseModel):
@@ -19238,7 +19238,7 @@ helps maintain consistency with codebases that prefer double-quote formatting.
     
     
     class Zoom(BaseModel):
-        __root__: confloat(ge=0.0, le=25.0)
+        __root__: confloat(ge=0.0, le=25.0) = 0
     ```
 
 ---
@@ -28916,6 +28916,11 @@ pip install 'datamodel-code-generator[http]'
 ### 📝 Getting Generated Code as String
 
 When the `output` parameter is omitted (or set to `None`), `generate()` returns the generated code directly as a string:
+
+!!! note
+    `GenerateConfig` is only available in Pydantic v2 environments.
+    For Pydantic v1, use `from datamodel_code_generator.config import GenerateConfig`
+    and call `update_forward_refs()` before use.
 
 ```python
 from datamodel_code_generator import InputFileType, generate, GenerateConfig, DataModelType
