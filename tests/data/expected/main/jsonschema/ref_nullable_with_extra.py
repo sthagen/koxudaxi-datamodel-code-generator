@@ -7,13 +7,9 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 
-class UserWithExtra(BaseModel):
+class User(BaseModel):
     name: str | None = None
 
 
 class Model(BaseModel):
-    user_with_extra: UserWithExtra | None = None
-
-
-class User(BaseModel):
-    name: str | None = None
+    user_with_extra: User | None = None

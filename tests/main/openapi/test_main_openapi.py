@@ -4697,6 +4697,52 @@ def test_main_openapi_module_class_name_collision_deep_pydantic_v2(output_dir: P
     )
 
 
+@pytest.mark.skipif(
+    version.parse(pydantic.VERSION) < version.parse("2.0.0"),
+    reason="Require Pydantic version 2.0.0 or later",
+)
+def test_main_openapi_module_class_name_collision_exact_imports_pydantic_v2(output_dir: Path) -> None:
+    """Test --use-exact-imports with module/class name collision."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "module_class_name_collision" / "openapi.json",
+        output_path=output_dir,
+        expected_directory=EXPECTED_OPENAPI_PATH / "module_class_name_collision_exact_imports",
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--openapi-scopes",
+            "schemas",
+            "--openapi-scopes",
+            "paths",
+            "--use-exact-imports",
+            "--disable-timestamp",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    version.parse(pydantic.VERSION) < version.parse("2.0.0"),
+    reason="Require Pydantic version 2.0.0 or later",
+)
+def test_main_openapi_module_class_name_collision_deep_exact_imports_pydantic_v2(output_dir: Path) -> None:
+    """Test --use-exact-imports with deep module/class name collision."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "module_class_name_collision_deep" / "openapi.json",
+        output_path=output_dir,
+        expected_directory=EXPECTED_OPENAPI_PATH / "module_class_name_collision_deep_exact_imports",
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--openapi-scopes",
+            "schemas",
+            "--openapi-scopes",
+            "paths",
+            "--use-exact-imports",
+            "--disable-timestamp",
+        ],
+    )
+
+
 def test_main_nested_package_enum_default(output_dir: Path) -> None:
     """Test enum default values use short names in same module with nested package paths."""
     with freeze_time(TIMESTAMP):
@@ -5031,5 +5077,25 @@ def test_main_openapi_allof_array_ref_no_duplicate_model(output_file: Path) -> N
             "--use-standard-collections",
             "--use-union-operator",
             "--use-schema-description",
+        ],
+    )
+
+
+def test_ref_merge_parameters(output_file: Path) -> None:
+    """Test $ref + const merge in OpenAPI parse_all_parameters path."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "ref_merge_parameters.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--use-frozen-field",
+            "--use-annotated",
+            "--openapi-scopes",
+            "paths",
+            "schemas",
+            "parameters",
         ],
     )

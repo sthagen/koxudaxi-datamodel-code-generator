@@ -126,17 +126,12 @@ _BUILTIN_CONTAINER_COLLISION_FLAGS: dict[str, str] = {
 }
 
 
-def _python_version_key(python_version: PythonVersion) -> tuple[int, int]:
-    major, minor = python_version.value.split(".")
-    return int(major), int(minor)
-
-
 def _get_builtin_names_for_target(target_python_version: PythonVersion) -> frozenset[str]:
     builtin_names = set(_BUILTIN_NAMES)
-    target_key = _python_version_key(target_python_version)
+    target_key = target_python_version.version_key
 
     for introduced_version, names in _BUILTIN_NAMES_INTRODUCED_IN.items():
-        if target_key >= _python_version_key(introduced_version):
+        if target_key >= introduced_version.version_key:
             builtin_names.update(names)
         else:
             builtin_names.difference_update(names)
@@ -1061,6 +1056,8 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             remove_special_field_name_prefix=config.remove_special_field_name_prefix,
             capitalise_enum_members=config.capitalise_enum_members,
             no_alias=config.no_alias,
+            use_subclass_enum=config.use_subclass_enum,
+            target_python_version=config.target_python_version,
             parent_scoped_naming=config.parent_scoped_naming,
             treat_dot_as_module=config.treat_dot_as_module,
             naming_strategy=config.naming_strategy,
@@ -1433,7 +1430,11 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                         ref_module and import_ == data_type.reference.short_name and ref_module[-1] == import_
                     )
 
-                    if from_ and (ref_module in internal_modules or is_module_class_collision):
+                    if (
+                        from_
+                        and not imports.use_exact
+                        and (ref_module in internal_modules or is_module_class_collision)
+                    ):
                         from_ = f"{from_}{import_}" if from_.endswith(".") else f"{from_}.{import_}"
                         import_ = data_type.reference.short_name
                         full_path = from_, import_
@@ -2078,6 +2079,8 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                         if d.reference is None:
                             continue
                         from_, import_ = full_path = relative(model.module_name, d.full_name)
+                        if imports.use_exact:
+                            from_, import_ = full_path = exact_import(from_, import_, d.reference.short_name)
                         if from_ and import_:
                             alias = scoped_model_resolver.add(full_path, import_)
                             d.alias = (
@@ -3391,6 +3394,12 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             contexts.append(ctx)
 
         self._finalize_modules(contexts, unused_models, model_to_module_models, module_to_import)
+
+        root_init: ModulePath = ("__init__.py",)
+        if root_init not in results:
+            top_level_dirs = {k[0] for k in results if len(k) >= 2}  # noqa: PLR2004
+            if len(top_level_dirs) > 1:
+                results[root_init] = Result(body="")
 
         future_imports = self.imports.extract_future()
         future_imports_str = str(future_imports)

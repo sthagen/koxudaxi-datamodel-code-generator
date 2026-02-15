@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, constr
 
 
 class Bar(BaseModel):
@@ -12,4 +12,4 @@ class Bar(BaseModel):
 
 
 class Foo(BaseModel):
-    bar: dict[str, Bar]
+    bar: dict[constr(regex=r'^([a-zA-Z_][a-zA-Z0-9_]*)$'), Bar]

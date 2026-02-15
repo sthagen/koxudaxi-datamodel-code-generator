@@ -3083,6 +3083,18 @@ def test_jsonschema_pattern_properties_field_constraints(output_file: Path) -> N
     )
 
 
+def test_jsonschema_pattern_properties_use_annotated(output_file: Path) -> None:
+    """Test pattern properties with --use-annotated preserves pattern constraint on dict keys."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "pattern_properties.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="pattern_properties_use_annotated.py",
+        extra_args=["--output-model-type", "pydantic_v2.BaseModel", "--use-annotated"],
+    )
+
+
 @LEGACY_BLACK_SKIP
 def test_jsonschema_titles(output_file: Path) -> None:
     """Test JSON Schema title handling."""
@@ -3892,6 +3904,22 @@ def test_main_jsonschema_property_names_pattern(output_file: Path) -> None:
     )
 
 
+def test_main_jsonschema_property_names_pattern_field_constraints(output_file: Path) -> None:
+    """Test propertyNames pattern with field_constraints preserves constr key."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "property_names_pattern.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="property_names_pattern_field_constraints.py",
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--field-constraints",
+        ],
+    )
+
+
 def test_main_jsonschema_property_names_enum(output_file: Path) -> None:
     """Test propertyNames with enum constraint generates dict with Literal key."""
     run_main_and_assert(
@@ -4277,6 +4305,27 @@ def test_main_typed_dict_enum_field_as_literal_all(output_file: Path) -> None:
             "typing.TypedDict",
             "--enum-field-as-literal",
             "all",
+            "--target-python-version",
+            "3.11",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    black.__version__.split(".")[0] == "22",
+    reason="Installed black doesn't support Python version 3.11",
+)
+def test_main_typed_dict_nullable_enum_literal(output_file: Path) -> None:
+    """Test TypedDict with nullable enum literals generates | None correctly."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "nullable_enum_literal_typed_dict.json",
+        output_path=output_file,
+        input_file_type=None,
+        assert_func=assert_file_content,
+        expected_file="typed_dict_nullable_enum_literal.py",
+        extra_args=[
+            "--output-model-type",
+            "typing.TypedDict",
             "--target-python-version",
             "3.11",
         ],
@@ -7638,6 +7687,17 @@ def test_main_jsonschema_ref_to_json_list_file() -> None:
         )
 
 
+def test_main_jsonschema_x_python_import_unused(output_file: Path) -> None:
+    """Test x-python-import entries in $defs are handled without model generation."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "x_python_import_unused.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="x_python_import_unused.py",
+    )
+
+
 def test_x_python_type_callable(output_file: Path) -> None:
     """Test x-python-type with Callable preserves the Callable type."""
     run_main_and_assert(
@@ -7873,11 +7933,12 @@ def test_ref_nullable_with_constraint_creates_model(output_file: Path) -> None:
     )
 
 
-def test_ref_nullable_with_extra_creates_model(output_file: Path) -> None:
-    """Test $ref + nullable: true + schema-affecting extras DOES create a merged model.
+def test_ref_nullable_with_extra_uses_reference_directly(output_file: Path) -> None:
+    """Test $ref + nullable: true + non-schema-affecting extras uses reference directly.
 
-    When a property has $ref with nullable: true AND schema-affecting extras like
-    'if', 'then', 'else', it should merge the schemas and create a new model.
+    When a property has $ref with nullable: true AND extras that the tool cannot
+    structurally process (like 'if'), it should use the reference directly
+    instead of creating a merged model.
     """
     run_main_and_assert(
         input_path=JSON_SCHEMA_DATA_PATH / "ref_nullable_with_extra.yaml",
@@ -8244,6 +8305,128 @@ def test_main_allof_mro(output_file: Path) -> None:
     )
 
 
+@pytest.mark.benchmark
+def test_main_circular_ref_with_schema_keywords(output_file: Path) -> None:
+    """Test circular $ref with additional schema keywords does not cause RecursionError."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "circular_ref_with_schema_keywords.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+    )
+
+
+@pytest.mark.benchmark
+def test_main_circular_ref_indirect(output_file: Path) -> None:
+    """Test indirect circular $ref (A->B->A) does not cause RecursionError."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "circular_ref_indirect.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+    )
+
+
+@pytest.mark.benchmark
+def test_main_circular_ref_root_with_type(output_file: Path) -> None:
+    """Test circular $ref at root level with type does not cause RecursionError."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "circular_ref_root_with_type.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+    )
+
+
+@pytest.mark.benchmark
+def test_main_circular_ref_external_relative_keywords(output_file: Path) -> None:
+    """Test circular external refs with relative paths and schema keywords."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "circular_ref_external_relative_keywords" / "root.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+    )
+
+
+@pytest.mark.benchmark
+def test_main_circular_ref_external_url_keywords(mocker: MockerFixture, output_file: Path) -> None:
+    """Test circular external refs with relative paths and schema keywords via URL input."""
+    external_directory = JSON_SCHEMA_DATA_PATH / "circular_ref_external_relative_keywords"
+    base_url = "https://example.com/circular_ref_external_relative_keywords/"
+
+    url_to_path = {
+        f"{base_url}root.json": "root.json",
+        f"{base_url}defs/context.json": "defs/context.json",
+        f"{base_url}defs/nested/child.json": "defs/nested/child.json",
+    }
+
+    def get_mock_response(url: str, **_: object) -> mocker.Mock:
+        path = url_to_path.get(url)
+        mock = mocker.Mock()
+        mock.text = (external_directory / path).read_text()
+        return mock
+
+    httpx_get_mock = mocker.patch(
+        "httpx.get",
+        side_effect=get_mock_response,
+    )
+
+    run_main_url_and_assert(
+        url=f"{base_url}root.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="circular_ref_external_relative_keywords.py",
+        transform=lambda s: s.replace(
+            f"#   filename:  {base_url}root.json",
+            "#   filename:  root.json",
+        ),
+    )
+
+    httpx_get_mock.assert_has_calls(
+        [
+            call(
+                f"{base_url}root.json",
+                headers=None,
+                verify=True,
+                follow_redirects=True,
+                params=None,
+                timeout=30.0,
+            ),
+            call(
+                f"{base_url}defs/context.json",
+                headers=None,
+                verify=True,
+                follow_redirects=True,
+                params=None,
+                timeout=30.0,
+            ),
+            call(
+                f"{base_url}defs/nested/child.json",
+                headers=None,
+                verify=True,
+                follow_redirects=True,
+                params=None,
+                timeout=30.0,
+            ),
+        ],
+        any_order=True,
+    )
+    assert httpx_get_mock.call_count == 3
+
+
+@pytest.mark.benchmark
+def test_main_circular_ref_ref_with_schema_keywords(output_file: Path) -> None:
+    """Test named schema with circular $ref and schema keywords still generates alias model."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "circular_ref_ref_with_schema_keywords.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+    )
+
+
 def test_main_jsonschema_recursive_ref(output_file: Path) -> None:
     """Test JSON Schema 2019-09 $recursiveRef with $recursiveAnchor."""
     run_main_and_assert(
@@ -8361,4 +8544,129 @@ def test_main_jsonschema_dynamic_ref_in_defs_pydantic_v2(output_file: Path) -> N
         assert_func=assert_file_content,
         expected_file="dynamic_ref_in_defs_pydantic_v2.py",
         extra_args=["--output-model-type", "pydantic_v2.BaseModel"],
+    )
+
+
+def test_main_jsonschema_multiple_aliases_required_pydantic_v2(output_file: Path) -> None:
+    """Test multiple aliases with AliasChoices on required fields for Pydantic v2. (#2989)."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "multiple_aliases_required.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=[
+            "--aliases",
+            str(ALIASES_DATA_PATH / "multiple_aliases_required.json"),
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
+    )
+
+
+def test_ref_with_nonstandard_metadata(output_file: Path) -> None:
+    """Test $ref with non-standard metadata fields preserves type information.
+
+    When $ref is combined with non-standard metadata like 'markdownDescription',
+    the reference type should be preserved instead of being replaced by the
+    underlying type. Non-standard fields are annotation-only and should not
+    trigger schema merging.
+    """
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "ref_with_nonstandard_metadata.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="ref_with_nonstandard_metadata.py",
+        extra_args=["--output-model-type", "pydantic_v2.BaseModel", "--use-annotated"],
+    )
+
+
+def test_ref_nullable_with_nonstandard_metadata(output_file: Path) -> None:
+    """Test $ref + nullable: true with non-standard metadata uses reference directly.
+
+    When $ref is combined with nullable: true and non-standard metadata like
+    'markdownDescription', the reference should be used directly with Optional
+    type annotation instead of creating a merged model.
+    """
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "ref_nullable_with_nonstandard_metadata.yaml",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="ref_nullable_with_nonstandard_metadata.py",
+        extra_args=["--output-model-type", "pydantic_v2.BaseModel", "--strict-nullable"],
+    )
+
+
+def test_ref_with_const(output_file: Path) -> None:
+    """Test $ref + const triggers schema merging as const is schema-affecting.
+
+    When $ref is combined with 'const', the const keyword structurally affects
+    the generated type (producing Literal), so schema merging should occur.
+    """
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "ref_with_const.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="ref_with_const.py",
+        extra_args=["--output-model-type", "pydantic_v2.BaseModel", "--strict-nullable"],
+    )
+
+
+def test_ref_merge_field_metadata(output_file: Path) -> None:
+    """Test $ref + const merges ref metadata."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "ref_merge_field_metadata.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="ref_merge_field_metadata.py",
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--use-frozen-field",
+            "--field-constraints",
+            "--use-annotated",
+            "--strict-nullable",
+        ],
+    )
+
+
+def test_ref_merge_additional_properties(output_file: Path) -> None:
+    """Test $ref + const merge in additionalProperties root model path."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "ref_merge_additional_properties.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--field-constraints",
+            "--use-annotated",
+        ],
+    )
+
+
+@PYDANTIC_V2_SKIP
+def test_main_exact_imports_collapse_root_models_module_class_collision(output_dir: Path) -> None:
+    """Test --use-exact-imports with --collapse-root-models when module and class names collide."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "exact_imports_collapse_root_models",
+        output_path=output_dir,
+        input_file_type="jsonschema",
+        expected_directory=EXPECTED_JSON_SCHEMA_PATH / "exact_imports_collapse_root_models",
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--target-python-version",
+            "3.10",
+            "--use-exact-imports",
+            "--collapse-root-models",
+            "--use-title-as-name",
+            "--snake-case-field",
+            "--disable-timestamp",
+        ],
+        force_exec_validation=True,
     )
