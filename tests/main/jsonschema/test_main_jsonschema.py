@@ -18,6 +18,7 @@ from datamodel_code_generator import (
     InputFileType,
     PythonVersion,
     PythonVersionMin,
+    TargetPydanticVersion,
     chdir,
     generate,
 )
@@ -1842,6 +1843,39 @@ def test_main_generate_pydantic_v2_dataclass_use_attribute_docstrings(tmp_path: 
     )
 
     assert_file_content(output_file, "pydantic_v2_dataclass_use_attribute_docstrings.py")
+
+
+def test_main_generate_pydantic_v2_dataclass_allow_population_by_field_name(tmp_path: Path) -> None:
+    """Test pydantic_v2.dataclass with allow_population_by_field_name."""
+    output_file: Path = tmp_path / "output.py"
+    input_ = (JSON_SCHEMA_DATA_PATH / "simple_string.json").relative_to(Path.cwd())
+    assert not input_.is_absolute()
+    generate(
+        input_=input_,
+        input_file_type=InputFileType.JsonSchema,
+        output=output_file,
+        output_model_type=DataModelType.PydanticV2Dataclass,
+        allow_population_by_field_name=True,
+    )
+
+    assert_file_content(output_file, "pydantic_v2_dataclass_populate_by_name.py")
+
+
+def test_main_generate_pydantic_v2_dataclass_allow_population_by_field_name_v2_11(tmp_path: Path) -> None:
+    """Test pydantic_v2.dataclass with allow_population_by_field_name and target v2.11."""
+    output_file: Path = tmp_path / "output.py"
+    input_ = (JSON_SCHEMA_DATA_PATH / "simple_string.json").relative_to(Path.cwd())
+    assert not input_.is_absolute()
+    generate(
+        input_=input_,
+        input_file_type=InputFileType.JsonSchema,
+        output=output_file,
+        output_model_type=DataModelType.PydanticV2Dataclass,
+        allow_population_by_field_name=True,
+        target_pydantic_version=TargetPydanticVersion.V2_11,
+    )
+
+    assert_file_content(output_file, "pydantic_v2_dataclass_validate_by_name.py")
 
 
 def test_main_generate_pydantic_v2_dataclass_extra_allow(tmp_path: Path) -> None:
@@ -5699,6 +5733,31 @@ def test_main_jsonschema_type_alias_with_field_description_py312(output_file: Pa
         extra_args=[
             "--use-type-alias",
             "--use-field-description",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_enum_literal_type_alias_default(output_file: Path) -> None:
+    """Don't wrap type alias defaults in default_factory (TypeAliasType is not callable)."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "enum_literal_type_alias_default.json",
+        output_path=output_file,
+        input_file_type=None,
+        assert_func=assert_file_content,
+        expected_file="enum_literal_type_alias_default.py",
+        extra_args=[
+            "--use-type-alias",
+            "--use-annotated",
+            "--enum-field-as-literal",
+            "all",
             "--target-python-version",
             "3.12",
             "--output-model-type",
