@@ -29,7 +29,7 @@ from datamodel_code_generator.model.imports import (
     IMPORT_MSGSPEC_UNSET,
     IMPORT_MSGSPEC_UNSETTYPE,
 )
-from datamodel_code_generator.model.pydantic.base_model import (
+from datamodel_code_generator.model.pydantic_base import (
     Constraints as _Constraints,
 )
 from datamodel_code_generator.model.type_alias import TypeAliasBase
@@ -47,7 +47,6 @@ from datamodel_code_generator.types import (
     _remove_none_from_union,
     chain_as_tuple,
 )
-from datamodel_code_generator.util import model_dump
 
 UNSET_TYPE = "UnsetType"
 
@@ -390,7 +389,7 @@ class DataModelField(DataModelFieldBase):
                 **data,
                 **{
                     k: self._get_strict_field_constraint_value(k, v)
-                    for k, v in model_dump(self.constraints).items()
+                    for k, v in self.constraints.model_dump().items()
                     if k in self._META_FIELD_KEYS
                 },
             }
