@@ -130,7 +130,7 @@ def _get_origin_name(origin: type) -> str:
 
 
 def _get_input_model_json_schema_class() -> type:
-    """Get the InputModelJsonSchema class (lazy import to avoid Pydantic v1 issues)."""
+    """Get the InputModelJsonSchema class lazily."""
     from pydantic.json_schema import GenerateJsonSchema  # noqa: PLC0415
 
     class InputModelJsonSchema(GenerateJsonSchema):
@@ -514,7 +514,6 @@ def _get_output_family(output_model_type: DataModelType) -> str:
     from datamodel_code_generator import DataModelType  # noqa: PLC0415
 
     pydantic_types = {
-        DataModelType.PydanticBaseModel,
         DataModelType.PydanticV2BaseModel,
         DataModelType.PydanticV2Dataclass,
     }

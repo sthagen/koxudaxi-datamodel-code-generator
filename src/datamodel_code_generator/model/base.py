@@ -187,13 +187,7 @@ class DataModelFieldBase(_BaseModel):
             self.process_const()
 
     def process_const(self) -> None:
-        """Process const values by setting them as defaults."""
-        if "const" not in self.extras:
-            return
-        self.default = self.extras["const"]
-        self.const = True
-        self.required = False
-        self.nullable = False
+        """Process const fields in subclasses."""
 
     def _process_const_as_literal(self) -> None:
         """Process const values by converting to literal type. Used by subclasses."""
@@ -210,7 +204,7 @@ class DataModelFieldBase(_BaseModel):
         """Check if field references its parent model.
 
         Result is cached after first call since parent is stable at render time.
-        Uses __dict__ for caching to avoid Pydantic v1 field assignment restrictions.
+        Uses __dict__ for caching to avoid Pydantic-managed field assignment.
         """
         if "_self_reference_cache" in self.__dict__:
             return self.__dict__["_self_reference_cache"]
