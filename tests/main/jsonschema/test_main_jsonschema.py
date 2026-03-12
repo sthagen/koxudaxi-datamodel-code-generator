@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -25,7 +27,7 @@ from datamodel_code_generator import (
 from datamodel_code_generator.__main__ import Exit, main
 from datamodel_code_generator.format import is_supported_in_black
 from datamodel_code_generator.model import base as model_base
-from tests.conftest import assert_directory_content, freeze_time
+from tests.conftest import assert_directory_content, freeze_time, validate_generated_code
 from tests.main.conftest import (
     ALIASES_DATA_PATH,
     BLACK_PY313_SKIP,
@@ -36,6 +38,7 @@ from tests.main.conftest import (
     LEGACY_BLACK_SKIP,
     MSGSPEC_LEGACY_BLACK_SKIP,
     TIMESTAMP,
+    run_generate_file_and_assert,
     run_main_and_assert,
     run_main_url_and_assert,
     run_main_with_args,
@@ -46,6 +49,27 @@ if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
 FixtureRequest = pytest.FixtureRequest
+
+
+def _install_test_my_app(base_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    package_dir = base_dir / "my_app"
+    package_dir.mkdir()
+    (package_dir / "__init__.py").write_text(
+        """from typing import Literal
+
+from pydantic import BaseModel
+
+
+class AliasA(BaseModel):
+    type: Literal["a"] = "a"
+
+
+class B(BaseModel):
+    type: Literal["b"] = "b"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(base_dir))
 
 
 @pytest.mark.benchmark
@@ -1607,311 +1631,312 @@ def test_main_jsonschema_pattern(output_file: Path) -> None:
     )
 
 
-def test_main_generate(tmp_path: Path) -> None:
+def test_main_generate(output_file: Path) -> None:
     """Test code generation function."""
-    output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "person.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
+        assert_func=assert_file_content,
+        expected_file="general.py",
     )
 
-    assert_file_content(output_file, "general.py")
 
-
-def test_main_generate_non_pydantic_output(tmp_path: Path) -> None:
+def test_main_generate_non_pydantic_output(output_file: Path) -> None:
     """Test generation with non-Pydantic output models (see issue #1452)."""
-    output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "simple_string.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "simple_string.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
+        assert_func=assert_file_content,
         output_model_type=DataModelType.DataclassesDataclass,
     )
 
-    assert_file_content(output_file, "generate_non_pydantic_output.py")
+
+def test_main_generate_without_input_file_type(output_file: Path) -> None:
+    """Test helper preserves generate() input_file_type default behavior."""
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        assert_func=assert_file_content,
+        expected_file="general.py",
+    )
 
 
-def test_main_generate_pydantic_v2_dataclass(tmp_path: Path) -> None:
+def test_main_generate_relative_input_path(output_file: Path) -> None:
+    """Test helper with a relative input path."""
+    run_generate_file_and_assert(
+        input_path=Path(os.path.relpath(JSON_SCHEMA_DATA_PATH / "person.json", Path.cwd())),
+        output_path=output_file,
+        input_file_type=InputFileType.JsonSchema,
+        assert_func=assert_file_content,
+        expected_file="general.py",
+    )
+
+
+def test_main_generate_external_absolute_input_path(tmp_path: Path) -> None:
+    """Test helper keeps absolute input paths that are outside the repository root."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        input_path = Path(temp_dir) / "person.json"
+        assert Path.cwd() not in input_path.resolve().parents
+        input_path.write_text((JSON_SCHEMA_DATA_PATH / "person.json").read_text(encoding="utf-8"), encoding="utf-8")
+
+        run_generate_file_and_assert(
+            input_path=input_path,
+            output_path=tmp_path / "output.py",
+            input_file_type=InputFileType.JsonSchema,
+            assert_func=assert_file_content,
+            expected_file="general.py",
+        )
+
+
+def test_main_generate_pydantic_v2_dataclass(output_file: Path) -> None:
     """Test generation with pydantic_v2.dataclass output model."""
-    output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "simple_string.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "simple_string.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
+        assert_func=assert_file_content,
+        expected_file="generate_pydantic_v2_dataclass.py",
         output_model_type=DataModelType.PydanticV2Dataclass,
     )
 
-    assert_file_content(output_file, "generate_pydantic_v2_dataclass.py")
 
-
-def test_main_generate_pydantic_v2_dataclass_with_config(tmp_path: Path) -> None:
+def test_main_generate_pydantic_v2_dataclass_with_config(output_file: Path) -> None:
     """Test pydantic_v2.dataclass with ConfigDict from additionalProperties."""
-    output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "pydantic_v2_dataclass_config.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "pydantic_v2_dataclass_config.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
+        assert_func=assert_file_content,
+        expected_file="pydantic_v2_dataclass_config.py",
         output_model_type=DataModelType.PydanticV2Dataclass,
     )
 
-    assert_file_content(output_file, "pydantic_v2_dataclass_config.py")
 
-
-def test_main_generate_pydantic_v2_dataclass_additional_props_true(tmp_path: Path) -> None:
+def test_main_generate_pydantic_v2_dataclass_additional_props_true(output_file: Path) -> None:
     """Test pydantic_v2.dataclass with additionalProperties: true."""
-    output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "pydantic_v2_dataclass_additional_props_true.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "pydantic_v2_dataclass_additional_props_true.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
+        assert_func=assert_file_content,
+        expected_file="pydantic_v2_dataclass_additional_props_true.py",
         output_model_type=DataModelType.PydanticV2Dataclass,
     )
 
-    assert_file_content(output_file, "pydantic_v2_dataclass_additional_props_true.py")
 
-
-def test_main_generate_pydantic_v2_dataclass_unevaluated_props_true(tmp_path: Path) -> None:
+def test_main_generate_pydantic_v2_dataclass_unevaluated_props_true(output_file: Path) -> None:
     """Test pydantic_v2.dataclass with unevaluatedProperties: true."""
-    output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "unevaluated_properties_true.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "unevaluated_properties_true.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
+        assert_func=assert_file_content,
+        expected_file="unevaluated_properties_true_dataclass.py",
         output_model_type=DataModelType.PydanticV2Dataclass,
     )
 
-    assert_file_content(output_file, "unevaluated_properties_true_dataclass.py")
 
-
-def test_main_generate_pydantic_v2_base_model_unevaluated_props(tmp_path: Path) -> None:
+def test_main_generate_pydantic_v2_base_model_unevaluated_props(output_file: Path) -> None:
     """Test pydantic_v2.BaseModel with unevaluatedProperties: false."""
-    output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "unevaluated_properties.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "unevaluated_properties.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
+        assert_func=assert_file_content,
+        expected_file="unevaluated_properties_pydantic_v2.py",
         output_model_type=DataModelType.PydanticV2BaseModel,
     )
 
-    assert_file_content(output_file, "unevaluated_properties_pydantic_v2.py")
 
-
-def test_main_generate_pydantic_v2_base_model_unevaluated_props_true(tmp_path: Path) -> None:
+def test_main_generate_pydantic_v2_base_model_unevaluated_props_true(output_file: Path) -> None:
     """Test pydantic_v2.BaseModel with unevaluatedProperties: true."""
-    output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "unevaluated_properties_true.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "unevaluated_properties_true.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
+        assert_func=assert_file_content,
+        expected_file="unevaluated_properties_true_pydantic_v2.py",
         output_model_type=DataModelType.PydanticV2BaseModel,
     )
 
-    assert_file_content(output_file, "unevaluated_properties_true_pydantic_v2.py")
 
-
-def test_main_generate_pydantic_v2_dataclass_unevaluated_props_false(tmp_path: Path) -> None:
+def test_main_generate_pydantic_v2_dataclass_unevaluated_props_false(output_file: Path) -> None:
     """Test pydantic_v2.dataclass with unevaluatedProperties: false."""
-    output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "unevaluated_properties.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "unevaluated_properties.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
+        assert_func=assert_file_content,
+        expected_file="unevaluated_properties_dataclass.py",
         output_model_type=DataModelType.PydanticV2Dataclass,
     )
 
-    assert_file_content(output_file, "unevaluated_properties_dataclass.py")
 
-
-def test_main_generate_pydantic_v2_dataclass_use_attribute_docstrings(tmp_path: Path) -> None:
+def test_main_generate_pydantic_v2_dataclass_use_attribute_docstrings(output_file: Path) -> None:
     """Test pydantic_v2.dataclass with use_attribute_docstrings."""
-    output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "simple_string.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "simple_string.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
+        assert_func=assert_file_content,
+        expected_file="pydantic_v2_dataclass_use_attribute_docstrings.py",
         output_model_type=DataModelType.PydanticV2Dataclass,
         use_attribute_docstrings=True,
     )
 
-    assert_file_content(output_file, "pydantic_v2_dataclass_use_attribute_docstrings.py")
 
-
-def test_main_generate_pydantic_v2_dataclass_allow_population_by_field_name(tmp_path: Path) -> None:
+def test_main_generate_pydantic_v2_dataclass_allow_population_by_field_name(output_file: Path) -> None:
     """Test pydantic_v2.dataclass with allow_population_by_field_name."""
-    output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "simple_string.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "simple_string.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
+        assert_func=assert_file_content,
+        expected_file="pydantic_v2_dataclass_populate_by_name.py",
         output_model_type=DataModelType.PydanticV2Dataclass,
         allow_population_by_field_name=True,
     )
 
-    assert_file_content(output_file, "pydantic_v2_dataclass_populate_by_name.py")
 
-
-def test_main_generate_pydantic_v2_dataclass_allow_population_by_field_name_v2_11(tmp_path: Path) -> None:
+def test_main_generate_pydantic_v2_dataclass_allow_population_by_field_name_v2_11(output_file: Path) -> None:
     """Test pydantic_v2.dataclass with allow_population_by_field_name and target v2.11."""
-    output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "simple_string.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "simple_string.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
+        assert_func=assert_file_content,
+        expected_file="pydantic_v2_dataclass_validate_by_name.py",
         output_model_type=DataModelType.PydanticV2Dataclass,
         allow_population_by_field_name=True,
         target_pydantic_version=TargetPydanticVersion.V2_11,
     )
 
-    assert_file_content(output_file, "pydantic_v2_dataclass_validate_by_name.py")
 
-
-def test_main_generate_pydantic_v2_dataclass_extra_allow(tmp_path: Path) -> None:
+def test_main_generate_pydantic_v2_dataclass_extra_allow(output_file: Path) -> None:
     """Test pydantic_v2.dataclass with extra='allow'."""
-    output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "simple_string.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "simple_string.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
+        assert_func=assert_file_content,
+        expected_file="pydantic_v2_dataclass_extra_allow.py",
         output_model_type=DataModelType.PydanticV2Dataclass,
         extra_fields="allow",
     )
 
-    assert_file_content(output_file, "pydantic_v2_dataclass_extra_allow.py")
 
-
-def test_main_generate_pydantic_v2_dataclass_extra_forbid(tmp_path: Path) -> None:
+def test_main_generate_pydantic_v2_dataclass_extra_forbid(output_file: Path) -> None:
     """Test pydantic_v2.dataclass with extra='forbid'."""
-    output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "simple_string.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "simple_string.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
+        assert_func=assert_file_content,
+        expected_file="pydantic_v2_dataclass_extra_forbid.py",
         output_model_type=DataModelType.PydanticV2Dataclass,
         extra_fields="forbid",
     )
 
-    assert_file_content(output_file, "pydantic_v2_dataclass_extra_forbid.py")
 
-
-def test_main_generate_pydantic_v2_dataclass_extra_ignore(tmp_path: Path) -> None:
+def test_main_generate_pydantic_v2_dataclass_extra_ignore(output_file: Path) -> None:
     """Test pydantic_v2.dataclass with extra='ignore'."""
-    output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "simple_string.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "simple_string.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
+        assert_func=assert_file_content,
+        expected_file="pydantic_v2_dataclass_extra_ignore.py",
         output_model_type=DataModelType.PydanticV2Dataclass,
         extra_fields="ignore",
     )
 
-    assert_file_content(output_file, "pydantic_v2_dataclass_extra_ignore.py")
 
-
-def test_main_generate_pydantic_v2_dataclass_nested(tmp_path: Path) -> None:
+def test_main_generate_pydantic_v2_dataclass_nested(output_file: Path) -> None:
     """Test pydantic_v2.dataclass with nested models."""
-    output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "pydantic_v2_dataclass_nested.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "pydantic_v2_dataclass_nested.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
+        assert_func=assert_file_content,
+        expected_file="pydantic_v2_dataclass_nested.py",
         output_model_type=DataModelType.PydanticV2Dataclass,
     )
 
-    assert_file_content(output_file, "pydantic_v2_dataclass_nested.py")
 
-
-def test_main_generate_pydantic_v2_dataclass_constraints(tmp_path: Path) -> None:
+def test_main_generate_pydantic_v2_dataclass_constraints(output_file: Path) -> None:
     """Test pydantic_v2.dataclass with field constraints."""
-    output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "pydantic_v2_dataclass_constraints.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "pydantic_v2_dataclass_constraints.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
+        assert_func=assert_file_content,
+        expected_file="pydantic_v2_dataclass_constraints.py",
         output_model_type=DataModelType.PydanticV2Dataclass,
     )
 
-    assert_file_content(output_file, "pydantic_v2_dataclass_constraints.py")
 
-
-def test_main_generate_pydantic_v2_dataclass_nested_frozen(tmp_path: Path) -> None:
+def test_main_generate_pydantic_v2_dataclass_nested_frozen(output_file: Path) -> None:
     """Test pydantic_v2.dataclass with nested models and frozen=True."""
-    output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "pydantic_v2_dataclass_nested.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "pydantic_v2_dataclass_nested.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
+        assert_func=assert_file_content,
+        expected_file="pydantic_v2_dataclass_nested_frozen.py",
         output_model_type=DataModelType.PydanticV2Dataclass,
         frozen_dataclasses=True,
     )
 
-    assert_file_content(output_file, "pydantic_v2_dataclass_nested_frozen.py")
 
-
-def test_main_generate_pydantic_v2_dataclass_field(tmp_path: Path) -> None:
+def test_main_generate_pydantic_v2_dataclass_field(output_file: Path) -> None:
     """Test pydantic_v2.dataclass with Field constraints and defaults."""
-    output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "pydantic_v2_dataclass_field.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "pydantic_v2_dataclass_field.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
+        assert_func=assert_file_content,
+        expected_file="pydantic_v2_dataclass_field.py",
         output_model_type=DataModelType.PydanticV2Dataclass,
     )
 
-    assert_file_content(output_file, "pydantic_v2_dataclass_field.py")
 
-
-def test_main_generate_pydantic_v2_dataclass_enum(tmp_path: Path) -> None:
+def test_main_generate_pydantic_v2_dataclass_enum(output_file: Path) -> None:
     """Test pydantic_v2.dataclass with enum types."""
-    output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "pydantic_v2_dataclass_enum.json").relative_to(Path.cwd())
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "pydantic_v2_dataclass_enum.json",
+        output_path=output_file,
+        input_file_type=InputFileType.JsonSchema,
+        assert_func=assert_file_content,
+        expected_file="pydantic_v2_dataclass_enum.py",
+        output_model_type=DataModelType.PydanticV2Dataclass,
+    )
+
+
+@pytest.mark.parametrize(
+    ("input_file", "expected_file"),
+    [
+        ("pydantic_v2_model_default_dict_empty.json", "pydantic_v2_model_default_dict_empty.py"),
+        ("pydantic_v2_model_default_dict_non_empty.json", "pydantic_v2_model_default_dict_non_empty.py"),
+        ("pydantic_v2_model_default_nullable_dict_empty.json", "pydantic_v2_model_default_nullable_dict_empty.py"),
+        (
+            "pydantic_v2_model_default_nullable_dict_non_empty.json",
+            "pydantic_v2_model_default_nullable_dict_non_empty.py",
+        ),
+    ],
+)
+def test_main_generate_pydantic_v2_model_default_dict(input_file: str, expected_file: str, output_file: Path) -> None:
+    """Test pydantic_v2.BaseModel with dict defaults."""
+    input_ = (JSON_SCHEMA_DATA_PATH / input_file).relative_to(Path.cwd())
     assert not input_.is_absolute()
     generate(
         input_=input_,
         input_file_type=InputFileType.JsonSchema,
         output=output_file,
-        output_model_type=DataModelType.PydanticV2Dataclass,
+        output_model_type=DataModelType.PydanticV2BaseModel,
     )
-
-    assert_file_content(output_file, "pydantic_v2_dataclass_enum.py")
+    assert_file_content(output_file, expected_file)
 
 
 def test_main_generate_from_directory(tmp_path: Path) -> None:
@@ -1936,19 +1961,14 @@ def test_main_generate_custom_class_name_generator(tmp_path: Path) -> None:
         return f"Custom{title}"
 
     output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "person.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
-        custom_class_name_generator=custom_class_name_generator,
-    )
-
-    assert_file_content(
-        output_file,
-        "general.py",
+        assert_func=assert_file_content,
+        expected_file="general.py",
         transform=lambda s: s.replace("CustomPerson", "Person"),
+        custom_class_name_generator=custom_class_name_generator,
     )
 
 
@@ -1959,35 +1979,30 @@ def test_main_generate_custom_class_name_generator_additional_properties(tmp_pat
     def custom_class_name_generator(name: str) -> str:
         return f"Custom{name[0].upper() + name[1:]}"
 
-    input_ = (JSON_SCHEMA_DATA_PATH / "root_model_with_additional_properties.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "root_model_with_additional_properties.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
+        assert_func=assert_file_content,
+        expected_file="root_model_with_additional_properties_custom_class_name.py",
         custom_class_name_generator=custom_class_name_generator,
     )
 
-    assert_file_content(output_file, "root_model_with_additional_properties_custom_class_name.py")
 
-
-def test_main_generate_custom_class_name_generator_keep_underscores(tmp_path: Path) -> None:
+def test_main_generate_custom_class_name_generator_keep_underscores(output_file: Path) -> None:
     """Test custom_class_name_generator preserves underscores in class names (Issue #1315)."""
-    output_file: Path = tmp_path / "output.py"
-    input_ = (JSON_SCHEMA_DATA_PATH / "underscore_title.json").relative_to(Path.cwd())
-    assert not input_.is_absolute()
 
     def keep_underscores(name: str) -> str:
         return name
 
-    generate(
-        input_=input_,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "underscore_title.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
-        output=output_file,
+        assert_func=assert_file_content,
+        expected_file="underscore_title.py",
         custom_class_name_generator=keep_underscores,
     )
-
-    assert_file_content(output_file, "underscore_title.py")
 
 
 def test_main_http_jsonschema(mocker: MockerFixture, output_file: Path) -> None:
@@ -3942,6 +3957,85 @@ def test_main_dataclass_field(output_file: Path) -> None:
     )
 
 
+def test_main_dataclass_deprecated_model(output_file: Path) -> None:
+    """Test dataclass generation with deprecated schema metadata."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "deprecated_dataclass.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="deprecated_dataclass.py",
+        extra_args=["--output-model-type", "dataclasses.dataclass"],
+    )
+
+
+def test_main_dataclass_deprecated_model_preserves_existing_decorator(output_file: Path) -> None:
+    """Test deprecated dataclass generation keeps the import with an existing decorator."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "deprecated_dataclass.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="deprecated_dataclass.py",
+        extra_args=[
+            "--output-model-type",
+            "dataclasses.dataclass",
+            "--class-decorators",
+            "@deprecated('LegacyUser is deprecated.')",
+        ],
+    )
+
+
+def test_main_dataclass_deprecated_model_with_other_decorator(output_file: Path) -> None:
+    """Test deprecated dataclass generation adds deprecation alongside other decorators."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "deprecated_dataclass.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="deprecated_dataclass_with_other_decorator.py",
+        extra_args=[
+            "--output-model-type",
+            "dataclasses.dataclass",
+            "--class-decorators",
+            "@some_decorator",
+            "--additional-imports",
+            "some_module.some_decorator",
+        ],
+    )
+
+
+def test_main_pydantic_v2_dataclass_deprecated_model(output_file: Path) -> None:
+    """Test pydantic v2 dataclass generation with deprecated schema metadata."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "deprecated_dataclass.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="deprecated_pydantic_v2_dataclass.py",
+        extra_args=["--output-model-type", "pydantic_v2.dataclass"],
+    )
+
+
+def test_main_pydantic_v2_dataclass_deprecated_model_with_other_decorator(output_file: Path) -> None:
+    """Test pydantic v2 dataclass generation adds deprecation alongside other decorators."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "deprecated_dataclass.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="deprecated_pydantic_v2_dataclass_with_other_decorator.py",
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.dataclass",
+            "--class-decorators",
+            "@some_decorator",
+            "--additional-imports",
+            "some_module.some_decorator",
+        ],
+    )
+
+
 @pytest.mark.skipif(
     not is_supported_in_black(PythonVersion.PY_312),
     reason="Black does not support Python 3.12",
@@ -4821,10 +4915,12 @@ def test_main_jsonschema_openapi_keyword_only_msgspec_with_extra_data(tmp_path: 
     """Test OpenAPI msgspec keyword-only with extra data."""
     extra_data = json.loads((JSON_SCHEMA_DATA_PATH / "extra_data_msgspec.json").read_text())
     output_file: Path = tmp_path / "output.py"
-    generate(
-        input_=JSON_SCHEMA_DATA_PATH / "discriminator_literals.json",
-        output=output_file,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "discriminator_literals.json",
+        output_path=output_file,
         input_file_type=InputFileType.JsonSchema,
+        assert_func=assert_file_content,
+        expected_file="discriminator_literals_msgspec_keyword_only_omit_defaults.py",
         output_model_type=DataModelType.MsgspecStruct,
         keyword_only=True,
         target_python_version=PythonVersionMin,
@@ -4833,7 +4929,6 @@ def test_main_jsonschema_openapi_keyword_only_msgspec_with_extra_data(tmp_path: 
         use_annotated=True,
         field_constraints=True,
     )
-    assert_file_content(output_file, "discriminator_literals_msgspec_keyword_only_omit_defaults.py")
 
 
 @MSGSPEC_LEGACY_BLACK_SKIP
@@ -4875,14 +4970,16 @@ def test_main_msgspec_discriminator_with_meta(output_file: Path) -> None:
 @MSGSPEC_LEGACY_BLACK_SKIP
 def test_main_msgspec_discriminator_without_annotated(output_file: Path) -> None:
     """Test msgspec Struct discriminator generates ClassVar even without use_annotated."""
-    generate(
-        JSON_SCHEMA_DATA_PATH / "discriminator_with_type_string.json",
-        output=output_file,
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "discriminator_with_type_string.json",
+        output_path=output_file,
+        input_file_type=InputFileType.JsonSchema,
+        assert_func=assert_file_content,
+        expected_file="discriminator_with_type_string_msgspec_no_annotated.py",
         output_model_type=DataModelType.MsgspecStruct,
         target_python_version=PythonVersion.PY_310,
         use_annotated=False,
     )
-    assert_file_content(output_file, "discriminator_with_type_string_msgspec_no_annotated.py")
 
 
 @MSGSPEC_LEGACY_BLACK_SKIP
@@ -5591,6 +5688,545 @@ def test_main_jsonschema_enum_literal_type_alias_default(output_file: Path) -> N
     )
 
 
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_type_alias_union_default_object_ref(output_file: Path) -> None:
+    """Validate $ref object-union defaults through the type alias."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_alias_union_default_object_ref.json",
+        output_path=output_file,
+        input_file_type=None,
+        assert_func=assert_file_content,
+        expected_file="type_alias_union_default_object_ref.py",
+        extra_args=[
+            "--use-type-alias",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_type_alias_model_default_object_ref(output_file: Path) -> None:
+    """Validate model-backed type alias defaults through the alias."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_alias_model_default_object_ref.json",
+        output_path=output_file,
+        input_file_type=None,
+        assert_func=assert_file_content,
+        expected_file="type_alias_model_default_object_ref.py",
+        extra_args=[
+            "--use-type-alias",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_type_alias_chain_model_default_object_ref(output_file: Path) -> None:
+    """Validate recursively chained model-backed aliases for structured defaults."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_alias_chain_model_default_object_ref.json",
+        output_path=output_file,
+        input_file_type=None,
+        assert_func=assert_file_content,
+        expected_file="type_alias_chain_model_default_object_ref.py",
+        extra_args=[
+            "--use-type-alias",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_type_alias_list_model_default_object_ref(output_file: Path) -> None:
+    """Validate list-of-model type alias defaults through the alias."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_alias_list_model_default_object_ref.json",
+        output_path=output_file,
+        input_file_type=None,
+        assert_func=assert_file_content,
+        expected_file="type_alias_list_model_default_object_ref.py",
+        extra_args=[
+            "--use-type-alias",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_type_alias_nullable_model_default_object_ref(output_file: Path) -> None:
+    """Validate nullable model-backed type alias defaults through the alias."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_alias_nullable_model_default_object_ref.json",
+        output_path=output_file,
+        input_file_type=None,
+        assert_func=assert_file_content,
+        expected_file="type_alias_nullable_model_default_object_ref.py",
+        extra_args=[
+            "--use-type-alias",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_type_alias_nullable_list_model_default_object_ref(output_file: Path) -> None:
+    """Validate nullable list-of-model type alias defaults through the alias."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_alias_nullable_list_model_default_object_ref.json",
+        output_path=output_file,
+        input_file_type=None,
+        assert_func=assert_file_content,
+        expected_file="type_alias_nullable_list_model_default_object_ref.py",
+        extra_args=[
+            "--use-type-alias",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_type_alias_recursive_default_list(output_file: Path) -> None:
+    """Avoid recursive alias traversal loops when checking structured defaults."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_alias_recursive_default_list.json",
+        output_path=output_file,
+        input_file_type=None,
+        assert_func=assert_file_content,
+        expected_file="type_alias_recursive_default_list.py",
+        extra_args=[
+            "--use-type-alias",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_type_alias_inline_union_default_object(output_file: Path) -> None:
+    """Validate inline object-union defaults through the union type."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_alias_inline_union_default_object.json",
+        output_path=output_file,
+        input_file_type=None,
+        assert_func=assert_file_content,
+        expected_file="type_alias_inline_union_default_object.py",
+        extra_args=[
+            "--use-type-alias",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_type_alias_union_default_object_ref_any_of_relevant_flags(
+    output_file: Path,
+) -> None:
+    """Validate anyOf alias union defaults with the relevant type-alias flags."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_alias_union_default_object_ref_any_of.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="type_alias_union_default_object_ref_any_of.py",
+        extra_args=[
+            "--use-type-alias",
+            "--use-annotated",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--target-pydantic-version",
+            "2.11",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_type_alias_chain_union_default_object_ref_relevant_flags(
+    output_file: Path,
+) -> None:
+    """Validate chained alias union defaults with the relevant type-alias flags."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_alias_chain_union_default_object_ref.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="type_alias_chain_union_default_object_ref.py",
+        extra_args=[
+            "--use-type-alias",
+            "--use-annotated",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--target-pydantic-version",
+            "2.11",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_type_alias_union_default_object_ref_one_of_relevant_flags(
+    output_file: Path,
+) -> None:
+    """Validate oneOf alias union defaults with the relevant type-alias flags."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_alias_union_default_object_ref_one_of.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="type_alias_union_default_object_ref_one_of.py",
+        extra_args=[
+            "--use-type-alias",
+            "--use-annotated",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--target-pydantic-version",
+            "2.11",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_type_alias_inline_union_default_object_one_of_relevant_flags(
+    output_file: Path,
+) -> None:
+    """Validate oneOf inline union defaults with the relevant type-alias flags."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_alias_inline_union_default_object_one_of.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="type_alias_inline_union_default_object_one_of.py",
+        extra_args=[
+            "--use-type-alias",
+            "--use-annotated",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--target-pydantic-version",
+            "2.11",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_type_alias_inline_union_default_object_import_collision_relevant_flags(
+    output_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep TypeAdapter targets aligned after imported-name collision renames local models."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_alias_inline_union_default_object_import_collision.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="type_alias_inline_union_default_object_import_collision.py",
+        extra_args=[
+            "--use-type-alias",
+            "--use-annotated",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--target-pydantic-version",
+            "2.11",
+            "--type-overrides",
+            '{"Other.a": "my_app.B"}',
+        ],
+        skip_code_validation=True,
+    )
+    _install_test_my_app(output_file.parent, monkeypatch)
+    validate_generated_code(output_file.read_text(encoding="utf-8"), str(output_file), do_exec=True)
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_type_alias_inline_union_default_object_type_override_relevant_flags(
+    output_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Validate TypeAdapter targets after late type overrides change field types."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_alias_inline_union_default_object_type_override.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="type_alias_inline_union_default_object_type_override.py",
+        extra_args=[
+            "--use-type-alias",
+            "--use-annotated",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--target-pydantic-version",
+            "2.11",
+            "--type-overrides",
+            '{"A": "my_app.AliasA"}',
+        ],
+        skip_code_validation=True,
+    )
+    _install_test_my_app(output_file.parent, monkeypatch)
+    validate_generated_code(output_file.read_text(encoding="utf-8"), str(output_file), do_exec=True)
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_type_alias_inline_union_default_object_silent_wrong_branch_relevant_flags(
+    output_file: Path,
+) -> None:
+    """Validate inline unions that would silently pick the wrong branch."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_alias_inline_union_default_object_silent_wrong_branch.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="type_alias_inline_union_default_object_silent_wrong_branch.py",
+        extra_args=[
+            "--use-type-alias",
+            "--use-annotated",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--target-pydantic-version",
+            "2.11",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_type_alias_inline_list_union_default_object_relevant_flags(
+    output_file: Path,
+) -> None:
+    """Validate list-of-union defaults with the relevant type-alias flags."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_alias_inline_list_union_default_object.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="type_alias_inline_list_union_default_object.py",
+        extra_args=[
+            "--use-type-alias",
+            "--use-annotated",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--target-pydantic-version",
+            "2.11",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_type_alias_list_union_default_object_ref_relevant_flags(
+    output_file: Path,
+) -> None:
+    """Validate aliased list-of-union defaults with the relevant type-alias flags."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_alias_list_union_default_object_ref.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="type_alias_list_union_default_object_ref.py",
+        extra_args=[
+            "--use-type-alias",
+            "--use-annotated",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--target-pydantic-version",
+            "2.11",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_type_alias_inline_dict_union_default_object_relevant_flags(
+    output_file: Path,
+) -> None:
+    """Validate dict-of-union defaults with the relevant type-alias flags."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_alias_inline_dict_union_default_object.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="type_alias_inline_dict_union_default_object.py",
+        extra_args=[
+            "--use-type-alias",
+            "--use-annotated",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--target-pydantic-version",
+            "2.11",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_type_alias_dict_union_default_object_ref_relevant_flags(
+    output_file: Path,
+) -> None:
+    """Validate aliased dict-of-union defaults with the relevant type-alias flags."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_alias_dict_union_default_object_ref.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="type_alias_dict_union_default_object_ref.py",
+        extra_args=[
+            "--use-type-alias",
+            "--use-annotated",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--target-pydantic-version",
+            "2.11",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_type_alias_union_default_object_ref_dict_alias_branch_relevant_flags(
+    output_file: Path,
+) -> None:
+    """Keep raw defaults when a plain dict union branch is hidden behind a type alias."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_alias_union_default_object_ref_dict_alias_branch.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="type_alias_union_default_object_ref_dict_alias_branch.py",
+        extra_args=[
+            "--use-type-alias",
+            "--use-annotated",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--target-pydantic-version",
+            "2.11",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    int(black.__version__.split(".")[0]) < 23,
+    reason="Installed black doesn't support the new 'type' statement",
+)
+def test_main_jsonschema_type_alias_union_default_object_ref_mixed_scalar_relevant_flags(
+    output_file: Path,
+) -> None:
+    """Validate aliased mixed scalar/model union defaults."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "type_alias_union_default_object_ref_mixed_scalar.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="type_alias_union_default_object_ref_mixed_scalar.py",
+        extra_args=[
+            "--use-type-alias",
+            "--use-annotated",
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--target-pydantic-version",
+            "2.11",
+        ],
+    )
+
+
 @pytest.mark.cli_doc(
     options=["--type-mappings"],
     option_description="""Override default type mappings for schema formats.
@@ -5708,6 +6344,25 @@ def test_main_jsonschema_reuse_scope_tree(output_dir: Path) -> None:
         expected_directory=EXPECTED_JSON_SCHEMA_PATH / "reuse_scope_tree",
         input_file_type="jsonschema",
         extra_args=["--reuse-model", "--reuse-scope", "tree"],
+    )
+
+
+def test_main_jsonschema_reuse_scope_tree_exact_imports(output_dir: Path) -> None:
+    """Test --reuse-scope=tree with --use-exact-imports keeps local subclass references."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "reuse_scope_tree",
+        output_path=output_dir,
+        expected_directory=EXPECTED_JSON_SCHEMA_PATH / "reuse_scope_tree_exact_imports",
+        input_file_type="jsonschema",
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--reuse-model",
+            "--reuse-scope",
+            "tree",
+            "--use-exact-imports",
+            "--disable-timestamp",
+        ],
     )
 
 
