@@ -158,6 +158,61 @@ def test_main_openapi_discriminator_enum_duplicate(output_file: Path) -> None:
     black.__version__.split(".")[0] == "19",
     reason="Installed black doesn't support the old style",
 )
+def test_main_openapi_discriminator_integer_mapping(output_file: Path) -> None:
+    """Integer discriminator mapping preserves integer literal values."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "discriminator_integer_mapping.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file=EXPECTED_OPENAPI_PATH / "discriminator" / "integer_mapping.py",
+        extra_args=["--target-python-version", "3.10", "--output-model-type", "pydantic_v2.BaseModel"],
+    )
+
+
+@pytest.mark.skipif(
+    black.__version__.split(".")[0] == "19",
+    reason="Installed black doesn't support the old style",
+)
+def test_main_openapi_discriminator_integer_no_mapping(output_file: Path) -> None:
+    """Integer discriminator without mapping preserves integer literal values."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "discriminator_integer_no_mapping.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file=EXPECTED_OPENAPI_PATH / "discriminator" / "integer_no_mapping.py",
+        extra_args=["--target-python-version", "3.10", "--output-model-type", "pydantic_v2.BaseModel"],
+    )
+
+
+@pytest.mark.skipif(
+    black.__version__.split(".")[0] == "19",
+    reason="Installed black doesn't support the old style",
+)
+def test_main_openapi_discriminator_integer_no_mapping_literal(output_file: Path) -> None:
+    """Integer discriminator literals remain integers when enums collapse to literals."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "discriminator_integer_no_mapping.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file=EXPECTED_OPENAPI_PATH / "discriminator" / "integer_no_mapping_literal.py",
+        extra_args=[
+            "--target-python-version",
+            "3.10",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--enum-field-as-literal",
+            "one",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    black.__version__.split(".")[0] == "19",
+    reason="Installed black doesn't support the old style",
+)
 def test_main_openapi_discriminator_enum_single_value(output_file: Path) -> None:
     """Single-value enum discriminator with allOf inheritance."""
     run_main_and_assert(
@@ -293,6 +348,21 @@ def test_main_openapi_discriminator_short_mapping_names(output_file: Path) -> No
         input_file_type="openapi",
         assert_func=assert_file_content,
         expected_file=EXPECTED_OPENAPI_PATH / "discriminator" / "short_mapping_names.py",
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
+    )
+
+
+def test_main_openapi_discriminator_partial_mapping(output_file: Path) -> None:
+    """Missing discriminator mappings fall back to the subtype name."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "discriminator_partial_mapping.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file=EXPECTED_OPENAPI_PATH / "discriminator" / "partial_mapping.py",
         extra_args=[
             "--output-model-type",
             "pydantic_v2.BaseModel",
@@ -5222,5 +5292,27 @@ def test_ref_merge_parameters(output_file: Path) -> None:
             "paths",
             "schemas",
             "parameters",
+        ],
+    )
+
+
+@BLACK_PY314_SKIP
+def test_main_reuse_model_with_type_alias(output_file: Path) -> None:
+    """Test --reuse-model with --use-type-alias doesn't crash on empty fields.
+
+    Regression test for https://github.com/koxudaxi/datamodel-code-generator/issues/3059
+    """
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "reuse_model_with_type_alias.json",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--target-python-version",
+            "3.14",
+            "--reuse-model",
+            "--use-type-alias",
         ],
     )
