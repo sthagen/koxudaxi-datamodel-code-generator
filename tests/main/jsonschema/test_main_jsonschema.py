@@ -510,19 +510,9 @@ def test_main_null_and_array(output_file: Path) -> None:
 The `--use-default` flag allows required fields with default values to be generated
 with their defaults, making them optional to provide when instantiating the model.
 
-!!! warning "Fields with defaults become nullable"
-    When using `--use-default`, fields with default values are generated as nullable
-    types (e.g., `str | None` instead of `str`), even if the schema does not allow
-    null values.
-
-    If you want fields to strictly follow the schema's type definition (non-nullable),
-    use `--strict-nullable` together with `--use-default`.
-
-!!! note "Future behavior change"
-    In a future major version, the default behavior of `--use-default` may change to
-    generate non-nullable types that match the schema definition (equivalent to using
-    `--strict-nullable`). If you rely on the current nullable behavior, consider
-    explicitly handling this in your code.""",
+    The field type still follows the schema's nullability. For example, a required
+    string field with a default is generated as `str = 'value'`, not
+    `str | None = 'value'`, unless the schema allows null.""",
     input_schema="jsonschema/use_default_with_const.json",
     cli_args=["--output-model-type", "pydantic_v2.BaseModel", "--use-default"],
     golden_output="jsonschema/use_default_with_const.py",
@@ -534,19 +524,9 @@ def test_use_default_pydantic_v2_with_json_schema_const(output_file: Path) -> No
     The `--use-default` flag allows required fields with default values to be generated
     with their defaults, making them optional to provide when instantiating the model.
 
-    !!! warning "Fields with defaults become nullable"
-        When using `--use-default`, fields with default values are generated as nullable
-        types (e.g., `str | None` instead of `str`), even if the schema does not allow
-        null values.
-
-        If you want fields to strictly follow the schema's type definition (non-nullable),
-        use `--strict-nullable` together with `--use-default`.
-
-    !!! note "Future behavior change"
-        In a future major version, the default behavior of `--use-default` may change to
-        generate non-nullable types that match the schema definition (equivalent to using
-        `--strict-nullable`). If you rely on the current nullable behavior, consider
-        explicitly handling this in your code.
+    The field type still follows the schema's nullability. For example, a required
+    string field with a default is generated as `str = 'value'`, not
+    `str | None = 'value'`, unless the schema allows null.
     """
     run_main_and_assert(
         input_path=JSON_SCHEMA_DATA_PATH / "use_default_with_const.json",
@@ -4944,6 +4924,72 @@ def test_all_of_use_default(output_file: Path) -> None:
         input_file_type=None,
         assert_func=assert_file_content,
         extra_args=["--use-default"],
+    )
+
+
+def test_allof_required_use_default(output_file: Path) -> None:
+    """Test allOf with required fields and --use-default renders defaults without nullable types."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "allof_required_use_default.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=["--use-default"],
+    )
+
+
+def test_allof_inherited_required_use_default(output_file: Path) -> None:
+    """Test allOf required override preserves inherited defaults with --use-default."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "allof_inherited_required_use_default.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=["--use-default"],
+    )
+
+
+def test_force_optional_required(output_file: Path) -> None:
+    """Test --force-optional makes required fields optional."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "force_optional_required.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=["--force-optional"],
+    )
+
+
+def test_use_default_msgspec_field_ordering(output_file: Path) -> None:
+    """Required fields with defaults must sort after required fields without for msgspec.Struct."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "allof_required_use_default.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=["--use-default", "--output-model-type", "msgspec.Struct"],
+    )
+
+
+def test_use_default_required_null_default(output_file: Path) -> None:
+    """Required nullable field with default null must not break dataclass field ordering."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "use_default_required_null_default.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=["--use-default", "--output-model-type", "dataclasses.dataclass"],
+    )
+
+
+def test_use_default_strict_nullable_required(output_file: Path) -> None:
+    """Required nullable field with default must render the default, not Field(...), under --strict-nullable."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "use_default_strict_nullable_required.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=["--use-default", "--strict-nullable", "--output-model-type", "pydantic_v2.BaseModel"],
     )
 
 
