@@ -746,6 +746,11 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
 
         return _get_type(type_, format_, data_formats)
 
+    def _is_base64_encoded_binary_mapping(self, type_: str, format_: str) -> bool:
+        if type_ != "string" or format_ != "byte" or not self.type_mappings:
+            return False
+        return self.type_mappings.get((type_, format_)) == "binary"
+
     @cached_property
     def schema_paths(self) -> list[tuple[str, list[str]]]:
         """Get schema paths for definitions and defs.
@@ -1292,8 +1297,12 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             else:
                 kwargs_to_pass = obj.model_dump()
 
+            types = self._get_type_with_mappings(type_, format__)
+            if types == Types.binary and self._is_base64_encoded_binary_mapping(type_, format__):
+                kwargs_to_pass["base64_encoded"] = True
+
             return self.data_type_manager.get_data_type(
-                self._get_type_with_mappings(type_, format__),
+                types,
                 field_constraints=self.field_constraints,
                 **kwargs_to_pass,
             )
