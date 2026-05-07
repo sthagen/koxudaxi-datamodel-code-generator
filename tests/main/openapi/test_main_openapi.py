@@ -1007,6 +1007,22 @@ def test_main_multiple_aliases_parameters_pydantic_v2(output_file: Path) -> None
     )
 
 
+def test_main_openapi_parameter_content(output_file: Path) -> None:
+    """Test OpenAPI parameters defined with content media types."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "parameter_content.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file="parameter_content.py",
+        extra_args=[
+            "--openapi-scopes",
+            "paths",
+            "parameters",
+        ],
+    )
+
+
 def test_main_with_bad_aliases(output_file: Path) -> None:
     """Test OpenAPI generation with invalid aliases file."""
     run_main_and_assert(
@@ -2576,6 +2592,29 @@ def test_main_openapi_discriminator_in_array_underscore(output_file: Path) -> No
     )
 
 
+@LEGACY_BLACK_SKIP
+@freeze_time("2023-07-27")
+def test_main_openapi_discriminator_in_array_snake_case(output_file: Path) -> None:
+    """Test collapsed list item discriminator uses snake_case field name."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "discriminator_in_array_snake_case.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file="discriminator/in_array_snake_case_pydantic_v2.py",
+        extra_args=[
+            "--target-python-version",
+            "3.12",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--use-annotated",
+            "--snake-case-field",
+            "--collapse-root-models",
+        ],
+        force_exec_validation=True,
+    )
+
+
 @pytest.mark.parametrize(
     ("output_model", "expected_output"),
     [
@@ -3644,6 +3683,32 @@ def test_main_openapi_type_alias(output_file: Path) -> None:
         assert_func=assert_file_content,
         expected_file="type_alias.py",
         extra_args=["--use-type-alias"],
+    )
+
+
+@pytest.mark.skipif(
+    version.parse(black.__version__) < version.parse("23.3.0"),
+    reason="Installed black doesn't support the target python version",
+)
+def test_main_openapi_enum_literal_type_alias_property_ref(output_file: Path) -> None:
+    """Ensure property-referenced enum schemas produce named literal aliases."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "enum_literal_type_alias_property_ref.json",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file="enum_literal_type_alias_property_ref.py",
+        extra_args=[
+            "--target-python-version",
+            "3.11",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--use-annotated",
+            "--use-union-operator",
+            "--enum-field-as-literal",
+            "all",
+            "--use-type-alias",
+        ],
     )
 
 
@@ -5263,4 +5328,21 @@ def test_main_reuse_model_with_type_alias(output_file: Path) -> None:
             "--reuse-model",
             "--use-type-alias",
         ],
+    )
+
+
+@pytest.mark.timeout(30)
+def test_main_openapi_discriminated_oneof_allof_cycle(output_file: Path) -> None:
+    """Discriminated oneOf with variants that allOf the parent (circular graph).
+
+    Covers `sort_data_models` ordering for cyclic base dependencies and discriminator
+    handling (mapping + RootModel) on a minimal OpenAPI spec. See the
+    [Pull Request](https://github.com/koxudaxi/datamodel-code-generator/pull/3078) for
+    more details.
+    """
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "openapi_discriminated_oneof_allof_cycle.json",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
     )

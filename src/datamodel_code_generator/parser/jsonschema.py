@@ -16,7 +16,7 @@ from contextlib import contextmanager, suppress
 from functools import cached_property, lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, Optional, Union
-from urllib.parse import ParseResult, unquote
+from urllib.parse import ParseResult, unquote, urlparse
 from warnings import warn
 
 from pydantic import (
@@ -230,6 +230,7 @@ class JsonSchemaObject(BaseModel):
         "examples",
         "example",
         "x_enum_varnames",
+        "x_enum_descriptions",
         "x_enum_field_as_literal",
         "definitions",
         "$defs",
@@ -355,6 +356,7 @@ class JsonSchemaObject(BaseModel):
     dynamicAnchor: Optional[str] = Field(default=None, alias="$dynamicAnchor")  # noqa: N815, UP045
     nullable: Optional[bool] = None  # noqa: UP045
     x_enum_varnames: list[str] = Field(default_factory=list, alias="x-enum-varnames")
+    x_enum_descriptions: list[str] = Field(default_factory=list, alias="x-enum-descriptions")
     x_enum_names: list[str] = Field(default_factory=list, alias="x-enumNames")
     x_enum_field_as_literal: Optional[bool] = Field(default=None, alias="x-enum-field-as-literal")  # noqa: UP045
     description: Optional[str] = None  # noqa: UP045
@@ -835,10 +837,11 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
     @classmethod
     def _extract_const_enum_from_combined(  # noqa: PLR0912
         cls, items: list[JsonSchemaObject], parent_type: str | list[str] | None
-    ) -> tuple[list[Any], list[str], str | None, bool] | None:
+    ) -> tuple[list[Any], list[str], list[str], str | None, bool] | None:
         """Extract enum values from oneOf/anyOf const pattern."""
         enum_values: list[Any] = []
         varnames: list[str] = []
+        descriptions: list[str] = []
         nullable = False
         inferred_type: str | None = None
 
@@ -858,6 +861,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
 
             if item.title:
                 varnames.append(item.title)
+            descriptions.append(item.description or "")
 
             if inferred_type is None and const_value is not None:
                 match const_value:
@@ -885,26 +889,30 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             case _:
                 final_type = inferred_type
 
-        return (enum_values, varnames, final_type, nullable)
+        return (enum_values, varnames, descriptions, final_type, nullable)
 
-    def _create_synthetic_enum_obj(
+    def _create_synthetic_enum_obj(  # noqa: PLR0913, PLR0917
         self,
         original: JsonSchemaObject,
         enum_values: list[Any],
         varnames: list[str],
+        descriptions: list[str],
         enum_type: str | None,
         nullable: bool,  # noqa: FBT001
     ) -> JsonSchemaObject:
         """Create a synthetic JsonSchemaObject for enum parsing."""
         final_enum = [*enum_values, None] if nullable else enum_values
         final_varnames = varnames if len(varnames) == len(enum_values) else []
+        enum_metadata = {"x-enum-varnames": final_varnames}
+        if any(descriptions):
+            enum_metadata["x-enum-descriptions"] = descriptions
 
         return self.SCHEMA_OBJECT_TYPE(
             type=enum_type,
             enum=final_enum,
             title=original.title,
             description=original.description,
-            **({"x-enum-varnames": final_varnames} | ({"default": original.default} if original.has_default else {})),
+            **(enum_metadata | ({"default": original.default} if original.has_default else {})),
         )
 
     def is_constraints_field(self, obj: JsonSchemaObject) -> bool:
@@ -2824,6 +2832,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
                         use_field_description_example=self.use_field_description_example,
                         use_inline_field_description=self.use_inline_field_description,
                         original_name=original_field_name,
+                        use_serialization_alias=self.use_serialization_alias,
                     )
                 )
                 continue
@@ -3110,8 +3119,10 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             const_enum_data = self._extract_const_enum_from_combined(combined_items, item.type)
             if const_enum_data is None:
                 return True
-            enum_values, varnames, enum_type, nullable = const_enum_data
-            synthetic_obj = self._create_synthetic_enum_obj(item, enum_values, varnames, enum_type, nullable)
+            enum_values, varnames, descriptions, enum_type, nullable = const_enum_data
+            synthetic_obj = self._create_synthetic_enum_obj(
+                item, enum_values, varnames, descriptions, enum_type, nullable
+            )
             if self.should_parse_enum_as_literal(synthetic_obj, property_name=name, property_obj=item):
                 return True
         if (
@@ -3195,8 +3206,10 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
         if item.anyOf:
             const_enum_data = self._extract_const_enum_from_combined(item.anyOf, item.type)
             if const_enum_data is not None:
-                enum_values, varnames, enum_type, nullable = const_enum_data
-                synthetic_obj = self._create_synthetic_enum_obj(item, enum_values, varnames, enum_type, nullable)
+                enum_values, varnames, descriptions, enum_type, nullable = const_enum_data
+                synthetic_obj = self._create_synthetic_enum_obj(
+                    item, enum_values, varnames, descriptions, enum_type, nullable
+                )
                 if self.should_parse_enum_as_literal(synthetic_obj, property_name=name, property_obj=item):
                     return self.parse_enum_as_literal(synthetic_obj)
                 return self.parse_enum(name, synthetic_obj, get_special_path("enum", path), singular_name=singular_name)
@@ -3204,8 +3217,10 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
         if item.oneOf:
             const_enum_data = self._extract_const_enum_from_combined(item.oneOf, item.type)
             if const_enum_data is not None:
-                enum_values, varnames, enum_type, nullable = const_enum_data
-                synthetic_obj = self._create_synthetic_enum_obj(item, enum_values, varnames, enum_type, nullable)
+                enum_values, varnames, descriptions, enum_type, nullable = const_enum_data
+                synthetic_obj = self._create_synthetic_enum_obj(
+                    item, enum_values, varnames, descriptions, enum_type, nullable
+                )
                 if self.should_parse_enum_as_literal(synthetic_obj, property_name=name, property_obj=item):
                     return self.parse_enum_as_literal(synthetic_obj)
                 return self.parse_enum(name, synthetic_obj, get_special_path("enum", path), singular_name=singular_name)
@@ -3451,8 +3466,10 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             combined_items = obj.anyOf or obj.oneOf
             const_enum_data = self._extract_const_enum_from_combined(combined_items, obj.type)
             if const_enum_data is not None:  # pragma: no cover
-                enum_values, varnames, enum_type, nullable = const_enum_data
-                synthetic_obj = self._create_synthetic_enum_obj(obj, enum_values, varnames, enum_type, nullable)
+                enum_values, varnames, descriptions, enum_type, nullable = const_enum_data
+                synthetic_obj = self._create_synthetic_enum_obj(
+                    obj, enum_values, varnames, descriptions, enum_type, nullable
+                )
                 if self.should_parse_enum_as_literal(synthetic_obj, property_name=name, property_obj=obj):
                     data_type = self.parse_enum_as_literal(synthetic_obj)
                 else:
@@ -3634,7 +3651,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             return str(enum_part["const"])
         return f"value_{index}"
 
-    def parse_enum(  # noqa: PLR0915
+    def parse_enum(  # noqa: PLR0912, PLR0915
         self,
         name: str,
         obj: JsonSchemaObject,
@@ -3663,6 +3680,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
         exclude_field_names: set[str] = set()
 
         enum_names = obj.x_enum_varnames or obj.x_enum_names
+        enum_descriptions = obj.x_enum_descriptions
 
         for i, enum_part in enumerate(enum_times):
             if obj.type == "string" or isinstance(enum_part, str):
@@ -3681,6 +3699,9 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
                 field_name, excludes=exclude_field_names, model_type=ModelType.ENUM
             )
             exclude_field_names.add(field_name)
+            field_extras: dict[str, Any] = {}
+            if enum_descriptions and i < len(enum_descriptions) and enum_descriptions[i]:
+                field_extras["description"] = enum_descriptions[i]
             enum_fields.append(
                 self.data_model_field_type(
                     name=field_name,
@@ -3694,6 +3715,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
                     use_field_description=self.use_field_description,
                     use_field_description_example=self.use_field_description_example,
                     use_inline_field_description=self.use_inline_field_description,
+                    extras=field_extras,
                     original_name=None,
                 )
             )
@@ -3831,7 +3853,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
     def _get_ref_body(self, resolved_ref: str) -> dict[str, YamlValue]:
         """Get the body of a reference from URL or remote file."""
         if is_url(resolved_ref):
-            if not resolved_ref.startswith("file://"):
+            if not resolved_ref.startswith("file://") and self.http_local_ref_path is None:
                 if self.allow_remote_refs is False:
                     msg = (
                         f"Fetching remote $ref is disabled: {resolved_ref}\n"
@@ -3851,10 +3873,41 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             return self._get_ref_body_from_url(resolved_ref)
         return self._get_ref_body_from_remote(resolved_ref)
 
+    def _get_ref_body_from_local_http_path(self, ref: str) -> dict[str, YamlValue]:
+        assert self.http_local_ref_path is not None
+        parsed = urlparse(ref)
+        if parsed.scheme not in {"http", "https"}:  # pragma: no cover
+            msg = f"Unsupported local HTTP $ref URL: {ref}"
+            raise Error(msg)
+
+        parts = [unquote(part) for part in parsed.path.split("/") if part]
+        if not parsed.netloc or any(part in {".", ".."} or "/" in part or "\\" in part for part in parts):
+            msg = f"Unsupported local HTTP $ref URL path: {ref}"
+            raise Error(msg)
+
+        base_path = self.http_local_ref_path.resolve()
+        relative_path = Path(parsed.netloc, *parts)
+        file_paths = [(base_path / relative_path).resolve()]
+        if not parts or not Path(parts[-1]).suffix:
+            file_paths.append((base_path / relative_path.with_name(f"{relative_path.name}.json")).resolve())
+
+        if any(not file_path.is_relative_to(base_path) for file_path in file_paths):
+            msg = f"Unsupported local HTTP $ref URL path: {ref}"
+            raise Error(msg)
+
+        for file_path in file_paths:
+            if file_path.is_file():
+                return self.remote_object_cache.get_or_put(
+                    str(file_path),
+                    default_factory=lambda _, file_path=file_path: load_data_from_path(file_path, self.encoding),
+                )
+
+        msg = f"$ref local file not found for {ref}: tried {', '.join(str(path) for path in file_paths)}"
+        raise Error(msg)
+
     def _get_ref_body_from_url(self, ref: str) -> dict[str, YamlValue]:
         """Get reference body from a URL (HTTP, HTTPS, or file scheme)."""
         if ref.startswith("file://"):
-            from urllib.parse import urlparse  # noqa: PLC0415
             from urllib.request import url2pathname  # noqa: PLC0415
 
             parsed = urlparse(ref)
@@ -3867,6 +3920,8 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             return self.remote_object_cache.get_or_put(
                 ref, default_factory=lambda _: load_data_from_path(file_path, self.encoding)
             )
+        if self.http_local_ref_path is not None and urlparse(ref).scheme in {"http", "https"}:
+            return self._get_ref_body_from_local_http_path(ref)
         return self.remote_object_cache.get_or_put(
             ref, default_factory=lambda key: load_data(self._get_text_from_url(key))
         )
@@ -4213,8 +4268,10 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             combined_items = obj.oneOf or obj.anyOf
             const_enum_data = self._extract_const_enum_from_combined(combined_items, obj.type)
             if const_enum_data is not None:
-                enum_values, varnames, enum_type, nullable = const_enum_data
-                synthetic_obj = self._create_synthetic_enum_obj(obj, enum_values, varnames, enum_type, nullable)
+                enum_values, varnames, descriptions, enum_type, nullable = const_enum_data
+                synthetic_obj = self._create_synthetic_enum_obj(
+                    obj, enum_values, varnames, descriptions, enum_type, nullable
+                )
                 if not self.should_parse_enum_as_literal(synthetic_obj, property_name=name, property_obj=obj):
                     self.parse_enum(name, synthetic_obj, path)
                 else:

@@ -510,9 +510,9 @@ def test_main_null_and_array(output_file: Path) -> None:
 The `--use-default` flag allows required fields with default values to be generated
 with their defaults, making them optional to provide when instantiating the model.
 
-    The field type still follows the schema's nullability. For example, a required
-    string field with a default is generated as `str = 'value'`, not
-    `str | None = 'value'`, unless the schema allows null.""",
+When `--strict-nullable` is enabled, the field type still follows the schema's
+nullability. For example, a required string field with a default is generated
+as `str = 'value'`, not `str | None = 'value'`, unless the schema allows null.""",
     input_schema="jsonschema/use_default_with_const.json",
     cli_args=["--output-model-type", "pydantic_v2.BaseModel", "--use-default"],
     golden_output="jsonschema/use_default_with_const.py",
@@ -524,9 +524,9 @@ def test_use_default_pydantic_v2_with_json_schema_const(output_file: Path) -> No
     The `--use-default` flag allows required fields with default values to be generated
     with their defaults, making them optional to provide when instantiating the model.
 
-    The field type still follows the schema's nullability. For example, a required
-    string field with a default is generated as `str = 'value'`, not
-    `str | None = 'value'`, unless the schema allows null.
+    When `--strict-nullable` is enabled, the field type still follows the schema's
+    nullability. For example, a required string field with a default is generated
+    as `str = 'value'`, not `str | None = 'value'`, unless the schema allows null.
     """
     run_main_and_assert(
         input_path=JSON_SCHEMA_DATA_PATH / "use_default_with_const.json",
@@ -989,6 +989,94 @@ def test_main_url_with_relative_root_id_resolves_relative_refs(
     )
 
 
+def test_main_url_jsonschema_relative_ref_without_fragment(
+    mock_httpx_get: HttpxGetMockFactory, output_file: Path
+) -> None:
+    """Test URL input with a relative remote reference that has no fragment."""
+    httpx_get_mock = mock_httpx_get(
+        MockHttpxResponse(
+            "https://example.com/schemas/root.json",
+            json.dumps({
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "title": "RemoteRoot",
+                "type": "object",
+                "properties": {"person": {"$ref": "person.json"}},
+            }),
+        ),
+        MockHttpxResponse(
+            "https://example.com/schemas/person.json",
+            json.dumps({
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "title": "Person",
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+            }),
+        ),
+    )
+
+    run_main_url_and_assert(
+        url="https://example.com/schemas/root.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="remote_relative_ref.py",
+    )
+    assert_httpx_get_kwargs(
+        httpx_get_mock,
+        expected_urls=[
+            "https://example.com/schemas/root.json",
+            "https://example.com/schemas/person.json",
+        ],
+        call_count=2,
+    )
+
+
+def test_main_jsonschema_remote_relative_ref_without_fragment(
+    mock_httpx_get: HttpxGetMockFactory, output_file: Path
+) -> None:
+    """Test remote file parsing with a relative reference that has no fragment."""
+    httpx_get_mock = mock_httpx_get(
+        MockHttpxResponse(
+            "https://example.com/schemas/person.json",
+            json.dumps({
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "title": "Person",
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "friend": {"$ref": "friend.json"},
+                },
+            }),
+        ),
+        MockHttpxResponse(
+            "https://example.com/schemas/friend.json",
+            json.dumps({
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "title": "Friend",
+                "type": "object",
+                "properties": {"nickname": {"type": "string"}},
+            }),
+        ),
+    )
+
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "remote_relative_ref_root.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="remote_relative_ref_nested.py",
+        extra_args=["--allow-remote-refs"],
+    )
+    assert_httpx_get_kwargs(
+        httpx_get_mock,
+        expected_urls=[
+            "https://example.com/schemas/person.json",
+            "https://example.com/schemas/friend.json",
+        ],
+        call_count=2,
+    )
+
+
 def test_main_remote_ref_emits_deprecation_warning(mock_httpx_get: HttpxGetMockFactory, output_file: Path) -> None:
     """Test that implicit remote $ref fetching emits a FutureWarning when flag is not set."""
     httpx_get_mock = mock_httpx_get(
@@ -1211,6 +1299,26 @@ def test_main_reuse_model_collapse_inline_definitions(output_file: Path) -> None
             "--output-model-type",
             "pydantic_v2.BaseModel",
         ],
+    )
+
+
+def test_main_reuse_model_discriminator_literal(output_file: Path) -> None:
+    """Reuse inherited discriminator literals instead of injecting the reuse path segment."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "reuse_model_discriminator_literal.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=[
+            "--reuse-model",
+            "--use-union-operator",
+            "--use-standard-collections",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--target-python-version",
+            "3.10",
+        ],
+        force_exec_validation=True,
     )
 
 
@@ -3000,6 +3108,32 @@ def test_main_jsonschema_base_class_map_empty_list(output_file: Path) -> None:
     )
 
 
+def test_main_jsonschema_base_class_map_json_when_path_check_raises(
+    output_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test base_class_map JSON parsing when path probing raises OSError."""
+    original_is_file = Path.is_file
+
+    def raise_for_mapping_value(self: Path) -> bool:
+        if str(self).startswith('{"User"'):
+            raise OSError
+        return original_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", raise_for_mapping_value)
+
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "base_class_map_empty_list.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="base_class_map_empty_list.py",
+        extra_args=[
+            "--base-class-map",
+            '{"User": ["", ""]}',
+        ],
+    )
+
+
 def test_main_jsonschema_base_class_map_long_json(output_file: Path) -> None:
     """Test base_class_map with very long json string."""
     run_main_and_assert(
@@ -3690,6 +3824,18 @@ def test_main_jsonschema_anyof_const_enum_nested(output_file: Path) -> None:
         input_file_type="jsonschema",
         assert_func=assert_file_content,
         expected_file="anyof_const_enum_nested.py",
+    )
+
+
+def test_main_jsonschema_anyof_const_enum_descriptions(output_file: Path) -> None:
+    """Test anyOf const enum member descriptions are preserved."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "anyof_const_enum_descriptions.yaml",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="anyof_const_enum_descriptions.py",
+        extra_args=["--use-field-description"],
     )
 
 
@@ -6809,6 +6955,64 @@ def test_main_jsonschema_multiple_aliases_pydantic_v2(output_file: Path) -> None
     )
 
 
+def test_main_jsonschema_multiple_aliases_serialization_alias_pydantic_v2(output_file: Path) -> None:
+    """Test multiple aliases with serialization_alias for Pydantic v2."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "multiple_aliases.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        expected_file="jsonschema_multiple_aliases_serialization_alias_pydantic_v2.py",
+        assert_func=assert_file_content,
+        extra_args=[
+            "--aliases",
+            str(ALIASES_DATA_PATH / "multiple_aliases.json"),
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--use-serialization-alias",
+        ],
+    )
+
+
+def test_main_jsonschema_array_combined_types(output_file: Path) -> None:
+    """Test array schemas combined with allOf, object fields, and enum values."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "array_combined.py.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="array_combined.py",
+    )
+
+
+def test_main_jsonschema_recursive_array(output_file: Path) -> None:
+    """Test a root array schema that recursively references itself."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "recursive_array.py.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="recursive_array.py",
+    )
+
+
+def test_main_jsonschema_serialization_alias_same_name_pydantic_v2(output_file: Path) -> None:
+    """Test use_serialization_alias skips aliases that match the field name."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "serialization_alias_same_name.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="serialization_alias_same_name.py",
+        extra_args=[
+            "--aliases",
+            str(ALIASES_DATA_PATH / "same_alias.json"),
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--use-serialization-alias",
+        ],
+    )
+
+
 def test_main_jsonschema_discriminator_multiple_aliases_pydantic_v2(output_file: Path) -> None:
     """Test discriminator with multiple aliases using AliasChoices for Pydantic v2."""
     run_main_and_assert(
@@ -9373,4 +9577,21 @@ def test_main_exact_imports_collapse_root_models_title_array(output_dir: Path) -
             "--disable-timestamp",
         ],
         force_exec_validation=True,
+    )
+
+
+@pytest.mark.timeout(30)
+def test_main_jsonschema_discriminated_oneof_allof_cycle(output_file: Path) -> None:
+    """Discriminated oneOf with variants that allOf the parent (circular graph).
+
+    Covers `sort_data_models` ordering for cyclic base dependencies and discriminator
+    handling (mapping + RootModel) on a minimal JSON Schema spec. See the
+    [Pull Request](https://github.com/koxudaxi/datamodel-code-generator/pull/3078) for
+    more details.
+    """
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "jsonschema_discriminated_oneof_allof_cycle.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
     )
