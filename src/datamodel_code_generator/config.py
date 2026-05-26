@@ -15,6 +15,7 @@ from datamodel_code_generator.enums import (
     AllExportsScope,
     AllOfClassHierarchy,
     AllOfMergeMode,
+    AsyncAPIVersion,
     ClassNameAffixScope,
     CollapseRootModelsNameStrategy,
     DataclassArguments,
@@ -27,10 +28,12 @@ from datamodel_code_generator.enums import (
     NamingStrategy,
     OpenAPIScope,
     OpenAPIVersion,
+    ProtobufVersion,
     ReadOnlyWriteOnlyModelType,
     ReuseScope,
     TargetPydanticVersion,
     VersionMode,
+    XMLSchemaVersion,
 )
 from datamodel_code_generator.format import (
     DateClassType,
@@ -133,6 +136,7 @@ class GenerateConfig(BaseModel):
     openapi_scopes: list[OpenAPIScope] | None = None
     include_path_parameters: bool = False
     openapi_include_paths: list[str] | None = None
+    openapi_include_info_version: bool = False
     graphql_scopes: list[GraphQLScope] | None = None
     graphql_no_typename: bool = False
     wrap_string_literal: bool | None = None
@@ -171,6 +175,7 @@ class GenerateConfig(BaseModel):
     custom_formatters_kwargs: dict[str, Any] | None = None
     use_pendulum: bool = False
     use_standard_primitive_types: bool = False
+    use_object_type: bool = False
     http_query_parameters: Sequence[tuple[str, str]] | None = None
     treat_dot_as_module: bool | None = None
     use_exact_imports: bool = False
@@ -308,6 +313,7 @@ class ParserConfig(BaseModel):
     custom_formatters_kwargs: dict[str, Any] | None = None
     use_pendulum: bool = False
     use_standard_primitive_types: bool = False
+    use_object_type: bool = False
     http_query_parameters: Sequence[tuple[str, str]] | None = None
     treat_dot_as_module: bool | None = None
     use_exact_imports: bool = False
@@ -351,6 +357,10 @@ class JSONSchemaParserConfig(ParserConfig):
     schema_version_mode: VersionMode | None = None
 
 
+class AvroParserConfig(JSONSchemaParserConfig):
+    """Configuration model for AvroParser.__init__()."""
+
+
 class OpenAPIParserConfig(JSONSchemaParserConfig):
     """Configuration model for OpenAPIParser.__init__()."""
 
@@ -358,7 +368,32 @@ class OpenAPIParserConfig(JSONSchemaParserConfig):
     include_path_parameters: bool = False
     use_status_code_in_response_name: bool = False
     openapi_include_paths: list[str] | None = None
+    openapi_include_info_version: bool = False
     openapi_version: OpenAPIVersion | None = None
+
+
+class AsyncAPIParserConfig(JSONSchemaParserConfig):
+    """Configuration model for AsyncAPIParser.__init__()."""
+
+    openapi_scopes: list[OpenAPIScope] | None = None
+    include_path_parameters: bool = False
+    use_status_code_in_response_name: bool = False
+    openapi_include_paths: list[str] | None = None
+    openapi_include_info_version: bool = False
+    openapi_version: OpenAPIVersion | None = None
+    asyncapi_version: AsyncAPIVersion | None = None
+
+
+class XMLSchemaParserConfig(JSONSchemaParserConfig):
+    """Configuration model for XMLSchemaParser.__init__()."""
+
+    xmlschema_version: XMLSchemaVersion | None = None
+
+
+class ProtobufParserConfig(JSONSchemaParserConfig):
+    """Configuration model for ProtobufParser.__init__()."""
+
+    protobuf_version: ProtobufVersion | None = None
 
 
 class ParseConfig(BaseModel):

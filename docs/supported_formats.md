@@ -1,10 +1,10 @@
 # Schema Version Support
 
-This document describes the JSON Schema and OpenAPI versions supported by datamodel-code-generator.
+This document describes the JSON Schema, OpenAPI, AsyncAPI, Apache Avro, XML Schema, and Protocol Buffers versions supported by datamodel-code-generator.
 
 ## Overview
 
-datamodel-code-generator supports multiple versions of JSON Schema and OpenAPI specifications. By default, the tool operates in **Lenient mode**, accepting all features regardless of version declarations. This ensures maximum compatibility with real-world schemas that often mix features from different versions.
+datamodel-code-generator supports multiple schema formats including JSON Schema, OpenAPI, AsyncAPI, Apache Avro, XML Schema, and Protocol Buffers. By default, the tool operates in **Lenient mode**, accepting all features regardless of version declarations for formats that carry version information. This ensures maximum compatibility with real-world schemas that often mix features from different versions.
 
 ## JSON Schema Version Support
 
@@ -93,6 +93,106 @@ datamodel-code-generator detects the OpenAPI version from the `openapi` field:
 - `openapi: "3.1.x"` -> OpenAPI 3.1
 - No `openapi` field -> Fallback to OpenAPI 3.1
 
+## AsyncAPI Version Support
+
+AsyncAPI documents are supported with `--input-file-type asyncapi`. The parser generates models from schema-bearing message payloads, headers, and reusable schemas.
+
+### Supported Versions
+
+| Version | Schema behavior |
+|---------|-----------------|
+| 2.x | Message `schemaFormat` is applied to `payload`; default schemas use OpenAPI 3.0-compatible features |
+| 3.x | `payload`, `headers`, and `components.schemas` may use Schema Object, Reference Object, or Multi Format Schema Object; default schemas use OpenAPI 3.1-compatible features |
+
+### Supported Schema Locations
+
+| Location | Status | Notes |
+|----------|--------|-------|
+| `components.schemas` | ✅ Supported | Reusable schemas are generated even when not referenced |
+| `components.messages[*].payload` / `headers` | ✅ Supported | Includes local and external references |
+| Channel `publish` / `subscribe` messages | ✅ Supported | AsyncAPI 2.x channel operation messages |
+| Channel `messages` | ✅ Supported | AsyncAPI 3.x channel messages |
+| Operation `messages` / `reply.messages` | ✅ Supported | Includes reusable `components.operations` |
+| Message trait `headers` | ✅ Supported | Used when the target message does not define `headers` |
+| Protocol bindings | ⚠️ Tolerated | Binding configuration is transport metadata and is not emitted as models |
+
+### Embedded Schema Formats
+
+| `schemaFormat` family | Status | Notes |
+|-----------------------|--------|-------|
+| AsyncAPI Schema Object | ✅ Supported | Default when omitted |
+| JSON Schema | ✅ Supported | `application/schema+json` and `application/schema+yaml` |
+| OpenAPI Schema Object | ✅ Supported | `application/vnd.oai.openapi...` |
+| Apache Avro | ✅ Supported | `application/vnd.apache.avro...` |
+| Protocol Buffers, RAML, XML Schema, custom formats | ❌ Explicit error | Use dedicated top-level input types where available |
+
+### Version Detection
+
+datamodel-code-generator detects the AsyncAPI version from the `asyncapi` field:
+
+- `asyncapi: "2.x.y"` -> AsyncAPI 2.x
+- `asyncapi: "3.x.y"` -> AsyncAPI 3.x
+- Unknown versions fall back to the 3.x schema behavior unless `--schema-version` is set explicitly
+
+## Protocol Buffers Version Support
+
+### Supported Versions
+
+| Version | Spec URL | Notes |
+|---------|----------|-------|
+| proto2 | [protobuf.dev/reference/protobuf/proto2-spec](https://protobuf.dev/reference/protobuf/proto2-spec/) | `required`, `optional`, `repeated`, defaults, extensions |
+| proto3 | [protobuf.dev/reference/protobuf/proto3-spec](https://protobuf.dev/reference/protobuf/proto3-spec/) | implicit field defaults, `optional`, maps, services |
+| edition 2023 | [protobuf.dev/editions](https://protobuf.dev/programming-guides/editions/) | Supported by the bundled `protoc` runtime |
+
+### Version Detection
+
+datamodel-code-generator detects Protocol Buffers syntax from each compiled `.proto` descriptor:
+
+- `syntax = "proto3";` -> proto3
+- `syntax = "proto2";` or no syntax declaration -> proto2
+- `edition = "2023";` -> edition 2023
+- `--schema-version proto2`, `--schema-version proto3`, or `--schema-version 2023` can override
+  auto-detection
+
+## Apache Avro Schema Support
+
+JSON-encoded Apache Avro schemas are supported with `--input-file-type avro`. The parser accepts `.avsc` files and Avro schema JSON.
+
+### Supported Schema Forms
+
+| Avro construct | Status | Notes |
+|----------------|--------|-------|
+| Primitive types | ✅ Supported | `null`, `boolean`, `int`, `long`, `float`, `double`, `bytes`, `string` |
+| `record` | ✅ Supported | Generates Python model classes |
+| `enum` | ✅ Supported | Generates enum classes |
+| `array` | ✅ Supported | Generates list fields or root list models |
+| `map` | ✅ Supported | Generates dict fields or root dict models |
+| `fixed` | ✅ Supported | Generates fixed-length binary string models |
+| `union` | ✅ Supported | Generates union types; nullable unions become optional fields |
+| Named type resolution | ✅ Supported | Handles `name`, `namespace`, fullnames, nested named types, and references |
+| Record field metadata | ✅ Supported | Preserves `doc`, `default`, `aliases`, and `order` where applicable |
+| Logical types | ✅ Supported | Maps current Avro logical types to Python-friendly formats where possible |
+
+### Logical Types
+
+| Avro logical type | Python-oriented format |
+|-------------------|------------------------|
+| `decimal`, `big-decimal` | Decimal |
+| `uuid` | UUID |
+| `date` | Date |
+| `time-millis`, `time-micros` | Time |
+| `timestamp-millis`, `timestamp-micros`, `timestamp-nanos` | Date-time |
+| `local-timestamp-millis`, `local-timestamp-micros`, `local-timestamp-nanos` | Local date-time |
+| `duration` | Timedelta/duration |
+
+### Version Detection
+
+Apache Avro schemas do not include an in-schema version marker equivalent to JSON Schema's `$schema`, OpenAPI's `openapi`, or XML Schema versioning attributes. For that reason, `--schema-version` does not select an Avro specification version. The Avro parser follows the currently implemented Apache Avro schema rules and logical types.
+
+### Avro Limitations
+
+datamodel-code-generator generates Python model definitions from Avro schemas. It does not implement Avro runtime validation, binary encoding, decoding, or serialization.
+
 <!-- BEGIN AUTO-GENERATED SUPPORTED FEATURES -->
 ### Supported Features (from code)
 
@@ -112,14 +212,15 @@ The following features are tracked in the codebase with their implementation sta
 | `readOnly/writeOnly` | Draft 7 | ✅ Supported | Field visibility hints for read-only and write-only properties |
 | `const` | Draft 6 | ✅ Supported | Single constant value constraint |
 | `propertyNames` | Draft 6 | ✅ Supported | Dict key type constraints via pattern, enum, or $ref |
-| `contains` | Draft 6 | ❌ Not Supported | Array contains at least one matching item |
+| `contains` | Draft 6 | ⚠️ Partial | Count constraints are modeled when contains matches every item; general schema-valued contains is not supported |
 | `deprecated` | 2019-09 | ⚠️ Partial | Marks schema elements as deprecated |
 | `if/then/else` | Draft 7 | ❌ Not Supported | Conditional schema validation |
-| `contentMediaType/contentEncoding` | Draft 7 | ❌ Not Supported | Content type and encoding hints for strings |
+| `contentMediaType/contentEncoding` | Draft 7 | ⚠️ Partial | Content type and encoding hints for strings |
+| `contentSchema` | 2019-09 | ⚠️ Partial | Schema for decoded string content |
 | `$anchor` | 2019-09 | ❌ Not Supported | Location-independent schema references |
 | `$vocabulary` | 2019-09 | ❌ Not Supported | Vocabulary declarations for meta-schemas |
-| `unevaluatedProperties` | 2019-09 | ❌ Not Supported | Additional properties not evaluated by subschemas |
-| `unevaluatedItems` | 2019-09 | ❌ Not Supported | Additional items not evaluated by subschemas |
+| `unevaluatedProperties` | 2019-09 | ⚠️ Partial | Additional properties not evaluated by subschemas |
+| `unevaluatedItems` | 2019-09 | ⚠️ Partial | Additional items not evaluated by subschemas |
 | `dependentRequired` | 2019-09 | ❌ Not Supported | Conditional property requirements |
 | `dependentSchemas` | 2019-09 | ❌ Not Supported | Conditional schema application based on property presence |
 | `$recursiveRef/$recursiveAnchor` | 2019-09 | ✅ Supported | Recursive reference resolution via anchors |
@@ -133,8 +234,8 @@ The following features are tracked in the codebase with their implementation sta
 | `discriminator` | OAS 3.0 | ✅ Supported | Polymorphism support via `discriminator` keyword |
 | `webhooks` | OAS 3.1 | ✅ Supported | Top-level webhooks object for incoming events |
 | `$ref with sibling keywords` | OAS 3.1 | ⚠️ Partial | $ref can coexist with description, summary (no allOf workaround) |
-| `xml` | OAS 3.0 | ❌ Not Supported | XML serialization metadata (name, namespace, prefix) |
-| `externalDocs` | OAS 3.0 | ❌ Not Supported | Reference to external documentation |
+| `xml` | OAS 3.0 | ⚠️ Partial | XML serialization metadata (name, namespace, prefix) |
+| `externalDocs` | OAS 3.0 | ⚠️ Partial | Reference to external documentation |
 | `links` | OAS 3.0 | ❌ Not Supported | Links between operations |
 | `callbacks` | OAS 3.0 | ❌ Not Supported | Callback definitions for webhooks |
 | `securitySchemes` | OAS 3.0 | ❌ Not Supported | API security mechanism definitions |
@@ -156,12 +257,23 @@ The following features are tracked in the codebase with their implementation sta
 | string | time | `time` |
 | string | duration | `timedelta` |
 | string | email | `EmailStr` |
+| string | idn-email | `EmailStr` |
+| string | idn-hostname | `str` |
 | string | uri | `AnyUrl` |
+| string | uri-reference | `str` |
+| string | uri-template | `str` |
+| string | iri | `str` |
+| string | iri-reference | `str` |
 | string | uuid | `UUID` |
 | string | byte | `bytes` (base64) |
 | string | ipv4 | `IPv4Address` |
+| string | ipv4-network | `IPv4Network` |
 | string | ipv6 | `IPv6Address` |
+| string | ipv6-network | `IPv6Network` |
 | string | hostname | `str` |
+| string | json-pointer | `str` |
+| string | relative-json-pointer | `str` |
+| string | regex | `str` |
 
 ### OpenAPI-Only Formats
 
@@ -177,11 +289,12 @@ The following features are tracked in the codebase with their implementation sta
 | Feature | Introduced | Status | Notes |
 |---------|------------|--------|-------|
 | `$anchor` | 2019-09 | ❌ Not supported | Use `$ref` with `$id` instead |
-| `unevaluatedProperties` | 2019-09 | ❌ Not supported | Use `additionalProperties` instead |
-| `unevaluatedItems` | 2019-09 | ❌ Not supported | Use `additionalItems` instead |
-| `contentMediaType` | Draft 7 | ❌ Not supported | Content type hints ignored |
-| `contentEncoding` | Draft 7 | ❌ Not supported | Encoding hints ignored |
-| `contentSchema` | 2019-09 | ❌ Not supported | Nested content schema ignored |
+| `contains` | Draft 6 | ⚠️ Partial | Count constraints are modeled when `contains` matches every item |
+| `unevaluatedProperties` | 2019-09 | ⚠️ Partial | Boolean values and schema-valued extra allowance are modeled |
+| `unevaluatedItems` | 2019-09 | ⚠️ Partial | Boolean values and schema-valued array item types are modeled |
+| `contentMediaType` | Draft 7 | ⚠️ Partial | Preserved as schema metadata |
+| `contentEncoding` | Draft 7 | ⚠️ Partial | Preserved as schema metadata |
+| `contentSchema` | 2019-09 | ⚠️ Partial | Preserved as schema metadata |
 | `$vocabulary` | 2019-09 | ❌ Not supported | Vocabulary declarations ignored |
 | `$comment` | Draft 7 | ⚠️ Ignored | Comments not preserved in output |
 | `deprecated` | 2019-09 | ⚠️ Partial | Recognized but not enforced |
@@ -199,13 +312,21 @@ The following features are tracked in the codebase with their implementation sta
 | `$ref` sibling keywords | OAS 3.0 | ❌ Not supported | 3.0 spec limitation (fixed in 3.1) |
 | `links` | OAS 3.0 | ❌ Not supported | Runtime linking not applicable |
 | `callbacks` | OAS 3.0 | ❌ Not supported | Webhook callbacks ignored |
-| `webhooks` | OAS 3.1 | ❌ Not supported | Top-level webhooks ignored |
+| `webhooks` | OAS 3.1 | ✅ Supported | Generated when included in `--openapi-scopes` |
 | `security` definitions | OAS 2.0+ | ❌ Not supported | Security schemes not generated |
 | `servers` | OAS 3.0 | ❌ Not supported | Server configuration ignored |
-| `externalDocs` | OAS 2.0+ | ❌ Not supported | External documentation links ignored |
-| `xml` | OAS 2.0+ | ❌ Not supported | XML serialization hints ignored |
+| `externalDocs` | OAS 2.0+ | ⚠️ Partial | Preserved as schema metadata |
+| `xml` | OAS 2.0+ | ⚠️ Partial | Preserved as schema metadata |
 | Request body `required` | OAS 3.0 | ⚠️ Partial | Affects field optionality |
 | Header/Cookie parameters | OAS 3.0 | ⚠️ Partial | Generated but not validated |
+
+### Apache Avro - Unsupported Features
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Runtime validation | ❌ Not supported | Generated models are Python models, not an Avro validator |
+| Avro binary serialization | ❌ Not supported | Encoding and decoding are outside model generation scope |
+| Avro container files | ❌ Not supported | Input is schema JSON / `.avsc`, not Avro data files |
 
 ### GraphQL - Unsupported Features
 
@@ -239,3 +360,6 @@ In **Strict mode** (`--schema-version-mode strict`), warnings are emitted for ve
 - [Supported Data Types](./supported-data-types.md) - Complete data type support
 - [JSON Schema Guide](./jsonschema.md) - JSON Schema usage examples
 - [OpenAPI Guide](./openapi.md) - OpenAPI usage examples
+- [AsyncAPI Guide](./asyncapi.md) - AsyncAPI usage examples
+- [Apache Avro Guide](./avro.md) - Avro schema usage examples
+- [Protocol Buffers / gRPC Guide](./protobuf.md) - Protocol Buffers schema usage examples

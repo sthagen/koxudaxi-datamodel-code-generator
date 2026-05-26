@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any
 
 from typing_extensions import NotRequired, TypedDict
 
@@ -108,6 +108,7 @@ class GenerateConfigDict(TypedDict, closed=True):
     openapi_scopes: NotRequired[list[OpenAPIScope] | None]
     include_path_parameters: NotRequired[bool]
     openapi_include_paths: NotRequired[list[str] | None]
+    openapi_include_info_version: NotRequired[bool]
     graphql_scopes: NotRequired[list[GraphQLScope] | None]
     graphql_no_typename: NotRequired[bool]
     wrap_string_literal: NotRequired[bool | None]
@@ -146,6 +147,7 @@ class GenerateConfigDict(TypedDict, closed=True):
     custom_formatters_kwargs: NotRequired[dict[str, Any] | None]
     use_pendulum: NotRequired[bool]
     use_standard_primitive_types: NotRequired[bool]
+    use_object_type: NotRequired[bool]
     http_query_parameters: NotRequired[Sequence[tuple[str, str]] | None]
     treat_dot_as_module: NotRequired[bool | None]
     use_exact_imports: NotRequired[bool]

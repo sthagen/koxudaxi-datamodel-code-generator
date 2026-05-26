@@ -16,7 +16,7 @@ Source: https://datamodel-code-generator.koxudaxi.dev/
 
 ## ✨ What it does
 
-- 📄 Converts **OpenAPI 3**, **JSON Schema**, **GraphQL**, and raw data (JSON/YAML/CSV) into Python models
+- 📄 Converts **OpenAPI 3**, **JSON Schema**, **Apache Avro**, **XML Schema**, **Protocol Buffers/gRPC**, **GraphQL**, and raw data (JSON/YAML/CSV) into Python models
 - 🐍 Generates from **existing Python types** (Pydantic, dataclass, TypedDict) via `--input-model`
 - 🎯 Generates **Pydantic v2**, **Pydantic v2 dataclass**, **dataclasses**, **TypedDict**, or **msgspec** output
 - 🔗 Handles complex schemas: `$ref`, `allOf`, `oneOf`, `anyOf`, enums, and nested types
@@ -101,6 +101,9 @@ datamodel-codegen --input pet.json --input-file-type jsonschema --output-model-t
 |------------|------------|---------|
 | 📘 [OpenAPI 3](openapi.md) | `.yaml`, `.json` | API specifications |
 | 📋 [JSON Schema](jsonschema.md) | `.json` | Data validation schemas |
+| 🪶 [Apache Avro](avro.md) | `.avsc`, `.json` | Avro schemas |
+| 🧾 XML Schema | `.xsd` | XML document schemas |
+| 🧩 [Protocol Buffers / gRPC](protobuf.md) | `.proto` | Protobuf messages and service schemas |
 | 🔷 [GraphQL](graphql.md) | `.graphql` | GraphQL type definitions |
 | 📊 [JSON/YAML Data](jsondata.md) | `.json`, `.yaml` | Infer schema from data |
 | 🐍 [Python Models](python-model.md) | `.py` | Pydantic, dataclass, TypedDict |
@@ -244,18 +247,18 @@ This documentation is auto-generated from test cases.
 | Category | Options | Description |
 |----------|---------|-------------|
 | 📁 [Base Options](base-options.md) | 10 | Input/output configuration |
-| 🔧 [Typing Customization](typing-customization.md) | 29 | Type annotation and import behavior |
+| 🔧 [Typing Customization](typing-customization.md) | 30 | Type annotation and import behavior |
 | 🏷️ [Field Customization](field-customization.md) | 26 | Field naming and docstring behavior |
 | 🏗️ [Model Customization](model-customization.md) | 39 | Model generation behavior |
 | 🎨 [Template Customization](template-customization.md) | 21 | Output formatting and custom rendering |
-| 📘 [OpenAPI-only Options](openapi-only-options.md) | 7 | OpenAPI-specific features |
+| 📘 [OpenAPI-only Options](openapi-only-options.md) | 8 | OpenAPI-specific features |
 | 📋 [GraphQL-only Options](graphql-only-options.md) | 1 |  |
 | ⚙️ [General Options](general-options.md) | 17 | Utilities and meta options |
-| 📝 [Utility Options](utility-options.md) | 6 | Help, version, debug options |
+| 📝 [Utility Options](utility-options.md) | 7 | Help, version, debug options |
 
 ## All Options
 
-**Jump to:** [A](#a) · [B](#b) · [C](#c) · [D](#d) · [E](#e) · [F](#f) · [G](#g) · [H](#h) · [I](#i) · [K](#k) · [M](#m) · [N](#n) · [O](#o) · [P](#p) · [R](#r) · [S](#s) · [T](#t) · [U](#u) · [V](#v) · [W](#w)
+**Jump to:** [A](#a) · [B](#b) · [C](#c) · [D](#d) · [E](#e) · [F](#f) · [G](#g) · [H](#h) · [I](#i) · [K](#k) · [L](#l) · [M](#m) · [N](#n) · [O](#o) · [P](#p) · [R](#r) · [S](#s) · [T](#t) · [U](#u) · [V](#v) · [W](#w)
 
 
 ### A {#a}
@@ -359,6 +362,10 @@ This documentation is auto-generated from test cases.
 - [`--keep-model-order`](model-customization.md#keep-model-order)
 - [`--keyword-only`](model-customization.md#keyword-only)
 
+### L {#l}
+
+- [`--list-deprecations`](utility-options.md#list-deprecations)
+
 ### M {#m}
 
 - [`--model-extra-keys`](model-customization.md#model-extra-keys)
@@ -379,6 +386,7 @@ This documentation is auto-generated from test cases.
 
 ### O {#o}
 
+- [`--openapi-include-info-version`](openapi-only-options.md#openapi-include-info-version)
 - [`--openapi-include-paths`](openapi-only-options.md#openapi-include-paths)
 - [`--openapi-scopes`](openapi-only-options.md#openapi-scopes)
 - [`--original-field-name-delimiter`](field-customization.md#original-field-name-delimiter)
@@ -442,6 +450,7 @@ This documentation is auto-generated from test cases.
 - [`--use-generic-container-types`](typing-customization.md#use-generic-container-types)
 - [`--use-inline-field-description`](field-customization.md#use-inline-field-description)
 - [`--use-non-positive-negative-number-constrained-types`](typing-customization.md#use-non-positive-negative-number-constrained-types)
+- [`--use-object-type`](typing-customization.md#use-object-type)
 - [`--use-one-literal-as-default`](model-customization.md#use-one-literal-as-default)
 - [`--use-operation-id-as-name`](openapi-only-options.md#use-operation-id-as-name)
 - [`--use-pendulum`](typing-customization.md#use-pendulum)
@@ -697,7 +706,7 @@ The `--input-file-type` flag explicitly sets the input format.
 
 **Important distinction:**
 
-- Use `jsonschema`, `openapi`, or `graphql` for **schema definition files**
+- Use `jsonschema`, `openapi`, `xmlschema`, `protobuf`, `avro`, or `graphql` for **schema definition files**
 - Use `json`, `yaml`, or `csv` for **raw sample data** to automatically infer a schema
 
 For example, if you have a JSON Schema written in YAML format, use `--input-file-type jsonschema`,
@@ -889,8 +898,10 @@ is written to stdout.
 Schema version to use for parsing.
 
 The `--schema-version` option specifies the schema version to use instead of auto-detection.
-Valid values depend on input type: JsonSchema (draft-04, draft-06, draft-07, 2019-09, 2020-12)
-or OpenAPI (3.0, 3.1). Default is 'auto' (detected from $schema or openapi field).
+Valid values depend on input type: JsonSchema (draft-04, draft-06, draft-07, 2019-09, 2020-12),
+OpenAPI (3.0, 3.1), XML Schema (1.0, 1.1), or Protobuf (proto2, proto3, 2023).
+Default is 'auto' (detected from $schema, openapi field, XML Schema versioning attributes,
+or Protobuf syntax/edition).
 
 !!! tip "Usage"
 
@@ -5268,7 +5279,7 @@ The `--parent-scoped-naming` flag prefixes model names with their parent scope
 (operation/path/parameter) to prevent name collisions when the same model name
 appears in different contexts within an OpenAPI specification.
 
-**Deprecated:** Use --naming-strategy parent-prefixed instead.
+**Deprecated:** --parent-scoped-naming is deprecated. Use --naming-strategy parent-prefixed instead.
 
 !!! tip "Usage"
 
@@ -11589,6 +11600,7 @@ Source: https://datamodel-code-generator.koxudaxi.dev/cli-reference/typing-custo
 | [`--use-decimal-for-multiple-of`](#use-decimal-for-multiple-of) | Generate Decimal types for fields with multipleOf constraint... |
 | [`--use-generic-container-types`](#use-generic-container-types) | Use generic container types (Sequence, Mapping) for type hin... |
 | [`--use-non-positive-negative-number-constrained-types`](#use-non-positive-negative-number-constrained-types) | Use NonPositive/NonNegative types for number constraints. |
+| [`--use-object-type`](#use-object-type) | Use object instead of Any for unspecified object and array v... |
 | [`--use-pendulum`](#use-pendulum) | Use pendulum types for date, time, and duration fields. |
 | [`--use-root-model-type-alias`](#use-root-model-type-alias) | Generate RootModel as type alias format for better mypy supp... |
 | [`--use-specialized-enum`](#use-specialized-enum) | Generate StrEnum/IntEnum for string/integer enums (Python 3.... |
@@ -15340,6 +15352,71 @@ conint/confloat with ge/le parameters.
         plain_constrained_int: conint(ge=5, le=100) | None = Field(
             None, description='No zero bound: should remain conint/Field'
         )
+    ```
+
+---
+
+## `--use-object-type` {#use-object-type}
+
+Use object instead of Any for unspecified object and array values.
+
+The `--use-object-type` flag configures the code generation to use `object`
+instead of `Any` when JSON Schema does not define object properties or array
+item schemas. This helps generate stricter type hints for unstructured values.
+
+**Related:** [`--output-model-type`](model-customization.md#output-model-type), [`--target-python-version`](model-customization.md#target-python-version)
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --output-model-type typing.TypedDict --target-python-version 3.10 --use-object-type # (1)!
+    ```
+
+    1. :material-arrow-left: `--use-object-type` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```json
+    {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Payload",
+      "type": "object",
+      "properties": {
+        "metadata": {
+          "type": "object"
+        },
+        "items": {
+          "type": "array"
+        },
+        "nested": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": ["metadata", "items", "nested"]
+    }
+    ```
+
+    **Output:**
+
+    ```python
+    # generated by datamodel-codegen:
+    #   filename:  use_object_type.json
+    #   timestamp: 2019-07-26T00:00:00+00:00
+
+    from __future__ import annotations
+
+    from typing import TypedDict
+
+
+    class Payload(TypedDict):
+        metadata: dict[str, object]
+        items: list[object]
+        nested: list[dict[str, object]]
     ```
 
 ---
@@ -20132,6 +20209,7 @@ Source: https://datamodel-code-generator.koxudaxi.dev/cli-reference/openapi-only
 | Option | Description |
 |--------|-------------|
 | [`--include-path-parameters`](#include-path-parameters) | Include OpenAPI path parameters in generated parameter model... |
+| [`--openapi-include-info-version`](#openapi-include-info-version) | Emit OpenAPI info.version as a generated constant. |
 | [`--openapi-include-paths`](#openapi-include-paths) | Filter OpenAPI paths to include in model generation. |
 | [`--openapi-scopes`](#openapi-scopes) | Specify OpenAPI scopes to generate (schemas, paths, paramete... |
 | [`--read-only-write-only-model-type`](#read-only-write-only-model-type) | Generate separate request and response models for readOnly/w... |
@@ -20232,6 +20310,284 @@ models that include both path and query parameters.
         userId: int
         postId: str
         includeComments: bool | None = None
+    ```
+
+---
+
+## `--openapi-include-info-version` {#openapi-include-info-version}
+
+Emit OpenAPI info.version as a generated constant.
+
+The `--openapi-include-info-version` flag adds `OPENAPI_INFO_VERSION` to the
+generated module so applications can check the source OpenAPI document version
+at build time or runtime.
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --openapi-include-info-version # (1)!
+    ```
+
+    1. :material-arrow-left: `--openapi-include-info-version` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```yaml
+    openapi: "3.0.0"
+    info:
+      version: 1.0.0
+      title: Swagger Petstore
+      license:
+        name: MIT
+    servers:
+      - url: http://petstore.swagger.io/v1
+    paths:
+      /pets:
+        get:
+          summary: List all pets
+          operationId: listPets
+          tags:
+            - pets
+          parameters:
+            - name: limit
+              in: query
+              description: How many items to return at one time (max 100)
+              required: false
+              schema:
+                type: integer
+                format: int32
+          responses:
+            '200':
+              description: A paged array of pets
+              headers:
+                x-next:
+                  description: A link to the next page of responses
+                  schema:
+                    type: string
+              content:
+                application/json:
+                  schema:
+                    $ref: "#/components/schemas/Pets"
+            default:
+              description: unexpected error
+              content:
+                application/json:
+                  schema:
+                    $ref: "#/components/schemas/Error"
+                    x-amazon-apigateway-integration:
+                      uri:
+                        Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PythonVersionFunction.Arn}/invocations
+                      passthroughBehavior: when_no_templates
+                      httpMethod: POST
+                      type: aws_proxy
+        post:
+          summary: Create a pet
+          operationId: createPets
+          tags:
+            - pets
+          responses:
+            '201':
+              description: Null response
+            default:
+              description: unexpected error
+              content:
+                application/json:
+                  schema:
+                    $ref: "#/components/schemas/Error"
+                    x-amazon-apigateway-integration:
+                      uri:
+                        Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PythonVersionFunction.Arn}/invocations
+                      passthroughBehavior: when_no_templates
+                      httpMethod: POST
+                      type: aws_proxy
+      /pets/{petId}:
+        get:
+          summary: Info for a specific pet
+          operationId: showPetById
+          tags:
+            - pets
+          parameters:
+            - name: petId
+              in: path
+              required: true
+              description: The id of the pet to retrieve
+              schema:
+                type: string
+          responses:
+            '200':
+              description: Expected response to a valid request
+              content:
+                application/json:
+                  schema:
+                    $ref: "#/components/schemas/Pets"
+            default:
+              description: unexpected error
+              content:
+                application/json:
+                  schema:
+                    $ref: "#/components/schemas/Error"
+        x-amazon-apigateway-integration:
+          uri:
+            Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PythonVersionFunction.Arn}/invocations
+          passthroughBehavior: when_no_templates
+          httpMethod: POST
+          type: aws_proxy
+    components:
+      schemas:
+        Pet:
+          required:
+            - id
+            - name
+          properties:
+            id:
+              type: integer
+              format: int64
+              default: 1
+            name:
+              type: string
+            tag:
+              type: string
+        Pets:
+          type: array
+          items:
+            $ref: "#/components/schemas/Pet"
+        Users:
+          type: array
+          items:
+            required:
+              - id
+              - name
+            properties:
+              id:
+                type: integer
+                format: int64
+              name:
+                type: string
+              tag:
+                type: string
+        Id:
+          type: string
+        Rules:
+          type: array
+          items:
+            type: string
+        Error:
+          description: error result
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: integer
+              format: int32
+            message:
+              type: string
+        apis:
+          type: array
+          items:
+            type: object
+            properties:
+              apiKey:
+                type: string
+                description: To be used as a dataset parameter value
+              apiVersionNumber:
+                type: string
+                description: To be used as a version parameter value
+              apiUrl:
+                type: string
+                format: uri
+                description: "The URL describing the dataset's fields"
+              apiDocumentationUrl:
+                type: string
+                format: uri
+                description: A URL to the API console for each API
+        Event:
+          type: object
+          description: Event object
+          properties:
+            name:
+              type: string
+        Result:
+            type: object
+            properties:
+              event:
+                $ref: '#/components/schemas/Event'
+    ```
+
+    **Output:**
+
+    ```python
+    # generated by datamodel-codegen:
+    #   filename:  api.yaml
+    #   timestamp: 2019-07-26T00:00:00+00:00
+
+    from __future__ import annotations
+
+    from pydantic import AnyUrl, BaseModel, Field, RootModel
+
+    OPENAPI_INFO_VERSION = '1.0.0'
+
+
+    class Pet(BaseModel):
+        id: int
+        name: str
+        tag: str | None = None
+
+
+    class Pets(RootModel[list[Pet]]):
+        root: list[Pet]
+
+
+    class User(BaseModel):
+        id: int
+        name: str
+        tag: str | None = None
+
+
+    class Users(RootModel[list[User]]):
+        root: list[User]
+
+
+    class Id(RootModel[str]):
+        root: str
+
+
+    class Rules(RootModel[list[str]]):
+        root: list[str]
+
+
+    class Error(BaseModel):
+        code: int
+        message: str
+
+
+    class Api(BaseModel):
+        apiKey: str | None = Field(
+            None, description='To be used as a dataset parameter value'
+        )
+        apiVersionNumber: str | None = Field(
+            None, description='To be used as a version parameter value'
+        )
+        apiUrl: AnyUrl | None = Field(
+            None, description="The URL describing the dataset's fields"
+        )
+        apiDocumentationUrl: AnyUrl | None = Field(
+            None, description='A URL to the API console for each API'
+        )
+
+
+    class Apis(RootModel[list[Api]]):
+        root: list[Api]
+
+
+    class Event(BaseModel):
+        name: str | None = None
+
+
+    class Result(BaseModel):
+        event: Event | None = None
     ```
 
 ---
@@ -21571,7 +21927,7 @@ Enable validation constraints (deprecated, use --field-constraints).
 
 The `--validation` flag configures the code generation behavior.
 
-**Deprecated:** Use --field-constraints instead
+**Deprecated:** The `--validation` option is deprecated and will be removed in a future release. Use --field-constraints instead.
 
 **See also:** [Field Constraints](../field-constraints.md), [OpenAPI-Specific Options](../openapi-options.md)
 
@@ -24139,6 +24495,7 @@ Source: https://datamodel-code-generator.koxudaxi.dev/cli-reference/utility-opti
 | [`--debug`](#debug) | Show debug messages during code generation |
 | [`--generate-prompt`](#generate-prompt) | Generate a prompt for consulting LLMs about CLI options |
 | [`--help`](#help) | Show help message and exit |
+| [`--list-deprecations`](#list-deprecations) | List registered deprecations and scheduled breaking changes |
 | [`--no-color`](#no-color) | Disable colorized output |
 | [`--profile`](#profile) | Use a named profile from pyproject.toml |
 | [`--version`](#version) | Show program version and exit |
@@ -24235,6 +24592,19 @@ Displays all available command-line options with their descriptions and default 
       --input INPUT         Input file path (default: stdin)
       ...
     ```
+
+---
+
+## `--list-deprecations` {#list-deprecations}
+
+List registered deprecations and scheduled breaking changes, then exit.
+
+The option reads from the central deprecation registry used by runtime warnings,
+generated documentation, and release-note snippets.
+
+    datamodel-codegen --list-deprecations
+    datamodel-codegen --list-deprecations json
+    datamodel-codegen --list-deprecations markdown
 
 ---
 
@@ -24389,6 +24759,7 @@ datamodel-codegen [OPTIONS]
 | [`--use-decimal-for-multiple-of`](typing-customization.md#use-decimal-for-multiple-of) | Generate Decimal types for fields with multipleOf constraint. |
 | [`--use-generic-container-types`](typing-customization.md#use-generic-container-types) | Use generic container types (Sequence, Mapping) for type hinting. |
 | [`--use-non-positive-negative-number-constrained-types`](typing-customization.md#use-non-positive-negative-number-constrained-types) | Use NonPositive/NonNegative types for number constraints. |
+| [`--use-object-type`](typing-customization.md#use-object-type) | Use object instead of Any for unspecified object and array values. |
 | [`--use-pendulum`](typing-customization.md#use-pendulum) | Use pendulum types for date, time, and duration fields. |
 | [`--use-root-model-type-alias`](typing-customization.md#use-root-model-type-alias) | Generate RootModel as type alias format for better mypy support. |
 | [`--use-specialized-enum`](typing-customization.md#use-specialized-enum) | Generate StrEnum/IntEnum for string/integer enums (Python 3.11+). |
@@ -24505,6 +24876,7 @@ datamodel-codegen [OPTIONS]
 | Option | Description |
 |--------|-------------|
 | [`--include-path-parameters`](openapi-only-options.md#include-path-parameters) | Include OpenAPI path parameters in generated parameter models. |
+| [`--openapi-include-info-version`](openapi-only-options.md#openapi-include-info-version) | Emit OpenAPI info.version as a generated constant. |
 | [`--openapi-include-paths`](openapi-only-options.md#openapi-include-paths) | Filter OpenAPI paths to include in model generation. |
 | [`--openapi-scopes`](openapi-only-options.md#openapi-scopes) | Specify OpenAPI scopes to generate (schemas, paths, parameters). |
 | [`--read-only-write-only-model-type`](openapi-only-options.md#read-only-write-only-model-type) | Generate separate request and response models for readOnly/writeOnly fields. |
@@ -24547,6 +24919,7 @@ datamodel-codegen [OPTIONS]
 | [`--debug`](utility-options.md#debug) | Show debug messages during code generation |
 | [`--generate-prompt`](utility-options.md#generate-prompt) | Generate a prompt for consulting LLMs about CLI options |
 | [`--help`](utility-options.md#help) | Show help message and exit |
+| [`--list-deprecations`](utility-options.md#list-deprecations) | List registered deprecations and scheduled breaking changes |
 | [`--no-color`](utility-options.md#no-color) | Disable colorized output |
 | [`--profile`](utility-options.md#profile) | Use a named profile from pyproject.toml |
 | [`--version`](utility-options.md#version) | Show program version and exit |
@@ -24628,6 +25001,7 @@ All options sorted alphabetically:
 - [`--input-model-ref-strategy`](base-options.md#input-model-ref-strategy) - Strategy for referenced types when using --input-model.
 - [`--keep-model-order`](model-customization.md#keep-model-order) - Keep generated model order deterministic while respecting de...
 - [`--keyword-only`](model-customization.md#keyword-only) - Generate dataclasses with keyword-only fields (Python 3.10+)...
+- [`--list-deprecations`](utility-options.md#list-deprecations) - List registered deprecations and scheduled breaking changes
 - [`--model-extra-keys`](model-customization.md#model-extra-keys) - Add model-level schema extensions to ConfigDict json_schema_...
 - [`--model-extra-keys-without-x-prefix`](model-customization.md#model-extra-keys-without-x-prefix) - Strip x- prefix from model-level schema extensions and add t...
 - [`--module-split-mode`](general-options.md#module-split-mode) - Split generated models into separate files, one per model cl...
@@ -24640,6 +25014,7 @@ All options sorted alphabetically:
 - [`--no-use-standard-collections`](typing-customization.md#no-use-standard-collections) - Use typing.Dict/List instead of built-in dict/list for conta...
 - [`--no-use-type-checking-imports`](template-customization.md#no-use-type-checking-imports) - Keep generated model imports available at runtime when using...
 - [`--no-use-union-operator`](typing-customization.md#no-use-union-operator) - Use Union[X, Y] / Optional[X] instead of X | Y union operato...
+- [`--openapi-include-info-version`](openapi-only-options.md#openapi-include-info-version) - Emit OpenAPI info.version as a generated constant.
 - [`--openapi-include-paths`](openapi-only-options.md#openapi-include-paths) - Filter OpenAPI paths to include in model generation.
 - [`--openapi-scopes`](openapi-only-options.md#openapi-scopes) - Specify OpenAPI scopes to generate (schemas, paths, paramete...
 - [`--original-field-name-delimiter`](field-customization.md#original-field-name-delimiter) - Specify delimiter for original field names when using snake-...
@@ -24688,6 +25063,7 @@ All options sorted alphabetically:
 - [`--use-generic-container-types`](typing-customization.md#use-generic-container-types) - Use generic container types (Sequence, Mapping) for type hin...
 - [`--use-inline-field-description`](field-customization.md#use-inline-field-description) - Add field descriptions as inline comments.
 - [`--use-non-positive-negative-number-constrained-types`](typing-customization.md#use-non-positive-negative-number-constrained-types) - Use NonPositive/NonNegative types for number constraints.
+- [`--use-object-type`](typing-customization.md#use-object-type) - Use object instead of Any for unspecified object and array v...
 - [`--use-one-literal-as-default`](model-customization.md#use-one-literal-as-default) - Use single literal value as default when enum has only one o...
 - [`--use-operation-id-as-name`](openapi-only-options.md#use-operation-id-as-name) - Use OpenAPI operationId as the generated function/class name...
 - [`--use-pendulum`](typing-customization.md#use-pendulum) - Use pendulum types for date, time, and duration fields.
@@ -24927,6 +25303,23 @@ to clipboard for web-based LLM chats.
 
 ---
 
+# List Deprecations
+
+Source: https://datamodel-code-generator.koxudaxi.dev/cli-reference/manual/list-deprecations/
+
+## `--list-deprecations` {#list-deprecations}
+
+List registered deprecations and scheduled breaking changes, then exit.
+
+The option reads from the central deprecation registry used by runtime warnings,
+generated documentation, and release-note snippets.
+
+    datamodel-codegen --list-deprecations
+    datamodel-codegen --list-deprecations json
+    datamodel-codegen --list-deprecations markdown
+
+---
+
 # Supported Input Formats
 
 Source: https://datamodel-code-generator.koxudaxi.dev/supported-data-types/
@@ -24935,6 +25328,9 @@ This code generator supports the following input formats:
 
 - OpenAPI 3 (YAML/JSON, [OpenAPI Data Type](https://github.com/OAI/OpenAPI-Specification/blob/master/versions/3.0.2.md#data-types));
 - JSON Schema ([JSON Schema Core](http://json-schema.org/draft/2019-09/json-schema-validation.html) /[JSON Schema Validation](http://json-schema.org/draft/2019-09/json-schema-validation.html));
+- Apache Avro schema (`.avsc`, [Apache Avro](avro.md));
+- XML Schema (XSD);
+- Protocol Buffers / gRPC (`.proto`, [Protocol Buffers / gRPC](protobuf.md));
 - JSON/YAML Data (it will be converted to JSON Schema);
 - Python dictionary (it will be converted to JSON Schema);
 - GraphQL schema ([GraphQL Schemas and Types](https://graphql.org/learn/schema/));
@@ -24960,14 +25356,24 @@ Below are the data types and features recognized by datamodel-code-generator for
 - password
 - email (requires [`email-validator`](https://github.com/JoshData/python-email-validator))
 - idn-email (requires [`email-validator`](https://github.com/JoshData/python-email-validator))
+- idn-hostname
 - path
 - uuid (uuid1/uuid2/uuid3/uuid4/uuid5)
 - ulid (requires [`python-ulid`](https://github.com/mdomke/python-ulid))
 - ipv4
+- ipv4-network
 - ipv6
+- ipv6-network
 - hostname
 - decimal
 - uri
+- uri-reference
+- uri-template
+- iri
+- iri-reference
+- json-pointer
+- relative-json-pointer
+- regex
 
 ### 🔗 Other schema
 - enum (as enum.Enum or typing.Literal)
@@ -24983,11 +25389,11 @@ Below are the data types and features recognized by datamodel-code-generator for
 
 Source: https://datamodel-code-generator.koxudaxi.dev/supported_formats/
 
-This document describes the JSON Schema and OpenAPI versions supported by datamodel-code-generator.
+This document describes the JSON Schema, OpenAPI, Apache Avro, XML Schema, and Protocol Buffers versions supported by datamodel-code-generator.
 
 ## Overview
 
-datamodel-code-generator supports multiple versions of JSON Schema and OpenAPI specifications. By default, the tool operates in **Lenient mode**, accepting all features regardless of version declarations. This ensures maximum compatibility with real-world schemas that often mix features from different versions.
+datamodel-code-generator supports multiple schema formats including JSON Schema, OpenAPI, Apache Avro, XML Schema, and Protocol Buffers. By default, the tool operates in **Lenient mode**, accepting all features regardless of version declarations for formats that carry version information. This ensures maximum compatibility with real-world schemas that often mix features from different versions.
 
 ## JSON Schema Version Support
 
@@ -25076,6 +25482,64 @@ datamodel-code-generator detects the OpenAPI version from the `openapi` field:
 - `openapi: "3.1.x"` -> OpenAPI 3.1
 - No `openapi` field -> Fallback to OpenAPI 3.1
 
+## Protocol Buffers Version Support
+
+### Supported Versions
+
+| Version | Spec URL | Notes |
+|---------|----------|-------|
+| proto2 | [protobuf.dev/reference/protobuf/proto2-spec](https://protobuf.dev/reference/protobuf/proto2-spec/) | `required`, `optional`, `repeated`, defaults, extensions |
+| proto3 | [protobuf.dev/reference/protobuf/proto3-spec](https://protobuf.dev/reference/protobuf/proto3-spec/) | implicit field defaults, `optional`, maps, services |
+| edition 2023 | [protobuf.dev/editions](https://protobuf.dev/programming-guides/editions/) | Supported by the bundled `protoc` runtime |
+
+### Version Detection
+
+datamodel-code-generator detects Protocol Buffers syntax from each compiled `.proto` descriptor:
+
+- `syntax = "proto3";` -> proto3
+- `syntax = "proto2";` or no syntax declaration -> proto2
+- `edition = "2023";` -> edition 2023
+- `--schema-version proto2`, `--schema-version proto3`, or `--schema-version 2023` can override auto-detection
+
+## Apache Avro Schema Support
+
+JSON-encoded Apache Avro schemas are supported with `--input-file-type avro`. The parser accepts `.avsc` files and Avro schema JSON.
+
+### Supported Schema Forms
+
+| Avro construct | Status | Notes |
+|----------------|--------|-------|
+| Primitive types | ✅ Supported | `null`, `boolean`, `int`, `long`, `float`, `double`, `bytes`, `string` |
+| `record` | ✅ Supported | Generates Python model classes |
+| `enum` | ✅ Supported | Generates enum classes |
+| `array` | ✅ Supported | Generates list fields or root list models |
+| `map` | ✅ Supported | Generates dict fields or root dict models |
+| `fixed` | ✅ Supported | Generates fixed-length binary string models |
+| `union` | ✅ Supported | Generates union types; nullable unions become optional fields |
+| Named type resolution | ✅ Supported | Handles `name`, `namespace`, fullnames, nested named types, and references |
+| Record field metadata | ✅ Supported | Preserves `doc`, `default`, `aliases`, and `order` where applicable |
+| Logical types | ✅ Supported | Maps current Avro logical types to Python-friendly formats where possible |
+
+### Logical Types
+
+| Avro logical type | Python-oriented format |
+|-------------------|------------------------|
+| `decimal`, `big-decimal` | Decimal |
+| `uuid` | UUID |
+| `date` | Date |
+| `time-millis`, `time-micros` | Time |
+| `timestamp-millis`, `timestamp-micros`, `timestamp-nanos` | Date-time |
+| `local-timestamp-millis`, `local-timestamp-micros`, `local-timestamp-nanos` | Local date-time |
+| `duration` | Timedelta/duration |
+
+### Version Detection
+
+Apache Avro schemas do not include an in-schema version marker equivalent to JSON Schema's `$schema`, OpenAPI's `openapi`, or XML Schema versioning attributes. For that reason, `--schema-version` does not select an Avro specification version. The Avro parser follows the currently implemented Apache Avro schema rules and logical types.
+
+### Avro Limitations
+
+datamodel-code-generator generates Python model definitions from Avro schemas. It does not implement Avro runtime validation, binary encoding, decoding, or serialization.
+
 <!-- BEGIN AUTO-GENERATED SUPPORTED FEATURES -->
 ### Supported Features (from code)
 
@@ -25095,14 +25559,15 @@ The following features are tracked in the codebase with their implementation sta
 | `readOnly/writeOnly` | Draft 7 | ✅ Supported | Field visibility hints for read-only and write-only properties |
 | `const` | Draft 6 | ✅ Supported | Single constant value constraint |
 | `propertyNames` | Draft 6 | ✅ Supported | Dict key type constraints via pattern, enum, or $ref |
-| `contains` | Draft 6 | ❌ Not Supported | Array contains at least one matching item |
+| `contains` | Draft 6 | ⚠️ Partial | Count constraints are modeled when contains matches every item; general schema-valued contains is not supported |
 | `deprecated` | 2019-09 | ⚠️ Partial | Marks schema elements as deprecated |
 | `if/then/else` | Draft 7 | ❌ Not Supported | Conditional schema validation |
-| `contentMediaType/contentEncoding` | Draft 7 | ❌ Not Supported | Content type and encoding hints for strings |
+| `contentMediaType/contentEncoding` | Draft 7 | ⚠️ Partial | Content type and encoding hints for strings |
+| `contentSchema` | 2019-09 | ⚠️ Partial | Schema for decoded string content |
 | `$anchor` | 2019-09 | ❌ Not Supported | Location-independent schema references |
 | `$vocabulary` | 2019-09 | ❌ Not Supported | Vocabulary declarations for meta-schemas |
-| `unevaluatedProperties` | 2019-09 | ❌ Not Supported | Additional properties not evaluated by subschemas |
-| `unevaluatedItems` | 2019-09 | ❌ Not Supported | Additional items not evaluated by subschemas |
+| `unevaluatedProperties` | 2019-09 | ⚠️ Partial | Additional properties not evaluated by subschemas |
+| `unevaluatedItems` | 2019-09 | ⚠️ Partial | Additional items not evaluated by subschemas |
 | `dependentRequired` | 2019-09 | ❌ Not Supported | Conditional property requirements |
 | `dependentSchemas` | 2019-09 | ❌ Not Supported | Conditional schema application based on property presence |
 | `$recursiveRef/$recursiveAnchor` | 2019-09 | ✅ Supported | Recursive reference resolution via anchors |
@@ -25116,8 +25581,8 @@ The following features are tracked in the codebase with their implementation sta
 | `discriminator` | OAS 3.0 | ✅ Supported | Polymorphism support via `discriminator` keyword |
 | `webhooks` | OAS 3.1 | ✅ Supported | Top-level webhooks object for incoming events |
 | `$ref with sibling keywords` | OAS 3.1 | ⚠️ Partial | $ref can coexist with description, summary (no allOf workaround) |
-| `xml` | OAS 3.0 | ❌ Not Supported | XML serialization metadata (name, namespace, prefix) |
-| `externalDocs` | OAS 3.0 | ❌ Not Supported | Reference to external documentation |
+| `xml` | OAS 3.0 | ⚠️ Partial | XML serialization metadata (name, namespace, prefix) |
+| `externalDocs` | OAS 3.0 | ⚠️ Partial | Reference to external documentation |
 | `links` | OAS 3.0 | ❌ Not Supported | Links between operations |
 | `callbacks` | OAS 3.0 | ❌ Not Supported | Callback definitions for webhooks |
 | `securitySchemes` | OAS 3.0 | ❌ Not Supported | API security mechanism definitions |
@@ -25139,12 +25604,23 @@ The following features are tracked in the codebase with their implementation sta
 | string | time | `time` |
 | string | duration | `timedelta` |
 | string | email | `EmailStr` |
+| string | idn-email | `EmailStr` |
+| string | idn-hostname | `str` |
 | string | uri | `AnyUrl` |
+| string | uri-reference | `str` |
+| string | uri-template | `str` |
+| string | iri | `str` |
+| string | iri-reference | `str` |
 | string | uuid | `UUID` |
 | string | byte | `bytes` (base64) |
 | string | ipv4 | `IPv4Address` |
+| string | ipv4-network | `IPv4Network` |
 | string | ipv6 | `IPv6Address` |
+| string | ipv6-network | `IPv6Network` |
 | string | hostname | `str` |
+| string | json-pointer | `str` |
+| string | relative-json-pointer | `str` |
+| string | regex | `str` |
 
 ### OpenAPI-Only Formats
 
@@ -25160,11 +25636,12 @@ The following features are tracked in the codebase with their implementation sta
 | Feature | Introduced | Status | Notes |
 |---------|------------|--------|-------|
 | `$anchor` | 2019-09 | ❌ Not supported | Use `$ref` with `$id` instead |
-| `unevaluatedProperties` | 2019-09 | ❌ Not supported | Use `additionalProperties` instead |
-| `unevaluatedItems` | 2019-09 | ❌ Not supported | Use `additionalItems` instead |
-| `contentMediaType` | Draft 7 | ❌ Not supported | Content type hints ignored |
-| `contentEncoding` | Draft 7 | ❌ Not supported | Encoding hints ignored |
-| `contentSchema` | 2019-09 | ❌ Not supported | Nested content schema ignored |
+| `contains` | Draft 6 | ⚠️ Partial | Count constraints are modeled when `contains` matches every item |
+| `unevaluatedProperties` | 2019-09 | ⚠️ Partial | Boolean values and schema-valued extra allowance are modeled |
+| `unevaluatedItems` | 2019-09 | ⚠️ Partial | Boolean values and schema-valued array item types are modeled |
+| `contentMediaType` | Draft 7 | ⚠️ Partial | Preserved as schema metadata |
+| `contentEncoding` | Draft 7 | ⚠️ Partial | Preserved as schema metadata |
+| `contentSchema` | 2019-09 | ⚠️ Partial | Preserved as schema metadata |
 | `$vocabulary` | 2019-09 | ❌ Not supported | Vocabulary declarations ignored |
 | `$comment` | Draft 7 | ⚠️ Ignored | Comments not preserved in output |
 | `deprecated` | 2019-09 | ⚠️ Partial | Recognized but not enforced |
@@ -25182,13 +25659,21 @@ The following features are tracked in the codebase with their implementation sta
 | `$ref` sibling keywords | OAS 3.0 | ❌ Not supported | 3.0 spec limitation (fixed in 3.1) |
 | `links` | OAS 3.0 | ❌ Not supported | Runtime linking not applicable |
 | `callbacks` | OAS 3.0 | ❌ Not supported | Webhook callbacks ignored |
-| `webhooks` | OAS 3.1 | ❌ Not supported | Top-level webhooks ignored |
+| `webhooks` | OAS 3.1 | ✅ Supported | Generated when included in `--openapi-scopes` |
 | `security` definitions | OAS 2.0+ | ❌ Not supported | Security schemes not generated |
 | `servers` | OAS 3.0 | ❌ Not supported | Server configuration ignored |
-| `externalDocs` | OAS 2.0+ | ❌ Not supported | External documentation links ignored |
-| `xml` | OAS 2.0+ | ❌ Not supported | XML serialization hints ignored |
+| `externalDocs` | OAS 2.0+ | ⚠️ Partial | Preserved as schema metadata |
+| `xml` | OAS 2.0+ | ⚠️ Partial | Preserved as schema metadata |
 | Request body `required` | OAS 3.0 | ⚠️ Partial | Affects field optionality |
 | Header/Cookie parameters | OAS 3.0 | ⚠️ Partial | Generated but not validated |
+
+### Apache Avro - Unsupported Features
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Runtime validation | ❌ Not supported | Generated models are Python models, not an Avro validator |
+| Avro binary serialization | ❌ Not supported | Encoding and decoding are outside model generation scope |
+| Avro container files | ❌ Not supported | Input is schema JSON / `.avsc`, not Avro data files |
 
 ### GraphQL - Unsupported Features
 
@@ -25222,6 +25707,8 @@ In **Strict mode** (`--schema-version-mode strict`), warnings are emitted for ve
 - [Supported Data Types](./supported-data-types.md) - Complete data type support
 - [JSON Schema Guide](./jsonschema.md) - JSON Schema usage examples
 - [OpenAPI Guide](./openapi.md) - OpenAPI usage examples
+- [Apache Avro Guide](./avro.md) - Avro schema usage examples
+- [Protocol Buffers / gRPC Guide](./protobuf.md) - Protocol Buffers schema usage examples
 
 ---
 
@@ -25739,6 +26226,295 @@ This allows you to set a default base class with `--base-class`, override specif
 - 🏷️ [CLI Reference: Field Customization](cli-reference/field-customization.md) - Field naming and constraint options
 - 📊 [Supported Data Types](supported-data-types.md) - JSON Schema data type support
 - 🏗️ [CLI Reference: Model Customization](cli-reference/model-customization.md) - Base class and model customization options
+
+---
+
+# Generate from Apache Avro Schema
+
+Source: https://datamodel-code-generator.koxudaxi.dev/avro/
+
+Generate Python models from JSON-encoded Apache Avro schemas (`.avsc`).
+
+## 🚀 Quick Start
+
+```bash
+datamodel-codegen \
+    --input user.avsc \
+    --input-file-type avro \
+    --output-model-type pydantic_v2.BaseModel \
+    --output model.py
+```
+
+## 📝 Example
+
+**user.avsc**
+```json
+{
+  "type": "record",
+  "name": "User",
+  "namespace": "example.avro",
+  "doc": "A user record.",
+  "fields": [
+    {
+      "name": "id",
+      "type": {
+        "type": "string",
+        "logicalType": "uuid"
+      }
+    },
+    {
+      "name": "name",
+      "type": "string",
+      "doc": "Display name"
+    },
+    {
+      "name": "email",
+      "type": ["null", "string"],
+      "default": null
+    },
+    {
+      "name": "roles",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "enum",
+          "name": "Role",
+          "symbols": ["admin", "member"]
+        }
+      },
+      "default": []
+    }
+  ]
+}
+```
+
+**✨ Generated model.py**
+```python
+from __future__ import annotations
+
+from enum import Enum
+from typing import Optional
+from uuid import UUID
+
+from pydantic import BaseModel, Field
+
+
+class Role(Enum):
+    admin = 'admin'
+    member = 'member'
+
+
+class User(BaseModel):
+    id: UUID
+    name: str = Field(..., description='Display name')
+    email: Optional[str] = None
+    roles: list[Role] = []
+```
+
+## Supported Avro Schema Features
+
+The Avro parser supports the schema constructs needed to generate Python models:
+
+| Avro construct | Model generation behavior |
+|----------------|---------------------------|
+| `record` | Generates a Python model class with fields |
+| `enum` | Generates an enum class |
+| `array` | Generates a list field or root list model |
+| `map` | Generates a dict field or root dict model |
+| `fixed` | Generates a fixed-length binary string model |
+| `union` | Generates union types; nullable unions such as `["null", "string"]` become optional fields |
+| Named types | Resolves `name`, `namespace`, fullnames, nested named types, and references |
+| Field metadata | Preserves `doc`, `default`, `aliases`, and `order` where applicable |
+| Logical types | Maps Avro logical types to Python-friendly formats where possible |
+
+Supported primitive types are `null`, `boolean`, `int`, `long`, `float`, `double`, `bytes`, and `string`.
+
+## Logical Types
+
+Avro logical types are mapped through the generator's normal type handling:
+
+| Avro logical type | Typical generated Python type |
+|-------------------|-------------------------------|
+| `decimal`, `big-decimal` | `Decimal` |
+| `uuid` | `UUID` |
+| `date` | `date` |
+| `time-millis`, `time-micros` | `time` |
+| `timestamp-millis`, `timestamp-micros`, `timestamp-nanos` | `datetime` |
+| `local-timestamp-millis`, `local-timestamp-micros`, `local-timestamp-nanos` | local date-time format |
+| `duration` | `timedelta` |
+
+Avro-specific metadata is preserved in generated JSON Schema extensions such as `x-avro-fullname`, `x-avro-namespace`, `x-avro-aliases`, and `x-avro-logicalType` before model generation.
+
+## Schema Version
+
+Apache Avro schemas do not include an in-schema version marker equivalent to JSON Schema's `$schema`, OpenAPI's `openapi`, or XML Schema versioning attributes. For that reason, `--schema-version` does not select an Avro specification version. The Avro parser follows the currently implemented Apache Avro schema rules and logical types.
+
+## Limitations
+
+datamodel-code-generator uses Avro schemas to generate Python model definitions. It does not implement Avro runtime validation, binary encoding, decoding, or serialization.
+
+## 📖 See Also
+
+- 🖥️ [CLI Reference](cli-reference/index.md) - Complete CLI options reference
+- 📊 [Supported Data Types](supported-data-types.md) - Data type support details
+- 📋 [Generate from JSON Schema](jsonschema.md) - JSON Schema input documentation
+
+---
+
+# Generate from Protocol Buffers / gRPC
+
+Source: https://datamodel-code-generator.koxudaxi.dev/protobuf/
+
+Generate Python models from Protocol Buffers schema files (`.proto`), including message types referenced by gRPC service definitions.
+
+## 🚀 Quick Start
+
+Install the Protocol Buffers parser extra:
+
+```bash
+pip install 'datamodel-code-generator[protobuf]'
+```
+
+Generate models from a `.proto` file:
+
+```bash
+datamodel-codegen \
+    --input order.proto \
+    --input-file-type protobuf \
+    --output-model-type pydantic_v2.BaseModel \
+    --output model.py
+```
+
+## 📝 Example
+
+**order.proto**
+```proto
+syntax = "proto3";
+
+package example.shop.v1;
+
+import "google/protobuf/timestamp.proto";
+
+message Order {
+  // Unique order identifier.
+  string id = 1;
+  repeated string tags = 2;
+  google.protobuf.Timestamp created_at = 3;
+
+  oneof contact {
+    string email = 4;
+    string phone = 5;
+  }
+}
+
+message GetOrderRequest {
+  string id = 1;
+}
+
+message GetOrderResponse {
+  Order order = 1;
+}
+
+service OrderService {
+  rpc GetOrder(GetOrderRequest) returns (GetOrderResponse);
+}
+```
+
+**✨ Generated model.py**
+```python
+from __future__ import annotations
+
+from pydantic import AwareDatetime, BaseModel, Field
+
+
+class ExampleShopV1Order(BaseModel):
+    id: str | None = Field('', description='Unique order identifier.')
+    tags: list[str] | None = []
+    created_at: AwareDatetime | None = None
+    email: str | None = Field(None, description='oneof: contact')
+    phone: str | None = Field(None, description='oneof: contact')
+
+
+class ExampleShopV1GetOrderRequest(BaseModel):
+    id: str | None = ''
+
+
+class ExampleShopV1GetOrderResponse(BaseModel):
+    order: ExampleShopV1Order | None = None
+```
+
+## Supported Protocol Buffers Features
+
+The Protocol Buffers parser supports the schema constructs needed to generate Python model definitions:
+
+| Protobuf construct | Model generation behavior |
+|--------------------|---------------------------|
+| Scalar fields | Maps protobuf scalar types to Python scalar types |
+| `message` | Generates a Python model class |
+| Nested `message` | Generates a named Python model class with package and parent context |
+| `enum` | Generates an enum class |
+| `repeated` | Generates a list field |
+| `map<K, T>` | Generates a dict field for protobuf-supported string, integer, and bool key types |
+| `oneof` | Generates nullable fields and preserves oneof membership as field metadata |
+| `optional`, `required`, singular | Preserves proto2/proto3 presence and requiredness where model generation can represent it |
+| Defaults | Preserves explicit proto2 defaults and proto3 implicit defaults |
+| Package names | Included in generated class names to avoid cross-file collisions |
+| Imports | Resolves regular imports, public imports, weak imports, fully-qualified type references, and cross-file references |
+| Services and RPCs | Keeps request and response message types reachable for unary and streaming RPCs |
+| Comments | Preserved as field descriptions when field descriptions are enabled |
+
+Supported scalar types are `double`, `float`, `int32`, `int64`, `uint32`, `uint64`, `sint32`, `sint64`, `fixed32`, `fixed64`, `sfixed32`, `sfixed64`, `bool`, `string`, and `bytes`.
+
+## Well-Known Types
+
+Common `google.protobuf` well-known types are mapped through the generator's normal type handling:
+
+| Protobuf type | Typical generated Python type |
+|---------------|-------------------------------|
+| `Timestamp` | `AwareDatetime` |
+| `Duration` | `timedelta` |
+| `Struct` | `dict[str, Any]` |
+| `Value` | `bool | float | str | dict[str, Any] | list[Any] | None` |
+| `ListValue` | `list[Any]` |
+| `Any` | `dict[str, Any]` |
+| `FieldMask` | `str` |
+| Wrapper types | Optional scalar fields |
+
+## Schema Version
+
+Protocol Buffers syntax is detected from each compiled `.proto` descriptor:
+
+- `syntax = "proto3";` -> proto3
+- `syntax = "proto2";` or no syntax declaration -> proto2
+- `edition = "2023";` -> edition 2023
+
+Use `--schema-version proto2`, `--schema-version proto3`, or `--schema-version 2023` to override auto-detection when needed.
+
+## Multiple Files
+
+Pass a directory as input to generate from a group of related `.proto` files:
+
+```bash
+datamodel-codegen \
+    --input ./protos \
+    --input-file-type protobuf \
+    --output ./models \
+    --module-split-mode single
+```
+
+The parser resolves imports relative to the input file or directory and emits importable Python modules when an output directory is used.
+
+## Limitations
+
+datamodel-code-generator uses Protocol Buffers schemas to generate Python model definitions. It does not implement protobuf runtime validation, oneof runtime exclusivity checks, wire serialization, or gRPC client/server code generation.
+
+Some protobuf constructs are parsed only as needed for data model generation. Options, custom options, extensions, reserved declarations, and service streaming markers are tolerated where possible but are not emitted as runtime protobuf behavior.
+
+## 📖 See Also
+
+- 🖥️ [CLI Reference](cli-reference/index.md) - Complete CLI options reference
+- 📊 [Supported Data Types](supported-data-types.md) - Data type support details
+- 📋 [Generate from JSON Schema](jsonschema.md) - JSON Schema input documentation
 
 ---
 
@@ -26517,6 +27293,91 @@ class Pet(TypedDict):
 - Static type checking without runtime overhead
 - Gradual typing of existing dict-based code
 
+### Boundary payloads and partial updates
+
+TypedDict is a good fit for data at an HTTP boundary. A PATCH payload can
+distinguish three cases:
+
+- the key is missing, so the existing value should stay unchanged
+- the key is present with `null`, so the value should be cleared
+- the key is present with a value, so the value should be replaced
+
+Use `--strict-nullable` when the difference between a missing key and a
+nullable value matters:
+
+```bash
+datamodel-codegen --input user-patch.schema.json \
+  --output-model-type typing.TypedDict \
+  --strict-nullable \
+  --target-python-version 3.13 \
+  --output model.py
+```
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UserPatch",
+  "type": "object",
+  "required": ["id"],
+  "properties": {
+    "id": {"type": "string", "readOnly": true},
+    "nickname": {"type": ["string", "null"]},
+    "bio": {"type": "string"}
+  },
+  "additionalProperties": false
+}
+```
+
+```python
+from typing import NotRequired
+from typing_extensions import TypedDict
+
+class UserPatch(TypedDict, closed=True):
+    id: str
+    nickname: NotRequired[str | None]
+    bio: NotRequired[str]
+```
+
+Here `nickname: NotRequired[str | None]` means the key may be omitted, and
+`None` is still a real value when the key is present. This follows
+[PEP 655](https://peps.python.org/pep-0655/), which added `Required` and
+`NotRequired` for per-key presence in TypedDict.
+
+If the schema marks response-only fields with `readOnly`, combine this with
+`--use-frozen-field` to generate `ReadOnly` for TypedDict output:
+
+```bash
+datamodel-codegen --input user-patch.schema.json \
+  --output-model-type typing.TypedDict \
+  --strict-nullable \
+  --use-frozen-field \
+  --target-python-version 3.13 \
+  --output model.py
+```
+
+```python
+from typing import NotRequired, ReadOnly
+from typing_extensions import TypedDict
+
+class UserPatch(TypedDict, closed=True):
+    id: ReadOnly[str]
+    nickname: NotRequired[str | None]
+    bio: NotRequired[str]
+```
+
+`ReadOnly` comes from [PEP 705](https://peps.python.org/pep-0705/). The
+`closed=True` output comes from [PEP 728](https://peps.python.org/pep-0728/)
+and represents `additionalProperties: false` for type checkers that understand
+closed TypedDicts.
+
+!!! note "Background"
+    The distinction between missing keys, `None`, and unset update arguments is
+    covered in Koudai Aono's PyCon US 2026 talk
+    [Beyond Optional in Real-World Projects](https://github.com/koxudaxi/pyconus_2026/blob/main/slides.md).
+    In datamodel-code-generator today, TypedDict and msgspec preserve that
+    boundary shape most directly. Pydantic models and dataclasses are usually a
+    better fit after the boundary has been normalized into application data.
+
 ---
 
 ## msgspec
@@ -26576,6 +27437,8 @@ graph TD
 ## See Also
 
 - [CLI Reference: `--output-model-type`](cli-reference/model-customization.md#output-model-type)
+- [CLI Reference: `--strict-nullable`](cli-reference/model-customization.md#strict-nullable)
+- [CLI Reference: `--use-frozen-field`](cli-reference/model-customization.md#use-frozen-field)
 - [CLI Reference: Model Customization](cli-reference/model-customization.md)
 - [Pydantic Documentation](https://docs.pydantic.dev/)
 - [msgspec Documentation](https://jcristharif.com/msgspec/)
@@ -29808,6 +30671,7 @@ Each parser type has its own config class:
 |--------|-------------|
 | `JsonSchemaParser` | `JSONSchemaParserConfig` |
 | `OpenAPIParser` | `OpenAPIParserConfig` |
+| `AvroParser` | `AvroParserConfig` |
 | `GraphQLParser` | `GraphQLParserConfig` |
 
 All config classes inherit from `ParserConfig` and include additional parser-specific options.
@@ -30333,7 +31197,7 @@ By default, the action runs in **check mode** (`--check`), which validates that 
 |-------|----------|---------|-------------|
 | `input` | Yes | - | Input schema file or directory |
 | `output` | Yes | - | Output file or directory |
-| `input-file-type` | Yes | - | Input file type (`openapi`, `jsonschema`, `json`, `yaml`, `csv`, `graphql`) |
+| `input-file-type` | Yes | - | Input file type (`openapi`, `jsonschema`, `xmlschema`, `avro`, `json`, `yaml`, `csv`, `graphql`) |
 | `output-model-type` | Yes | - | Output model type (`pydantic_v2.BaseModel`, `pydantic_v2.dataclass`, `dataclasses.dataclass`, `typing.TypedDict`, `msgspec.Struct`) |
 | `check` | No | `true` | Validate that existing output is up to date (no generation) |
 | `working-directory` | No | `.` | Working directory (where `pyproject.toml` is located) |
@@ -30434,6 +31298,17 @@ For GraphQL schemas, use the `extras` input to install the required dependency:
     input-file-type: graphql
     output-model-type: pydantic_v2.BaseModel
     extras: 'graphql'
+```
+
+### Example: Apache Avro Schema
+
+```yaml
+- uses: koxudaxi/datamodel-code-generator@0.44.0
+  with:
+    input: schema.avsc
+    output: src/models.py
+    input-file-type: avro
+    output-model-type: pydantic_v2.BaseModel
 ```
 
 ### Example: Multiple Extras
@@ -30896,6 +31771,146 @@ datamodel-codegen \
 
 ---
 
+# Deprecations
+
+Source: https://datamodel-code-generator.koxudaxi.dev/deprecations/
+
+<!-- Generated by scripts/build_deprecation_docs.py. Do not edit manually. -->
+
+This page lists deprecations and scheduled breaking changes.
+
+| ID | Kind | Target | Warning since | Removal | Replacement |
+|----|------|--------|---------------|---------|-------------|
+| `format.default-formatters` | behavior | `Default formatters` | 0.52.0 | TBD | Set formatters explicitly, for example ruff-format and ruff-check. |
+| `behavior.pydantic-v2-use-annotated-default` | behavior | `Pydantic v2 default for --use-annotated` | 0.52.1 | TBD | Explicitly pass --use-annotated or --no-use-annotated. |
+| `behavior.remote-ref-default` | behavior | `Remote $ref fetching without --allow-remote-refs` | 0.56.0 | TBD | Pass --allow-remote-refs or --no-allow-remote-refs explicitly. |
+| `cli.allow-extra-fields` | cli-option | `--allow-extra-fields` | 0.31.0 | TBD | --extra-fields=allow |
+| `cli.parent-scoped-naming` | cli-option | `--parent-scoped-naming` | 0.48.0 | TBD | --naming-strategy parent-prefixed |
+| `cli.validation` | cli-option | `--validation` | 0.24.0 | TBD | --field-constraints |
+| `config.yaml-non-lowercase-bool` | config | `YAML bool values True, False, TRUE, FALSE` | 0.48.0 | TBD | Use lowercase true or false. |
+| `python-api.python-version-has-type-alias` | python-api | `PythonVersion.has_type_alias` | 0.52.1 | TBD | - |
+| `schema.jsonschema-items-array` | schema | `JSON Schema Draft 2020-12 items array tuple validation` | 0.53.0 | TBD | Use prefixItems. |
+| `schema.openapi-nullable` | schema | `OpenAPI 3.1 nullable keyword` | 0.53.0 | TBD | Use type arrays such as type: ["string", "null"]. |
+
+## Details
+
+### `format.default-formatters`
+
+- **Kind:** behavior
+- **Target:** `Default formatters`
+- **Warning since:** 0.52.0
+- **Planned removal:** TBD
+- **Warning category:** `FutureWarning`
+- **Replacement:** Set formatters explicitly, for example ruff-format and ruff-check.
+
+The default formatters (black, isort) will be replaced by ruff in a future version.
+
+### `behavior.pydantic-v2-use-annotated-default`
+
+- **Kind:** behavior
+- **Target:** `Pydantic v2 default for --use-annotated`
+- **Warning since:** 0.52.1
+- **Planned removal:** TBD
+- **Warning category:** `DeprecationWarning`
+- **Replacement:** Explicitly pass --use-annotated or --no-use-annotated.
+
+Pydantic v2 with --use-annotated is recommended for correct type annotations. In a future version, --use-annotated will be enabled by default for Pydantic v2.
+
+### `behavior.remote-ref-default`
+
+- **Kind:** behavior
+- **Target:** `Remote $ref fetching without --allow-remote-refs`
+- **Warning since:** 0.56.0
+- **Planned removal:** TBD
+- **Warning category:** `FutureWarning`
+- **Replacement:** Pass --allow-remote-refs or --no-allow-remote-refs explicitly.
+
+Remote $ref fetching without --allow-remote-refs is deprecated.
+
+The current default allows remote fetching for compatibility; the scheduled default is disabled.
+
+### `cli.allow-extra-fields`
+
+- **Kind:** cli-option
+- **Target:** `--allow-extra-fields`
+- **Warning since:** 0.31.0
+- **Planned removal:** TBD
+- **Warning category:** `DeprecationWarning`
+- **Replacement:** --extra-fields=allow
+
+--allow-extra-fields is deprecated. Use --extra-fields=allow instead.
+
+The replacement supports allow, forbid, and ignore modes.
+
+### `cli.parent-scoped-naming`
+
+- **Kind:** cli-option
+- **Target:** `--parent-scoped-naming`
+- **Warning since:** 0.48.0
+- **Planned removal:** TBD
+- **Warning category:** `DeprecationWarning`
+- **Replacement:** --naming-strategy parent-prefixed
+
+--parent-scoped-naming is deprecated. Use --naming-strategy parent-prefixed instead.
+
+### `cli.validation`
+
+- **Kind:** cli-option
+- **Target:** `--validation`
+- **Warning since:** 0.24.0
+- **Planned removal:** TBD
+- **Warning category:** `DeprecationWarning`
+- **Replacement:** --field-constraints
+
+The `--validation` option is deprecated and will be removed in a future release. Use --field-constraints instead.
+
+### `config.yaml-non-lowercase-bool`
+
+- **Kind:** config
+- **Target:** `YAML bool values True, False, TRUE, FALSE`
+- **Warning since:** 0.48.0
+- **Planned removal:** TBD
+- **Warning category:** `DeprecationWarning`
+- **Replacement:** Use lowercase true or false.
+
+Non-lowercase YAML bool values are deprecated. Use lowercase true or false instead.
+
+### `python-api.python-version-has-type-alias`
+
+- **Kind:** python-api
+- **Target:** `PythonVersion.has_type_alias`
+- **Warning since:** 0.52.1
+- **Planned removal:** TBD
+- **Warning category:** `DeprecationWarning`
+
+has_type_alias is deprecated and will be removed in a future version.
+
+The project minimum Python version already supports TypeAlias.
+
+### `schema.jsonschema-items-array`
+
+- **Kind:** schema
+- **Target:** `JSON Schema Draft 2020-12 items array tuple validation`
+- **Warning since:** 0.53.0
+- **Planned removal:** TBD
+- **Warning category:** `UserWarning`
+- **Replacement:** Use prefixItems.
+
+items as array tuple validation is deprecated in Draft 2020-12. Use prefixItems instead.
+
+### `schema.openapi-nullable`
+
+- **Kind:** schema
+- **Target:** `OpenAPI 3.1 nullable keyword`
+- **Warning since:** 0.53.0
+- **Planned removal:** TBD
+- **Warning category:** `DeprecationWarning`
+- **Replacement:** Use type arrays such as type: ["string", "null"].
+
+nullable keyword is deprecated in OpenAPI 3.1, use type: ["string", "null"] instead.
+
+---
+
 # Frequently Asked Questions
 
 Source: https://datamodel-code-generator.koxudaxi.dev/faq/
@@ -31311,6 +32326,37 @@ generated output, add it to `E2E_TEST_PATHS` in that guard test so new direct
 assertions are also rejected. Only use `@pytest.mark.allow_direct_assert` for
 cases that cannot reasonably be expressed with the shared helpers, such as
 mock setup internals or narrow intermediate-state checks.
+
+## Parser generation state
+
+Parser code must keep generated output, naming order, parse order, and
+canonical model selection compatible with existing releases. `ModelResolver`
+remains the only authority for names. Do not move name generation or parser
+dispatch into the generation index.
+
+Use `GenerationStore` for parser-side mutations that affect generation facts:
+
+- Register parsed models with `generation_store.register_model(model)`.
+- Replace references with `generation_store.replace_data_type_ref(...)` or
+  `generation_store.detach_data_type_ref(...)`.
+- Replace field or nested data types with `replace_field_type(...)`,
+  `replace_nested_data_type(...)`, or `set_nested_data_types(...)`.
+- Replace fields or base classes with `set_fields(...)`,
+  `append_field(...)`, `insert_field(...)`, `remove_field(...)`, or
+  `set_base_classes(...)`.
+- Move or rename generated models with `move_model(...)`,
+  `rename_model(...)`, or `update_model_reference(...)`.
+
+Parser code should not directly assign `data_type.reference`, `model.fields`,
+`model.base_classes`, `model.reference.name`, or call reference child mutation
+helpers. Read dependency information through `GenerationIndex` queries instead
+of using `Reference.children` as a reverse index.
+
+The local pre-commit hook `generation-store-usage` runs
+`scripts/check_generation_store_usage.py` and rejects common parser mutations
+that bypass the store. If a new mutation helper is needed, add the method to
+`GENERATION_STORE_MUTATION_METHODS` and update the checker tests so contributors
+get an actionable message.
 
 ## ➕ Adding a New CLI Option
 

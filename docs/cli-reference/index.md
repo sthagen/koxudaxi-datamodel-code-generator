@@ -9,18 +9,18 @@ This documentation is auto-generated from test cases.
 | Category | Options | Description |
 |----------|---------|-------------|
 | 📁 [Base Options](base-options.md) | 10 | Input/output configuration |
-| 🔧 [Typing Customization](typing-customization.md) | 29 | Type annotation and import behavior |
+| 🔧 [Typing Customization](typing-customization.md) | 30 | Type annotation and import behavior |
 | 🏷️ [Field Customization](field-customization.md) | 26 | Field naming and docstring behavior |
 | 🏗️ [Model Customization](model-customization.md) | 39 | Model generation behavior |
 | 🎨 [Template Customization](template-customization.md) | 21 | Output formatting and custom rendering |
-| 📘 [OpenAPI-only Options](openapi-only-options.md) | 7 | OpenAPI-specific features |
+| 📘 [OpenAPI-only Options](openapi-only-options.md) | 8 | OpenAPI-specific features |
 | 📋 [GraphQL-only Options](graphql-only-options.md) | 1 |  |
 | ⚙️ [General Options](general-options.md) | 17 | Utilities and meta options |
-| 📝 [Utility Options](utility-options.md) | 6 | Help, version, debug options |
+| 📝 [Utility Options](utility-options.md) | 7 | Help, version, debug options |
 
 ## All Options
 
-**Jump to:** [A](#a) · [B](#b) · [C](#c) · [D](#d) · [E](#e) · [F](#f) · [G](#g) · [H](#h) · [I](#i) · [K](#k) · [M](#m) · [N](#n) · [O](#o) · [P](#p) · [R](#r) · [S](#s) · [T](#t) · [U](#u) · [V](#v) · [W](#w)
+**Jump to:** [A](#a) · [B](#b) · [C](#c) · [D](#d) · [E](#e) · [F](#f) · [G](#g) · [H](#h) · [I](#i) · [K](#k) · [L](#l) · [M](#m) · [N](#n) · [O](#o) · [P](#p) · [R](#r) · [S](#s) · [T](#t) · [U](#u) · [V](#v) · [W](#w)
 
 
 ### A {#a}
@@ -124,6 +124,10 @@ This documentation is auto-generated from test cases.
 - [`--keep-model-order`](model-customization.md#keep-model-order)
 - [`--keyword-only`](model-customization.md#keyword-only)
 
+### L {#l}
+
+- [`--list-deprecations`](utility-options.md#list-deprecations)
+
 ### M {#m}
 
 - [`--model-extra-keys`](model-customization.md#model-extra-keys)
@@ -144,6 +148,7 @@ This documentation is auto-generated from test cases.
 
 ### O {#o}
 
+- [`--openapi-include-info-version`](openapi-only-options.md#openapi-include-info-version)
 - [`--openapi-include-paths`](openapi-only-options.md#openapi-include-paths)
 - [`--openapi-scopes`](openapi-only-options.md#openapi-scopes)
 - [`--original-field-name-delimiter`](field-customization.md#original-field-name-delimiter)
@@ -207,6 +212,7 @@ This documentation is auto-generated from test cases.
 - [`--use-generic-container-types`](typing-customization.md#use-generic-container-types)
 - [`--use-inline-field-description`](field-customization.md#use-inline-field-description)
 - [`--use-non-positive-negative-number-constrained-types`](typing-customization.md#use-non-positive-negative-number-constrained-types)
+- [`--use-object-type`](typing-customization.md#use-object-type)
 - [`--use-one-literal-as-default`](model-customization.md#use-one-literal-as-default)
 - [`--use-operation-id-as-name`](openapi-only-options.md#use-operation-id-as-name)
 - [`--use-pendulum`](typing-customization.md#use-pendulum)

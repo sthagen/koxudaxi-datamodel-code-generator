@@ -118,14 +118,20 @@ def format_docstring(value: str | None, indent_spaces: int = 0, *, use_single_li
 class _RenderedDataModelField:
     """Proxy a field with a pre-rendered docstring for built-in templates."""
 
-    __slots__ = ("_field", "docstring")
+    __slots__ = ("_cache", "_field", "docstring")
 
     def __init__(self, field: DataModelFieldBase, docstring: str) -> None:
         self._field = field
+        self._cache: dict[str, Any] = {}
         self.docstring = docstring
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self._field, name)
+        try:
+            return self._cache[name]
+        except KeyError:
+            value = getattr(self._field, name)
+            self._cache[name] = value
+            return value
 
 
 ALL_MODEL: str = "#all#"
@@ -257,6 +263,11 @@ class DataModelFieldBase(_BaseModel):
         const = self.extras["const"]
         self.const = True
         self.nullable = False
+        if const is None:
+            self.replace_data_type(self.data_type.__class__(type=NONE), clear_old_parent=False)
+            return
+        if not isinstance(const, (bool, int, str)):
+            return
         self.replace_data_type(self.data_type.__class__(literals=[const]), clear_old_parent=False)
         if not self.default:
             self.default = const
@@ -283,28 +294,10 @@ class DataModelFieldBase(_BaseModel):
             return False
         return self.data_type.use_union_operator
 
-    def _build_union_type_hint(self) -> str | None:
-        """Build Union[] type hint from data_type.data_types if forward reference requires it."""
-        if not (self._use_union_operator != self.data_type.use_union_operator and self.data_type.is_union):
-            return None
-        parts = dict.fromkeys(dt.type_hint for dt in self.data_type.data_types if dt.type_hint).keys()
-        if len(parts) > 1:
-            return f"Union[{', '.join(parts)}]"
-        return None  # pragma: no cover
-
-    def _build_base_union_type_hint(self) -> str | None:  # pragma: no cover
-        """Build Union[] base type hint from data_type.data_types if forward reference requires it."""
-        if not (self._use_union_operator != self.data_type.use_union_operator and self.data_type.is_union):
-            return None
-        parts = dict.fromkeys(dt.base_type_hint for dt in self.data_type.data_types if dt.base_type_hint).keys()
-        if len(parts) > 1:
-            return f"Union[{', '.join(parts)}]"
-        return None
-
     @property
     def type_hint(self) -> str:  # noqa: PLR0911
         """Get the type hint string for this field, including nullability."""
-        type_hint = self._build_union_type_hint() or self.data_type.type_hint
+        type_hint = self.data_type.type_hint
 
         if not type_hint:
             return NONE
@@ -329,7 +322,7 @@ class DataModelFieldBase(_BaseModel):
         This returns the type without kwargs (e.g., 'str' instead of 'constr(pattern=...)').
         Used in RootModel generics when regex_engine config is needed for lookaround patterns.
         """
-        base_hint = self._build_base_union_type_hint() or self.data_type.base_type_hint
+        base_hint = self.data_type.base_type_hint
 
         if not base_hint:  # pragma: no cover
             return NONE

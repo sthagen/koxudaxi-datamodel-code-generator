@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from warnings import warn
 
+from datamodel_code_generator.deprecations import warn_deprecated
 from datamodel_code_generator.util import load_toml
 
 if TYPE_CHECKING:
@@ -117,11 +118,7 @@ class PythonVersion(Enum):
         .. deprecated::
             This property is unused and will be removed in a future version.
         """
-        warn(
-            "has_type_alias is deprecated and will be removed in a future version.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
+        warn_deprecated("python-api.python-version-has-type-alias", stacklevel=2)
         return self._is_py_310_or_later
 
     @property
@@ -140,7 +137,7 @@ class PythonVersion(Enum):
 
         PEP 728 is targeted for Python 3.15. Until then, typing_extensions is required.
         """
-        return False
+        return self.version_key >= (3, 15)
 
     @property
     def has_kw_only_dataclass(self) -> bool:
@@ -237,12 +234,14 @@ class CodeFormatter:
     ) -> None:
         """Initialize code formatter with configuration for black, isort, ruff, and custom formatters."""
         if formatters is None:
-            warn(
-                "The default formatters (black, isort) will be replaced by ruff in a future version. "
-                "To prepare for this change, consider using: formatters=[Formatter.RUFF_FORMAT, Formatter.RUFF_CHECK]. "
-                "Install ruff with: pip install 'datamodel-code-generator[ruff]'. "
-                "To suppress this warning, specify formatters explicitly.",
-                FutureWarning,
+            warn_deprecated(
+                "format.default-formatters",
+                details=(
+                    "To prepare for this change, consider using: "
+                    "formatters=[Formatter.RUFF_FORMAT, Formatter.RUFF_CHECK]. "
+                    "Install ruff with: pip install 'datamodel-code-generator[ruff]'. "
+                    "To suppress this warning, specify formatters explicitly."
+                ),
                 stacklevel=2,
             )
             formatters = list(DEFAULT_FORMATTERS)

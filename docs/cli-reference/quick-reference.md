@@ -51,6 +51,7 @@ datamodel-codegen [OPTIONS]
 | [`--use-decimal-for-multiple-of`](typing-customization.md#use-decimal-for-multiple-of) | Generate Decimal types for fields with multipleOf constraint. |
 | [`--use-generic-container-types`](typing-customization.md#use-generic-container-types) | Use generic container types (Sequence, Mapping) for type hinting. |
 | [`--use-non-positive-negative-number-constrained-types`](typing-customization.md#use-non-positive-negative-number-constrained-types) | Use NonPositive/NonNegative types for number constraints. |
+| [`--use-object-type`](typing-customization.md#use-object-type) | Use object instead of Any for unspecified object and array values. |
 | [`--use-pendulum`](typing-customization.md#use-pendulum) | Use pendulum types for date, time, and duration fields. |
 | [`--use-root-model-type-alias`](typing-customization.md#use-root-model-type-alias) | Generate RootModel as type alias format for better mypy support. |
 | [`--use-specialized-enum`](typing-customization.md#use-specialized-enum) | Generate StrEnum/IntEnum for string/integer enums (Python 3.11+). |
@@ -167,6 +168,7 @@ datamodel-codegen [OPTIONS]
 | Option | Description |
 |--------|-------------|
 | [`--include-path-parameters`](openapi-only-options.md#include-path-parameters) | Include OpenAPI path parameters in generated parameter models. |
+| [`--openapi-include-info-version`](openapi-only-options.md#openapi-include-info-version) | Emit OpenAPI info.version as a generated constant. |
 | [`--openapi-include-paths`](openapi-only-options.md#openapi-include-paths) | Filter OpenAPI paths to include in model generation. |
 | [`--openapi-scopes`](openapi-only-options.md#openapi-scopes) | Specify OpenAPI scopes to generate (schemas, paths, parameters). |
 | [`--read-only-write-only-model-type`](openapi-only-options.md#read-only-write-only-model-type) | Generate separate request and response models for readOnly/writeOnly fields. |
@@ -209,6 +211,7 @@ datamodel-codegen [OPTIONS]
 | [`--debug`](utility-options.md#debug) | Show debug messages during code generation |
 | [`--generate-prompt`](utility-options.md#generate-prompt) | Generate a prompt for consulting LLMs about CLI options |
 | [`--help`](utility-options.md#help) | Show help message and exit |
+| [`--list-deprecations`](utility-options.md#list-deprecations) | List registered deprecations and scheduled breaking changes |
 | [`--no-color`](utility-options.md#no-color) | Disable colorized output |
 | [`--profile`](utility-options.md#profile) | Use a named profile from pyproject.toml |
 | [`--version`](utility-options.md#version) | Show program version and exit |
@@ -290,6 +293,7 @@ All options sorted alphabetically:
 - [`--input-model-ref-strategy`](base-options.md#input-model-ref-strategy) - Strategy for referenced types when using --input-model.
 - [`--keep-model-order`](model-customization.md#keep-model-order) - Keep generated model order deterministic while respecting de...
 - [`--keyword-only`](model-customization.md#keyword-only) - Generate dataclasses with keyword-only fields (Python 3.10+)...
+- [`--list-deprecations`](utility-options.md#list-deprecations) - List registered deprecations and scheduled breaking changes
 - [`--model-extra-keys`](model-customization.md#model-extra-keys) - Add model-level schema extensions to ConfigDict json_schema_...
 - [`--model-extra-keys-without-x-prefix`](model-customization.md#model-extra-keys-without-x-prefix) - Strip x- prefix from model-level schema extensions and add t...
 - [`--module-split-mode`](general-options.md#module-split-mode) - Split generated models into separate files, one per model cl...
@@ -302,6 +306,7 @@ All options sorted alphabetically:
 - [`--no-use-standard-collections`](typing-customization.md#no-use-standard-collections) - Use typing.Dict/List instead of built-in dict/list for conta...
 - [`--no-use-type-checking-imports`](template-customization.md#no-use-type-checking-imports) - Keep generated model imports available at runtime when using...
 - [`--no-use-union-operator`](typing-customization.md#no-use-union-operator) - Use Union[X, Y] / Optional[X] instead of X | Y union operato...
+- [`--openapi-include-info-version`](openapi-only-options.md#openapi-include-info-version) - Emit OpenAPI info.version as a generated constant.
 - [`--openapi-include-paths`](openapi-only-options.md#openapi-include-paths) - Filter OpenAPI paths to include in model generation.
 - [`--openapi-scopes`](openapi-only-options.md#openapi-scopes) - Specify OpenAPI scopes to generate (schemas, paths, paramete...
 - [`--original-field-name-delimiter`](field-customization.md#original-field-name-delimiter) - Specify delimiter for original field names when using snake-...
@@ -350,6 +355,7 @@ All options sorted alphabetically:
 - [`--use-generic-container-types`](typing-customization.md#use-generic-container-types) - Use generic container types (Sequence, Mapping) for type hin...
 - [`--use-inline-field-description`](field-customization.md#use-inline-field-description) - Add field descriptions as inline comments.
 - [`--use-non-positive-negative-number-constrained-types`](typing-customization.md#use-non-positive-negative-number-constrained-types) - Use NonPositive/NonNegative types for number constraints.
+- [`--use-object-type`](typing-customization.md#use-object-type) - Use object instead of Any for unspecified object and array v...
 - [`--use-one-literal-as-default`](model-customization.md#use-one-literal-as-default) - Use single literal value as default when enum has only one o...
 - [`--use-operation-id-as-name`](openapi-only-options.md#use-operation-id-as-name) - Use OpenAPI operationId as the generated function/class name...
 - [`--use-pendulum`](typing-customization.md#use-pendulum) - Use pendulum types for date, time, and duration fields.

@@ -44,6 +44,7 @@ optional-dependencies.all = [
   "datamodel-code-generator[debug]",
   "datamodel-code-generator[graphql]",
   "datamodel-code-generator[http]",
+  "datamodel-code-generator[protobuf]",
   "datamodel-code-generator[ruff]",
   "datamodel-code-generator[validation]",
   "datamodel-code-generator[watch]",
@@ -56,6 +57,9 @@ optional-dependencies.graphql = [
 ]
 optional-dependencies.http = [
   "httpx>=0.24.1",
+]
+optional-dependencies.protobuf = [
+  "grpcio-tools>=1.62,<2",
 ]
 optional-dependencies.ruff = [
   "ruff>=0.9.10",
@@ -84,7 +88,11 @@ dev = [
   { include-group = "type" },
 ]
 test = [
+  "email-validator>=2.2",
+  "hypothesis>=6.136.6",
+  "hypothesis-jsonschema>=0.23.1",
   "inline-snapshot>=0.31.1",
+  "jsonschema>=4.24",
   "msgspec>=0.18",
   "pytest>=8.3.4",
   "pytest-cov>=5",
@@ -214,6 +222,7 @@ filterwarnings = [
   "error",
   "ignore:^.*Pydantic v2 with --use-annotated is recommended.*:DeprecationWarning",
   "ignore:^.*`--validation` option is deprecated.*",
+  "ignore:^.*--allow-extra-fields is deprecated.*:DeprecationWarning",
   "ignore:^.*--parent-scoped-naming is deprecated.*",
   "ignore:^.*Field name `name` is duplicated on Pet.*",
   "ignore:^.*format of 'unknown-type' not understood for 'string' - using default.*",
@@ -226,7 +235,7 @@ filterwarnings = [
   "ignore:^.*is empty or not a dict. Skipping this file.*:UserWarning",
   "ignore:^.*The default formatters.*:FutureWarning",
 ]
-norecursedirs = [ "tests/data/*", ".tox" ]
+norecursedirs = [ "tests/data/*", ".hypothesis", ".tox" ]
 verbosity_assertions = 2
 markers = [
   "perf: marks tests as performance tests (excluded from CI benchmarks)",
@@ -250,7 +259,13 @@ paths.other = [
   "*\\datamodel-code-generator",
 ]
 run.dynamic_context = "none"
-run.omit = [ "tests/data/*", "tests/main/test_performance.py", "*/_types/*", "tests/cli_doc/*" ]
+run.omit = [
+  "*/_types/*",
+  "tests/cli_doc/*",
+  "tests/data/*",
+  "tests/main/payload_validation/*",
+  "tests/main/test_performance.py",
+]
 report.fail_under = 0
 run.parallel = true
 run.plugins = [
@@ -292,7 +307,11 @@ input-model = [
   "src/datamodel_code_generator/config.py:ParserConfig",
   "src/datamodel_code_generator/config.py:GraphQLParserConfig",
   "src/datamodel_code_generator/config.py:JSONSchemaParserConfig",
+  "src/datamodel_code_generator/config.py:AvroParserConfig",
   "src/datamodel_code_generator/config.py:OpenAPIParserConfig",
+  "src/datamodel_code_generator/config.py:AsyncAPIParserConfig",
+  "src/datamodel_code_generator/config.py:ProtobufParserConfig",
+  "src/datamodel_code_generator/config.py:XMLSchemaParserConfig",
 ]
 output = "src/datamodel_code_generator/_types/parser_config_dicts.py"
 class-name-suffix = "Dict"

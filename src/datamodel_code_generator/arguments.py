@@ -13,6 +13,7 @@ from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from datamodel_code_generator.deprecations import deprecation_message
 from datamodel_code_generator.enums import (
     DEFAULT_SHARED_MODULE_NAME,
     AllExportsCollisionStrategy,
@@ -208,7 +209,8 @@ base_options.add_argument(
     "--input-file-type",
     help=(
         "Input file type (default: auto). "
-        "Use 'jsonschema', 'openapi', or 'graphql' for schema definitions. "
+        "Use 'jsonschema', 'openapi', 'asyncapi', 'graphql', 'xmlschema', 'protobuf', or 'avro' "
+        "for schema definitions. "
         "Use 'json', 'yaml', or 'csv' for raw sample data to infer a schema automatically."
     ),
     choices=[i.value for i in InputFileType],
@@ -261,7 +263,7 @@ base_options.add_argument(
 # ======================================================================================
 extra_fields_model_options.add_argument(
     "--allow-extra-fields",
-    help="Deprecated: Allow passing extra fields. This flag is deprecated. Use `--extra-fields=allow` instead.",
+    help=f"Deprecated: {deprecation_message('cli.allow-extra-fields')}",
     action="store_true",
     default=None,
 )
@@ -485,7 +487,7 @@ model_options.add_argument(
 )
 model_options.add_argument(
     "--parent-scoped-naming",
-    help="[Deprecated: use --naming-strategy parent-prefixed] Set name of models defined inline from the parent model",
+    help=f"Deprecated: {deprecation_message('cli.parent-scoped-naming')}",
     action="store_true",
     default=None,
 )
@@ -643,6 +645,12 @@ typing_options.add_argument(
     "--use-standard-collections",
     help="Use standard collections for type hinting (list, dict). Default: enabled",
     action=BooleanOptionalAction,
+    default=None,
+)
+typing_options.add_argument(
+    "--use-object-type",
+    help="Use object instead of Any for unspecified JSON Schema object and array values",
+    action="store_true",
     default=None,
 )
 typing_options.add_argument(
@@ -1071,9 +1079,14 @@ openapi_options.add_argument(
     default=None,
 )
 openapi_options.add_argument(
+    "--openapi-include-info-version",
+    help="Emit OpenAPI info.version as OPENAPI_INFO_VERSION in generated models",
+    action="store_true",
+    default=None,
+)
+openapi_options.add_argument(
     "--validation",
-    help="Deprecated: Enable validation (Only OpenAPI). this option is deprecated. it will be removed in future "
-    "releases",
+    help=f"Deprecated: {deprecation_message('cli.validation')}",
     action="store_true",
     default=None,
 )
@@ -1099,7 +1112,11 @@ base_options.add_argument(
     help="Schema version. Valid values depend on input type: "
     "JsonSchema: auto, draft-04, draft-06, draft-07, 2019-09, 2020-12. "
     "OpenAPI: auto, 3.0, 3.1. "
-    "(default: auto - detected from $schema or openapi field)",
+    "AsyncAPI: auto, 2.0, 3.0. "
+    "XMLSchema: auto, 1.0, 1.1. "
+    "Protobuf: auto, proto2, proto3, 2023. "
+    "(default: auto - detected from $schema, openapi/asyncapi field, XML Schema versioning attributes, "
+    "or Protobuf syntax/edition)",
     default=None,
 )
 base_options.add_argument(
@@ -1143,6 +1160,15 @@ general_options.add_argument(
     "--disable-warnings",
     help="disable warnings",
     action="store_true",
+    default=None,
+)
+general_options.add_argument(
+    "--list-deprecations",
+    help="List registered deprecations and scheduled breaking changes, then exit.",
+    nargs="?",
+    const="table",
+    choices=["table", "json", "markdown"],
+    metavar="{table,json,markdown}",
     default=None,
 )
 general_options.add_argument(
