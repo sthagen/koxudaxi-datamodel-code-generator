@@ -1037,6 +1037,47 @@ def test_main_url_with_relative_root_id_resolves_relative_refs(
     )
 
 
+def test_main_local_directory_path_absolute_root_id_refs(output_dir: Path) -> None:
+    """Test local directory input maps path-absolute $id refs to the input root."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "path_absolute_root_id_refs",
+        output_path=output_dir,
+        input_file_type="jsonschema",
+        extra_args=["--output-model-type", "pydantic_v2.BaseModel", "--disable-timestamp"],
+        expected_directory=EXPECTED_JSON_SCHEMA_PATH / "path_absolute_root_id_refs",
+    )
+
+
+def test_main_local_directory_path_absolute_root_id_refs_rejects_parent_traversal(
+    output_dir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Test path-absolute $id refs cannot escape the input root."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "path_absolute_root_id_refs_parent_traversal" / "schema-root",
+        output_path=output_dir,
+        input_file_type="jsonschema",
+        extra_args=["--output-model-type", "pydantic_v2.BaseModel", "--disable-timestamp"],
+        expected_exit=Exit.ERROR,
+        capsys=capsys,
+        expected_stderr_contains="$ref file not found",
+    )
+
+
+def test_main_jsonschema_unresolved_local_id_ref_reports_known_ids(
+    output_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Test unresolved local ID refs report a helpful CLI error."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "unresolved_local_id.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=["--output-model-type", "pydantic_v2.BaseModel", "--disable-timestamp"],
+        expected_exit=Exit.ERROR,
+        capsys=capsys,
+        expected_stderr_contains="Unresolved $id reference '#MissingId'",
+    )
+
+
 def test_main_url_jsonschema_relative_ref_without_fragment(
     mock_httpx_get: HttpxGetMockFactory, output_file: Path
 ) -> None:
@@ -2189,6 +2230,35 @@ def test_main_generate_pydantic_v2_dataclass_field(output_file: Path) -> None:
         assert_func=assert_file_content,
         expected_file="pydantic_v2_dataclass_field.py",
         output_model_type=DataModelType.PydanticV2Dataclass,
+    )
+
+
+def test_main_generate_pydantic_v2_dataclass_required_field_order(output_file: Path) -> None:
+    """Test pydantic_v2.dataclass keeps required fields before defaulted fields."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "pydantic_v2_dataclass_required_field_order.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="pydantic_v2_dataclass_required_field_order.py",
+        extra_args=[
+            "--disable-timestamp",
+            "--snake-case-field",
+            "--output-model-type",
+            "pydantic_v2.dataclass",
+            "--formatters",
+            "ruff-format",
+            "ruff-check",
+            "isort",
+            "--no-use-type-checking-imports",
+            "--use-annotated",
+            "--use-union-operator",
+            "--use-standard-collections",
+            "--use-default",
+            "--target-python-version",
+            "3.10",
+        ],
+        force_exec_validation=True,
     )
 
 
