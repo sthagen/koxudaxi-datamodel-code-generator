@@ -4,7 +4,7 @@
 
 [![PyPI version](https://badge.fury.io/py/datamodel-code-generator.svg)](https://pypi.python.org/pypi/datamodel-code-generator)
 [![Conda-forge](https://img.shields.io/conda/v/conda-forge/datamodel-code-generator)](https://anaconda.org/conda-forge/datamodel-code-generator)
-[![Downloads](https://img.shields.io/pypi/dm/datamodel-code-generator)](https://pypistats.org/packages/datamodel-code-generator)
+[![Downloads](https://api.pepy.tech/badge/datamodel-code-generator/month)](https://pepy.tech/projects/datamodel-code-generator)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/datamodel-code-generator)](https://pypi.python.org/pypi/datamodel-code-generator)
 [![codecov](https://codecov.io/gh/koxudaxi/datamodel-code-generator/graph/badge.svg?token=plzSSFb9Li)](https://codecov.io/gh/koxudaxi/datamodel-code-generator)
 ![license](https://img.shields.io/github/license/koxudaxi/datamodel-code-generator.svg)
@@ -19,6 +19,22 @@
 - 🎯 Generates **Pydantic v2**, **Pydantic v2 dataclass**, **dataclasses**, **TypedDict**, or **msgspec** output
 - 🔗 Handles complex schemas: `$ref`, `allOf`, `oneOf`, `anyOf`, enums, and nested types
 - ✅ Produces type-safe, validated code ready for your IDE and type checker
+
+---
+
+## 🧪 Try It In Your Browser
+
+Generate models in your browser without installing anything.
+
+<p>
+  <a class="md-button md-button--primary" href="playground.md" target="_self">Open Playground</a>
+</p>
+
+!!! note "Playground privacy"
+    The playground runs datamodel-code-generator locally in your browser with Pyodide. Your schema and options are not
+    sent to a backend for generation. If you copy a repro URL, the schema and options are encoded in the URL fragment
+    (`#state=...`), which browsers do not send to the server; the full URL can still be stored in your browser history
+    or wherever you share it.
 
 ---
 
