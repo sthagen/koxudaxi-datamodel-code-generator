@@ -217,8 +217,8 @@ The `--input-file-type` flag explicitly sets the input format.
 
 **Important distinction:**
 
-- Use `jsonschema`, `openapi`, `asyncapi`, `graphql`, `xmlschema`, `protobuf`,
-  or `avro` for **schema definition files**
+- Use `jsonschema`, `openapi`, `asyncapi`, `graphql`, `mcp-tools`, `xmlschema`,
+  `protobuf`, or `avro` for **schema definition files**
 - Use `json`, `yaml`, or `csv` for **raw sample data** to automatically infer a schema
 
 For example, if you have a JSON Schema written in YAML format, use `--input-file-type jsonschema`,
@@ -411,7 +411,7 @@ Schema version to use for parsing.
 
 The `--schema-version` option specifies the schema version to use instead of auto-detection.
 Valid values depend on input type: JsonSchema (draft-04, draft-06, draft-07, 2019-09, 2020-12)
-or OpenAPI (3.0, 3.1). Default is 'auto' (detected from $schema or openapi field).
+or OpenAPI (3.0, 3.1, 3.2). Default is 'auto' (detected from $schema or openapi field).
 
 !!! tip "Usage"
 

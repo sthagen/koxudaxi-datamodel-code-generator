@@ -283,6 +283,7 @@ class JsonSchemaObject(BaseModel):
         "description",
         "id",
         "$id",
+        "$anchor",
         "$schema",
         "$comment",
         "examples",
@@ -432,6 +433,7 @@ class JsonSchemaObject(BaseModel):
     examples: Any = None
     default: Any = None
     id: Optional[str] = Field(default=None, alias="$id")  # noqa: UP045
+    anchor: Optional[str] = Field(default=None, alias="$anchor")  # noqa: UP045
     custom_type_path: Optional[str] = Field(default=None, alias="customTypePath")  # noqa: UP045
     custom_base_path: str | list[str] | None = Field(default=None, alias="customBasePath")
     is_boolean_schema_false: bool = Field(default=False, exclude=True)
@@ -4919,84 +4921,108 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
         callback(obj, path)
         match obj.items:
             case JsonSchemaObject() as item:
-                self._traverse_schema_objects(item, path, callback, include_one_of=include_one_of)
+                self._traverse_schema_objects(item, [*path, "items"], callback, include_one_of=include_one_of)
             case list() as items:
-                for item in items:
+                for index, item in enumerate(items):
                     if isinstance(item, JsonSchemaObject):
-                        self._traverse_schema_objects(item, path, callback, include_one_of=include_one_of)
+                        self._traverse_schema_objects(
+                            item,
+                            [*path, "items", str(index)],
+                            callback,
+                            include_one_of=include_one_of,
+                        )
         if obj.prefixItems:
-            for item in obj.prefixItems:
+            for index, item in enumerate(obj.prefixItems):
                 if isinstance(item, JsonSchemaObject):
-                    self._traverse_schema_objects(item, path, callback, include_one_of=include_one_of)
+                    self._traverse_schema_objects(
+                        item,
+                        [*path, "prefixItems", str(index)],
+                        callback,
+                        include_one_of=include_one_of,
+                    )
         if isinstance(obj.additionalProperties, JsonSchemaObject):
-            self._traverse_schema_objects(obj.additionalProperties, path, callback, include_one_of=include_one_of)
+            self._traverse_schema_objects(
+                obj.additionalProperties,
+                [*path, "additionalProperties"],
+                callback,
+                include_one_of=include_one_of,
+            )
         if isinstance(obj.unevaluatedProperties, JsonSchemaObject):
-            self._traverse_schema_objects(obj.unevaluatedProperties, path, callback, include_one_of=include_one_of)
+            self._traverse_schema_objects(
+                obj.unevaluatedProperties,
+                [*path, "unevaluatedProperties"],
+                callback,
+                include_one_of=include_one_of,
+            )
         if isinstance(obj.unevaluatedItems, JsonSchemaObject):
-            self._traverse_schema_objects(obj.unevaluatedItems, path, callback, include_one_of=include_one_of)
+            self._traverse_schema_objects(
+                obj.unevaluatedItems,
+                [*path, "unevaluatedItems"],
+                callback,
+                include_one_of=include_one_of,
+            )
         if obj.patternProperties:
-            for value in obj.patternProperties.values():
+            for key, value in obj.patternProperties.items():
                 if isinstance(value, JsonSchemaObject):
-                    self._traverse_schema_objects(value, path, callback, include_one_of=include_one_of)
+                    self._traverse_schema_objects(
+                        value,
+                        [*path, "patternProperties", key],
+                        callback,
+                        include_one_of=include_one_of,
+                    )
         if isinstance(obj.propertyNames, JsonSchemaObject):
-            self._traverse_schema_objects(obj.propertyNames, path, callback, include_one_of=include_one_of)
-        for item in obj.anyOf:
+            self._traverse_schema_objects(
+                obj.propertyNames,
+                [*path, "propertyNames"],
+                callback,
+                include_one_of=include_one_of,
+            )
+        for index, item in enumerate(obj.anyOf):
             if isinstance(item, JsonSchemaObject):
-                self._traverse_schema_objects(item, path, callback, include_one_of=include_one_of)
-        for item in obj.allOf:
+                self._traverse_schema_objects(
+                    item,
+                    [*path, "anyOf", str(index)],
+                    callback,
+                    include_one_of=include_one_of,
+                )
+        for index, item in enumerate(obj.allOf):
             if isinstance(item, JsonSchemaObject):
-                self._traverse_schema_objects(item, path, callback, include_one_of=include_one_of)
+                self._traverse_schema_objects(
+                    item,
+                    [*path, "allOf", str(index)],
+                    callback,
+                    include_one_of=include_one_of,
+                )
         if include_one_of:
-            for item in obj.oneOf:
+            for index, item in enumerate(obj.oneOf):
                 if isinstance(item, JsonSchemaObject):
-                    self._traverse_schema_objects(item, path, callback, include_one_of=include_one_of)
+                    self._traverse_schema_objects(
+                        item,
+                        [*path, "oneOf", str(index)],
+                        callback,
+                        include_one_of=include_one_of,
+                    )
         if obj.properties:
-            for value in obj.properties.values():
+            for key, value in obj.properties.items():
                 if isinstance(value, JsonSchemaObject):
-                    self._traverse_schema_objects(value, path, callback, include_one_of=include_one_of)
+                    self._traverse_schema_objects(
+                        value,
+                        [*path, "properties", key],
+                        callback,
+                        include_one_of=include_one_of,
+                    )
 
     def _resolve_ref_callback(self, obj: JsonSchemaObject, path: list[str]) -> None:  # noqa: ARG002
         """Resolve $ref in schema object."""
         if obj.ref:
             self.resolve_ref(obj.ref)
 
-    def _add_id_callback(self, obj: JsonSchemaObject, path: list[str]) -> None:  # noqa: PLR0912
-        """Add $id to model resolver."""
+    def _add_id_callback(self, obj: JsonSchemaObject, path: list[str]) -> None:
+        """Add $id and $anchor to model resolver."""
         if obj.id:
             self.model_resolver.add_id(obj.id, path)
-        if obj.items:
-            if isinstance(obj.items, JsonSchemaObject):
-                self.parse_id(obj.items, path)
-            elif isinstance(obj.items, list):
-                for item in obj.items:
-                    if isinstance(item, JsonSchemaObject):
-                        self.parse_id(item, path)
-        if obj.prefixItems:
-            for item in obj.prefixItems:
-                if isinstance(item, JsonSchemaObject):
-                    self.parse_id(item, path)
-        if isinstance(obj.additionalProperties, JsonSchemaObject):
-            self.parse_id(obj.additionalProperties, path)
-        if isinstance(obj.unevaluatedProperties, JsonSchemaObject):
-            self.parse_id(obj.unevaluatedProperties, path)
-        if isinstance(obj.unevaluatedItems, JsonSchemaObject):
-            self.parse_id(obj.unevaluatedItems, path)
-        if obj.patternProperties:
-            for value in obj.patternProperties.values():
-                if isinstance(value, JsonSchemaObject):
-                    self.parse_id(value, path)
-        if isinstance(obj.propertyNames, JsonSchemaObject):
-            self.parse_id(obj.propertyNames, path)
-        for item in obj.anyOf:
-            if isinstance(item, JsonSchemaObject):
-                self.parse_id(item, path)
-        for item in obj.allOf:
-            if isinstance(item, JsonSchemaObject):
-                self.parse_id(item, path)
-        if obj.properties:
-            for property_value in obj.properties.values():
-                if isinstance(property_value, JsonSchemaObject):
-                    self.parse_id(property_value, path)
+        if obj.anchor:
+            self.model_resolver.add_id(f"#{obj.anchor}", path)
 
     def parse_ref(self, obj: JsonSchemaObject, path: list[str]) -> None:
         """Recursively parse all $ref references in a schema object."""
@@ -5281,19 +5307,24 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             self.raw_obj = raw_obj
             title = self.raw_obj.get("title")
             title_str = str(title) if title is not None else "Model"
-            if self.custom_class_name_generator:
-                obj_name = title_str
-            else:
-                if self.class_name:
-                    obj_name = self.class_name
-                else:
+            preserve_root_class_name = False
+            validate_obj_name = False
+            match (self.custom_class_name_generator, self.class_name):
+                case (custom_generator, _) if custom_generator:
+                    obj_name = title_str
+                case (_, class_name) if class_name:
+                    obj_name = class_name
+                    preserve_root_class_name = self._should_preserve_explicit_root_class_name(obj_name)
+                    validate_obj_name = True
+                case _:
                     # backward compatible
                     obj_name = title_str
                     if not self.model_resolver.validate_name(obj_name):
                         obj_name = title_to_class_name(obj_name)
-                if not self.model_resolver.validate_name(obj_name):
-                    raise InvalidClassNameError(obj_name)
-            self._parse_file(self.raw_obj, obj_name, path_parts)
+                    validate_obj_name = True
+            if validate_obj_name and not self.model_resolver.validate_name(obj_name):
+                raise InvalidClassNameError(obj_name)
+            self._parse_file(self.raw_obj, obj_name, path_parts, preserve_root_class_name=preserve_root_class_name)
 
         self._resolve_unparsed_json_pointer()
         self._generate_forced_base_models()
@@ -5336,13 +5367,15 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
 
         self.parse_raw_obj(model_name, models, [*path_parts, f"#/{reference_paths[0]}", *reference_paths[1:]])
 
-    def _parse_file(  # noqa: PLR0912, PLR0914, PLR0915
+    def _parse_file(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
         self,
         raw: dict[str, Any],
         obj_name: str,
         path_parts: list[str],
         object_paths: list[str] | None = None,
         reference_paths: list[str] | None = None,
+        *,
+        preserve_root_class_name: bool = False,
     ) -> None:
         """Parse a file containing JSON Schema definitions and references."""
         object_paths = [o for o in object_paths or [] if o]
@@ -5355,13 +5388,19 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             else path_parts
         )
         with self.model_resolver.current_root_context(path_parts):
-            obj_name = self.model_resolver.add(path, obj_name, unique=False, class_name=True).name
+            obj_name = self.model_resolver.add(
+                path,
+                obj_name,
+                unique=False,
+                class_name=True,
+                preserve_class_name=preserve_root_class_name,
+            ).name
             with self.root_id_context(raw):
                 # Some jsonschema docs include attribute self to have include version details
                 raw.pop("self", None)
                 # parse $id before parsing $ref
                 root_obj = self._validate_schema_object(raw, path_parts or ["#"])
-                self.parse_id(root_obj, path_parts)
+                self.parse_id(root_obj, [*path_parts, "#"] if path_parts else ["#"])
                 if root_obj.recursiveAnchor:
                     root_key = tuple(path_parts)
                     self._recursive_anchor_index.setdefault(root_key, []).append("#")

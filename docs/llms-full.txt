@@ -16,7 +16,7 @@ Source: https://datamodel-code-generator.koxudaxi.dev/
 
 ## ✨ What it does
 
-- 📄 Converts **OpenAPI 3**, **AsyncAPI**, **JSON Schema**, **Apache Avro**, **XML Schema**, **Protocol Buffers/gRPC**, **GraphQL**, and raw data (JSON/YAML/CSV) into Python models
+- 📄 Converts **OpenAPI 3**, **AsyncAPI**, **JSON Schema**, **Apache Avro**, **XML Schema**, **Protocol Buffers/gRPC**, **GraphQL**, **MCP tool schemas**, and raw data (JSON/YAML/CSV) into Python models
 - 🐍 Generates from **existing Python types** (Pydantic, dataclass, TypedDict) via `--input-model`
 - 🎯 Generates **Pydantic v2**, **Pydantic v2 dataclass**, **dataclasses**, **TypedDict**, or **msgspec** output
 - 🔗 Handles complex schemas: `$ref`, `allOf`, `oneOf`, `anyOf`, enums, and nested types
@@ -42,7 +42,7 @@ Generate models in your browser without installing anything.
 
 ## 📦 Installation
 
-=== "uv tool (Recommended)"
+=== "uv tool (Recommended for CLI use)"
 
     ```bash
     uv tool install datamodel-code-generator
@@ -57,7 +57,7 @@ Generate models in your browser without installing anything.
 === "uv (project)"
 
     ```bash
-    uv add datamodel-code-generator
+    uv add --dev datamodel-code-generator
     ```
 
 === "conda"
@@ -77,6 +77,9 @@ Generate models in your browser without installing anything.
     ```bash
     uvx datamodel-codegen --help
     ```
+
+Use `uv tool install` when you want `datamodel-codegen` available as a standalone CLI. Use `uv add --dev` when a project
+or CI workflow should pin the generator version in its lockfile.
 
 ---
 
@@ -115,13 +118,14 @@ datamodel-codegen --input pet.json --input-file-type jsonschema --output-model-t
 
 | Input Type | File Types | Example |
 |------------|------------|---------|
-| 📘 [OpenAPI 3.0/3.1](openapi.md) | `.yaml`, `.json` | API specifications |
+| 📘 [OpenAPI 3.0/3.1/3.2](openapi.md) | `.yaml`, `.json` | API specifications |
 | 📡 [AsyncAPI](asyncapi.md) | `.yaml`, `.json` | Event-driven API specifications |
 | 📋 [JSON Schema](jsonschema.md) | `.json`, `.yaml` | Data validation schemas |
 | 🪶 [Apache Avro](avro.md) | `.avsc`, `.json` | Avro schemas |
 | 🧾 [XML Schema](xmlschema.md) | `.xsd` | XML document schemas |
 | 🧩 [Protocol Buffers / gRPC](protobuf.md) | `.proto` | Protobuf messages and service schemas |
 | 🔷 [GraphQL](graphql.md) | `.graphql` | GraphQL type definitions |
+| 🛠️ [MCP Tool Schemas](mcp-tools.md) | `.json`, `.yaml` | MCP tool input/output schemas |
 | 📊 [JSON/YAML/CSV Data](jsondata.md) | `.json`, `.yaml`, `.csv` | Infer schema from data |
 | 🐍 [Python Models](python-model.md) | `.py` | Pydantic, dataclass, TypedDict |
 
@@ -290,7 +294,7 @@ This documentation is auto-generated from test cases.
 | 📁 [Base Options](base-options.md) | 10 | Input/output configuration |
 | 🔧 [Typing Customization](typing-customization.md) | 30 | Type annotation and import behavior |
 | 🏷️ [Field Customization](field-customization.md) | 26 | Field naming and docstring behavior |
-| 🏗️ [Model Customization](model-customization.md) | 39 | Model generation behavior |
+| 🏗️ [Model Customization](model-customization.md) | 40 | Model generation behavior |
 | 🎨 [Template Customization](template-customization.md) | 22 | Output formatting and custom rendering |
 | 📘 [OpenAPI-only Options](openapi-only-options.md) | 8 | OpenAPI-specific features |
 | 📋 [GraphQL-only Options](graphql-only-options.md) | 1 |  |
@@ -311,6 +315,7 @@ This documentation is auto-generated from test cases.
 - [`--allof-class-hierarchy`](typing-customization.md#allof-class-hierarchy)
 - [`--allof-merge-mode`](typing-customization.md#allof-merge-mode)
 - [`--allow-extra-fields`](model-customization.md#allow-extra-fields)
+- [`--allow-leading-underscore-class-name`](model-customization.md#allow-leading-underscore-class-name)
 - [`--allow-population-by-field-name`](model-customization.md#allow-population-by-field-name)
 - [`--allow-remote-refs`](general-options.md#allow-remote-refs)
 
@@ -749,8 +754,8 @@ The `--input-file-type` flag explicitly sets the input format.
 
 **Important distinction:**
 
-- Use `jsonschema`, `openapi`, `asyncapi`, `graphql`, `xmlschema`, `protobuf`,
-  or `avro` for **schema definition files**
+- Use `jsonschema`, `openapi`, `asyncapi`, `graphql`, `mcp-tools`, `xmlschema`,
+  `protobuf`, or `avro` for **schema definition files**
 - Use `json`, `yaml`, or `csv` for **raw sample data** to automatically infer a schema
 
 For example, if you have a JSON Schema written in YAML format, use `--input-file-type jsonschema`,
@@ -943,7 +948,7 @@ Schema version to use for parsing.
 
 The `--schema-version` option specifies the schema version to use instead of auto-detection.
 Valid values depend on input type: JsonSchema (draft-04, draft-06, draft-07, 2019-09, 2020-12)
-or OpenAPI (3.0, 3.1). Default is 'auto' (detected from $schema or openapi field).
+or OpenAPI (3.0, 3.1, 3.2). Default is 'auto' (detected from $schema or openapi field).
 
 !!! tip "Usage"
 
@@ -1292,6 +1297,7 @@ Source: https://datamodel-code-generator.koxudaxi.dev/cli-reference/model-custom
 | Option | Description |
 |--------|-------------|
 | [`--allow-extra-fields`](#allow-extra-fields) | Allow extra fields in generated Pydantic models (extra='allo... |
+| [`--allow-leading-underscore-class-name`](#allow-leading-underscore-class-name) | Allow an explicitly specified root class name to start with ... |
 | [`--allow-population-by-field-name`](#allow-population-by-field-name) | Allow Pydantic model population by field name (not just alia... |
 | [`--base-class`](#base-class) | Specify a custom base class for generated models. |
 | [`--base-class-map`](#base-class-map) | Specify different base classes for specific models via JSON ... |
@@ -1624,6 +1630,86 @@ The `--allow-extra-fields` flag configures the code generation behavior.
             )
             event: Event | None = None
         ```
+
+---
+
+## `--allow-leading-underscore-class-name` {#allow-leading-underscore-class-name}
+
+Allow an explicitly specified root class name to start with an underscore.
+
+By default, leading underscores in class names are normalized to avoid private
+model names. Use --allow-leading-underscore-class-name together with an explicit
+--class-name when you need the generated root model to preserve that name
+exactly.
+
+**Related:** [`--class-name`](model-customization.md#class-name)
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --class-name __ParsedModel --allow-leading-underscore-class-name --disable-timestamp # (1)!
+    ```
+
+    1. :material-arrow-left: `--allow-leading-underscore-class-name` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```json
+    {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "item": {
+          "$ref": "#/$defs/Item"
+        }
+      },
+      "$defs": {
+        "Status": {
+          "type": "string",
+          "enum": ["active", "inactive"]
+        },
+        "Item": {
+          "type": "object",
+          "properties": {
+            "id": {"type": "integer"},
+            "name": {"type": "string"}
+          }
+        }
+      }
+    }
+    ```
+
+    **Output:**
+
+    ```python
+    # generated by datamodel-codegen:
+    #   filename:  class_name_affix.json
+
+    from __future__ import annotations
+
+    from enum import Enum
+
+    from pydantic import BaseModel
+
+
+    class Status(Enum):
+        active = 'active'
+        inactive = 'inactive'
+
+
+    class Item(BaseModel):
+        id: int | None = None
+        name: str | None = None
+
+
+    class __ParsedModel(BaseModel):
+        status: Status | None = None
+        item: Item | None = None
+    ```
 
 ---
 
@@ -25140,6 +25226,7 @@ datamodel-codegen [OPTIONS]
 | Option | Description |
 |--------|-------------|
 | [`--allow-extra-fields`](model-customization.md#allow-extra-fields) | Allow extra fields in generated Pydantic models (extra='allow'). |
+| [`--allow-leading-underscore-class-name`](model-customization.md#allow-leading-underscore-class-name) | Allow an explicitly specified root class name to start with an underscore. |
 | [`--allow-population-by-field-name`](model-customization.md#allow-population-by-field-name) | Allow Pydantic model population by field name (not just alias). |
 | [`--base-class`](model-customization.md#base-class) | Specify a custom base class for generated models. |
 | [`--base-class-map`](model-customization.md#base-class-map) | Specify different base classes for specific models via JSON mapping. |
@@ -25273,6 +25360,7 @@ All options sorted alphabetically:
 - [`--allof-class-hierarchy`](typing-customization.md#allof-class-hierarchy) - Controls how allOf schemas are represented in the generated ...
 - [`--allof-merge-mode`](typing-customization.md#allof-merge-mode) - Merge constraints from root model references in allOf schema...
 - [`--allow-extra-fields`](model-customization.md#allow-extra-fields) - Allow extra fields in generated Pydantic models (extra='allo...
+- [`--allow-leading-underscore-class-name`](model-customization.md#allow-leading-underscore-class-name) - Allow an explicitly specified root class name to start with ...
 - [`--allow-population-by-field-name`](model-customization.md#allow-population-by-field-name) - Allow Pydantic model population by field name (not just alia...
 - [`--allow-remote-refs`](general-options.md#allow-remote-refs) - Enable fetching of `$ref` targets over HTTP/HTTPS.
 - [`--base-class`](model-customization.md#base-class) - Specify a custom base class for generated models.
@@ -25664,13 +25752,14 @@ Source: https://datamodel-code-generator.koxudaxi.dev/supported-data-types/
 
 This code generator supports the following input formats:
 
-- OpenAPI 3.0/3.1 (YAML/JSON, [OpenAPI Data Type](https://github.com/OAI/OpenAPI-Specification/blob/master/versions/3.0.2.md#data-types)); OpenAPI 2.0 (Swagger) has limited support.
+- OpenAPI 3.0/3.1/3.2 (YAML/JSON, [OpenAPI Data Types](https://spec.openapis.org/oas/v3.2.0.html#data-types)); OpenAPI 2.0 (Swagger) has limited support.
 - [AsyncAPI](asyncapi.md) 2.x/3.x (YAML/JSON).
-- JSON Schema ([JSON Schema Core](https://json-schema.org/draft/2019-09/json-schema-core.html) / [JSON Schema Validation](https://json-schema.org/draft/2019-09/json-schema-validation.html)).
+- JSON Schema ([JSON Schema Core](https://json-schema.org/draft/2020-12/json-schema-core.html) / [JSON Schema Validation](https://json-schema.org/draft/2020-12/json-schema-validation.html)).
 - Apache Avro schema (`.avsc`, [Apache Avro](avro.md)).
 - [XML Schema](xmlschema.md) (XSD).
 - Protocol Buffers / gRPC (`.proto`, [Protocol Buffers / gRPC](protobuf.md)).
 - GraphQL schema ([GraphQL Schemas and Types](https://graphql.org/learn/schema/)).
+- MCP tool schemas (`--input-file-type mcp-tools`, [MCP Tool Schemas](mcp-tools.md)).
 - JSON / YAML / CSV data (converted to JSON Schema before model generation).
 - Python dictionary (converted to JSON Schema before model generation).
 - Existing Python types via [`--input-model`](python-model.md): Pydantic models, dataclasses, Pydantic dataclasses, TypedDict, and dict schemas.
@@ -25787,7 +25876,7 @@ datamodel-code-generator automatically detects the JSON Schema version:
 
 1. **Explicit `$schema` field**: If present, the version is detected from the URL pattern
 2. **Heuristics**: If no `$schema`, presence of `$defs` suggests 2020-12, `definitions` suggests Draft 7
-3. **Fallback**: Draft 7 (most widely used)
+3. **Fallback**: Draft 7 (backward-compatible default)
 
 ## OpenAPI Version Support
 
@@ -25797,27 +25886,28 @@ datamodel-code-generator automatically detects the JSON Schema version:
 |---------|----------|------------------|
 | 3.0.x | [spec.openapis.org/oas/v3.0.3](https://spec.openapis.org/oas/v3.0.3) | Draft 5 (subset) |
 | 3.1.x | [spec.openapis.org/oas/v3.1.0](https://spec.openapis.org/oas/v3.1.0) | 2020-12 (full) |
+| 3.2.x | [spec.openapis.org/oas/v3.2.0](https://spec.openapis.org/oas/v3.2.0) | 2020-12 (full) |
 
 > **Note**: OpenAPI 2.0 (Swagger) support is limited. We recommend converting to OpenAPI 3.0+.
 
 ### Feature Compatibility Matrix
 
-| Feature | OAS 3.0 | OAS 3.1 |
-|---------|---------|---------|
-| **Schema Base** | JSON Schema Draft 5 (subset) | JSON Schema 2020-12 (full) |
-| **Definitions Path** | `#/components/schemas` | `#/components/schemas` |
-| **Nullable** |
-| `nullable: true` keyword | Yes | Deprecated |
-| Null in type array | - | Yes |
-| Type as array | - | Yes |
-| **Array Features** |
-| prefixItems | - | Yes |
-| **Boolean Schemas** | - | Yes |
-| **OpenAPI Specific** |
-| discriminator | Yes | Yes |
-| binary format | Yes | Yes |
-| password format | Yes | Yes |
-| webhooks | - | Yes |
+| Feature | OAS 3.0 | OAS 3.1 | OAS 3.2 |
+|---------|---------|---------|---------|
+| **Schema Base** | JSON Schema Draft 5 (subset) | JSON Schema 2020-12 (full) | JSON Schema 2020-12 (full) |
+| **Definitions Path** | `#/components/schemas` | `#/components/schemas` | `#/components/schemas` |
+| **Nullable** | | | |
+| `nullable: true` keyword | Yes | Deprecated | Deprecated |
+| Null in type array | - | Yes | Yes |
+| Type as array | - | Yes | Yes |
+| **Array Features** | | | |
+| prefixItems | - | Yes | Yes |
+| **Boolean Schemas** | - | Yes | Yes |
+| **OpenAPI Specific** | | | |
+| discriminator | Yes | Yes | Yes |
+| binary format | Yes | Yes | Yes |
+| password format | Yes | Yes | Yes |
+| webhooks | - | Yes | Yes |
 
 ### Version Detection
 
@@ -25825,6 +25915,7 @@ datamodel-code-generator detects the OpenAPI version from the `openapi` field:
 
 - `openapi: "3.0.x"` -> OpenAPI 3.0
 - `openapi: "3.1.x"` -> OpenAPI 3.1
+- `openapi: "3.2.x"` -> OpenAPI 3.2
 - No `openapi` field -> Fallback to OpenAPI 3.1
 
 ## AsyncAPI Version Support
@@ -25869,6 +25960,19 @@ datamodel-code-generator detects the AsyncAPI version from the `asyncapi` field:
 - `asyncapi: "2.x.y"` -> AsyncAPI 2.x
 - `asyncapi: "3.x.y"` -> AsyncAPI 3.x
 - Unknown versions fall back to the 3.x schema behavior unless `--schema-version` is set explicitly
+
+## MCP Tool Schema Profile Support
+
+MCP tool schema profile documents are supported with `--input-file-type mcp-tools`. This input type is experimental and converts MCP tool `inputSchema` and `outputSchema` entries into JSON Schema definitions before model generation.
+
+Supported source shapes include:
+
+- `tools/list` JSON-RPC responses with `result.tools`;
+- MCP server definitions with a top-level `tools` array;
+- single tool definitions or arrays of tool definitions;
+- JSON Schema documents whose `$defs` or `definitions` values are tool definitions.
+
+Each generated definition is named from the tool `name` plus `Input` or `Output`, for example `SearchInput`, `SearchOutput`, and `CreateIssueInput`.
 
 ## Protocol Buffers Version Support
 
@@ -25953,7 +26057,7 @@ The following features are tracked in the codebase with their implementation sta
 | `if/then/else` | Draft 7 | ❌ Not Supported | Conditional schema validation |
 | `contentMediaType/contentEncoding` | Draft 7 | ⚠️ Partial | Content type and encoding hints for strings |
 | `contentSchema` | 2019-09 | ⚠️ Partial | Schema for decoded string content |
-| `$anchor` | 2019-09 | ❌ Not Supported | Location-independent schema references |
+| `$anchor` | 2019-09 | ✅ Supported | Location-independent schema references |
 | `$vocabulary` | 2019-09 | ❌ Not Supported | Vocabulary declarations for meta-schemas |
 | `unevaluatedProperties` | 2019-09 | ⚠️ Partial | Additional properties not evaluated by subschemas |
 | `unevaluatedItems` | 2019-09 | ⚠️ Partial | Additional items not evaluated by subschemas |
@@ -25970,6 +26074,9 @@ The following features are tracked in the codebase with their implementation sta
 | `discriminator` | OAS 3.0 | ✅ Supported | Polymorphism support via `discriminator` keyword |
 | `webhooks` | OAS 3.1 | ✅ Supported | Top-level webhooks object for incoming events |
 | `$ref with sibling keywords` | OAS 3.1 | ⚠️ Partial | $ref can coexist with description, summary (no allOf workaround) |
+| `itemSchema` | OAS 3.2 | ✅ Supported | Media Type Object item schema for sequential media |
+| `$self` | OAS 3.2 | ✅ Supported | Root document URI for relative and absolute reference resolution |
+| `querystring` | OAS 3.2 | ✅ Supported | Query string parameter object without a parameter name |
 | `xml` | OAS 3.0 | ⚠️ Partial | XML serialization metadata (name, namespace, prefix) |
 | `externalDocs` | OAS 3.0 | ⚠️ Partial | Reference to external documentation |
 | `links` | OAS 3.0 | ❌ Not Supported | Links between operations |
@@ -26024,7 +26131,6 @@ The following features are tracked in the codebase with their implementation sta
 
 | Feature | Introduced | Status | Notes |
 |---------|------------|--------|-------|
-| `$anchor` | 2019-09 | ❌ Not supported | Use `$ref` with `$id` instead |
 | `contains` | Draft 6 | ⚠️ Partial | Count constraints are modeled when `contains` matches every item |
 | `unevaluatedProperties` | 2019-09 | ⚠️ Partial | Boolean values and schema-valued extra allowance are modeled |
 | `unevaluatedItems` | 2019-09 | ⚠️ Partial | Boolean values and schema-valued array item types are modeled |
@@ -27125,6 +27231,110 @@ Some protobuf constructs are parsed only as needed for data model generation. Op
 - 🖥️ [CLI Reference](cli-reference/index.md) - Complete CLI options reference
 - 📊 [Supported Data Types](supported-data-types.md) - Data type support details
 - 📋 [Generate from JSON Schema](jsonschema.md) - JSON Schema input documentation
+
+---
+
+# Generate from MCP Tool Schemas
+
+Source: https://datamodel-code-generator.koxudaxi.dev/mcp-tools/
+
+Generate Python models from Model Context Protocol (MCP) tool schema profiles.
+
+!!! warning "Experimental"
+    MCP tool schema profile input support is experimental. The MCP specification and real-world tool schema shapes may
+    evolve, so generated behavior may change as compatibility is expanded.
+
+## Quick Start
+
+```bash
+datamodel-codegen \
+    --input tools-list.json \
+    --input-file-type mcp-tools \
+    --output-model-type pydantic_v2.BaseModel \
+    --output model.py
+```
+
+## Supported Input Shapes
+
+The `mcp-tools` input type accepts:
+
+- a `tools/list` JSON-RPC response containing `result.tools`;
+- an MCP server definition containing a top-level `tools` array;
+- a single tool definition or an array of tool definitions;
+- JSON Schema documents whose `$defs` or `definitions` values are tool definitions.
+
+Each tool must define `name` and `inputSchema`. If `outputSchema` is present, it is generated too.
+
+## Example
+
+**tools-list.json**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "tools": [
+      {
+        "name": "search",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": { "type": "string" }
+          },
+          "required": ["query"]
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "results": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          },
+          "required": ["results"]
+        }
+      }
+    ]
+  }
+}
+```
+
+**Generated model.py**
+```python
+from __future__ import annotations
+
+from pydantic import BaseModel
+
+
+class SearchInput(BaseModel):
+    query: str
+
+
+class SearchOutput(BaseModel):
+    results: list[str]
+```
+
+## Naming
+
+Tool names are converted to PascalCase and suffixed with `Input` or `Output`.
+
+For example:
+
+| Tool name | Generated input model | Generated output model |
+|-----------|-----------------------|------------------------|
+| `search` | `SearchInput` | `SearchOutput` |
+| `create_issue` | `CreateIssueInput` | `CreateIssueOutput` |
+
+## Notes
+
+MCP `inputSchema` and `outputSchema` entries are converted into JSON Schema definitions before generation. Local
+`$defs` and `definitions` entries inside a tool schema are hoisted and prefixed to avoid collisions between tools.
+
+## See Also
+
+- [MCP Tools specification](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)
+- [MCP Schema reference](https://modelcontextprotocol.io/specification/2025-06-18/schema)
+- [Generate from JSON Schema](jsonschema.md)
 
 ---
 
@@ -30483,6 +30693,7 @@ datamodel-codegen --input openapi.yaml --output models/ \
 |-----------------|---------|
 | 3.0.x | Full support |
 | 3.1.x | Full support |
+| 3.2.x | Full support |
 | 2.0 (Swagger) | Partial support |
 
 ---
@@ -31234,14 +31445,15 @@ cat openapi.yaml | yq '.components.schemas.User' | \
 |--------|---------|----------|
 | **uvx** | `uvx datamodel-codegen` | One-liner usage, no installation |
 | **pipx run** | `pipx run datamodel-code-generator` | One-liner usage, alternative to uvx |
+| **uv tool install** | `uv tool install datamodel-code-generator` | Standalone CLI installation |
 | **pipx install** | `pipx install datamodel-code-generator` | Global installation, frequent usage |
-| **uv add** | `uv add datamodel-code-generator` | Project dependency |
+| **uv add --dev** | `uv add --dev datamodel-code-generator` | Pinned project/CI dependency |
 | **pip install** | `pip install datamodel-code-generator` | Traditional installation |
 
 !!! tip "When to use each method"
     - **uvx/pipx run**: Quick one-liner generation, testing different versions
-    - **pipx install**: Frequent CLI usage across multiple projects
-    - **uv add/pip install**: Project dependency, CI/CD pipelines, programmatic usage
+    - **uv tool install/pipx install**: Frequent CLI usage across multiple projects
+    - **uv add --dev/pip install**: Project dependency, CI/CD pipelines, programmatic usage
 
 ---
 
@@ -32007,7 +32219,7 @@ By default, the action runs in **check mode** (`--check`), which validates that 
 |-------|----------|---------|-------------|
 | `input` | Yes | - | Input schema file or directory |
 | `output` | Yes | - | Output file or directory |
-| `input-file-type` | Yes | - | Input file type (`openapi`, `jsonschema`, `xmlschema`, `avro`, `json`, `yaml`, `csv`, `graphql`) |
+| `input-file-type` | Yes | - | Input file type (`openapi`, `asyncapi`, `jsonschema`, `mcp-tools`, `xmlschema`, `graphql`, `protobuf`, `avro`, `json`, `yaml`, `csv`) |
 | `output-model-type` | Yes | - | Output model type (`pydantic_v2.BaseModel`, `pydantic_v2.dataclass`, `dataclasses.dataclass`, `typing.TypedDict`, `msgspec.Struct`) |
 | `check` | No | `true` | Validate that existing output is up to date (no generation) |
 | `working-directory` | No | `.` | Working directory (where `pyproject.toml` is located) |
@@ -32280,6 +32492,9 @@ If your project uses [uv](https://github.com/astral-sh/uv), you can run the CLI 
 - name: Verify generated models are up-to-date
   run: uv run --with datamodel-code-generator datamodel-codegen --profile api --check
 ```
+
+If you want the generator version pinned in your project lockfile, add it once with `uv add --dev datamodel-code-generator`
+and run `uv run datamodel-codegen --profile api --check` in CI.
 
 ---
 
@@ -32734,6 +32949,7 @@ This page lists features that are available but still experimental.
 | `formatter.builtin` | formatter | `--formatters builtin` | 0.59.0 | - |
 | `input-format.asyncapi` | input-format | `--input-file-type asyncapi` | 0.59.0 | - |
 | `input-format.avro` | input-format | `--input-file-type avro` | 0.59.0 | - |
+| `input-format.mcp-tools` | input-format | `--input-file-type mcp-tools` | 0.60.0 | - |
 | `input-format.protobuf` | input-format | `--input-file-type protobuf` | 0.59.0 | - |
 | `input-format.xmlschema` | input-format | `--input-file-type xmlschema` | 0.59.0 | - |
 
@@ -32768,6 +32984,16 @@ The parser focuses on message payload model generation from AsyncAPI documents.
 Apache Avro schema input support is experimental and may change as real-world usage is validated.
 
 The parser generates Python models from Avro schemas; it does not provide Avro runtime validation.
+
+### `input-format.mcp-tools`
+
+- **Kind:** input-format
+- **Target:** `--input-file-type mcp-tools`
+- **Since:** 0.60.0
+
+MCP tool schema profile input support is experimental and may change as MCP schemas evolve.
+
+The input is converted from MCP tool inputSchema/outputSchema entries into JSON Schema definitions before model generation.
 
 ### `input-format.protobuf`
 

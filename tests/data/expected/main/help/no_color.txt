@@ -52,12 +52,12 @@ Options:
                         Timeout in seconds for HTTP requests to remote hosts
                         (default: 30)
   --input INPUT         Input file/directory (default: stdin)
-  --input-file-type {auto,openapi,asyncapi,jsonschema,xmlschema,protobuf,avro,json,yaml,dict,csv,graphql}
+  --input-file-type {auto,openapi,asyncapi,jsonschema,mcp-tools,xmlschema,protobuf,avro,json,yaml,dict,csv,graphql}
                         Input file type (default: auto). Use 'jsonschema',
-                        'openapi', 'asyncapi', 'graphql', 'xmlschema',
-                        'protobuf', or 'avro' for schema definitions. Use
-                        'json', 'yaml', or 'csv' for raw sample data to infer
-                        a schema automatically.
+                        'openapi', 'asyncapi', 'graphql', 'mcp-tools',
+                        'xmlschema', 'protobuf', or 'avro' for schema
+                        definitions. Use 'json', 'yaml', or 'csv' for raw
+                        sample data to infer a schema automatically.
   --input-model MODULE:NAME
                         Python import path to a Pydantic v2 model or schema
                         dict (e.g., 'mypackage.module:ClassName' or
@@ -78,11 +78,12 @@ Options:
   --schema-version SCHEMA_VERSION
                         Schema version. Valid values depend on input type:
                         JsonSchema: auto, draft-04, draft-06, draft-07,
-                        2019-09, 2020-12. OpenAPI: auto, 3.0, 3.1. AsyncAPI:
-                        auto, 2.0, 3.0. XMLSchema: auto, 1.0, 1.1. Protobuf:
-                        auto, proto2, proto3, 2023. (default: auto - detected
-                        from $schema, openapi/asyncapi field, XML Schema
-                        versioning attributes, or Protobuf syntax/edition)
+                        2019-09, 2020-12. OpenAPI: auto, 3.0, 3.1, 3.2.
+                        AsyncAPI: auto, 2.0, 3.0. XMLSchema: auto, 1.0, 1.1.
+                        Protobuf: auto, proto2, proto3, 2023. (default: auto -
+                        detected from $schema, openapi/asyncapi field, XML
+                        Schema versioning attributes, or Protobuf
+                        syntax/edition)
   --schema-version-mode {lenient,strict}
                         Schema version validation mode. 'lenient': accept all
                         features regardless of version (default). 'strict':
@@ -292,6 +293,9 @@ Model customization:
                         'recursive': export from all descendant modules.
   --allow-extra-fields  Deprecated: --allow-extra-fields is deprecated. Use
                         --extra-fields=allow instead.
+  --allow-leading-underscore-class-name
+                        Allow an explicitly specified root class name to start
+                        with an underscore
   --allow-population-by-field-name
                         Allow population by field name
   --class-name CLASS_NAME
