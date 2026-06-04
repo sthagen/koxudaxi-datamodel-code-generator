@@ -4,7 +4,7 @@ Source: https://datamodel-code-generator.koxudaxi.dev/
 
 🚀 Generate Python data models from schema definitions in seconds.
 
-[![PyPI version](https://badge.fury.io/py/datamodel-code-generator.svg)](https://pypi.python.org/pypi/datamodel-code-generator)
+[![PyPI version](https://img.shields.io/pypi/v/datamodel-code-generator.svg)](https://pypi.python.org/pypi/datamodel-code-generator)
 [![Conda-forge](https://img.shields.io/conda/v/conda-forge/datamodel-code-generator)](https://anaconda.org/conda-forge/datamodel-code-generator)
 [![Downloads](https://api.pepy.tech/badge/datamodel-code-generator/month)](https://pepy.tech/projects/datamodel-code-generator)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/datamodel-code-generator)](https://pypi.python.org/pypi/datamodel-code-generator)
@@ -33426,12 +33426,14 @@ the resulting `git diff` before committing. See the inline-snapshot
 [`--inline-snapshot` pytest options](https://15r10nk.github.io/inline-snapshot/latest/pytest/#-inline-snapshotcreatefixtrimupdate)
 for the meaning of `create` and `fix`.
 
-Direct `assert` statements are blocked in the guarded E2E test modules by
-`tests/test_assert_helper_usage.py`. If you add a new E2E test file that checks
-generated output, add it to `E2E_TEST_PATHS` in that guard test so new direct
-assertions are also rejected. Only use `@pytest.mark.allow_direct_assert` for
-cases that cannot reasonably be expressed with the shared helpers, such as
-mock setup internals or narrow intermediate-state checks.
+Direct `assert` statements are blocked in guarded test modules by
+`tests/test_assert_helper_usage.py`. New test files are guarded by default; add
+legacy or unit-focused files to
+`assert_helper_direct_assert_exempt_files` in `pyproject.toml` only when they
+are intentionally outside the generated-output helper policy. Use
+`@pytest.mark.allow_direct_assert` for narrow in-file exceptions that cannot
+reasonably be expressed with the shared helpers, such as external-request mock
+checks or intermediate-state checks.
 
 ## Parser generation state
 

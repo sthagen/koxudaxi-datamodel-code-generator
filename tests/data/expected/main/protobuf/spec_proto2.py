@@ -44,8 +44,10 @@ class ExampleSpecProto2SpecProto2(BaseModel):
     not_a_number: float | None = nan
     enabled: bool | None = False
     single_quoted: str | None = 'single'
-    escaped_bytes: bytes | None = '\\001\\002'
-    state: ExampleSpecProto2Proto2State | None = 'PROTO2_ACTIVE'
+    escaped_bytes: bytes | None = b'\x01\x02'
+    state: ExampleSpecProto2Proto2State | None = (
+        ExampleSpecProto2Proto2State.PROTO2_ACTIVE
+    )
     tags: list[str] | None = []
     packed_numbers: list[int] | None = []
     children: dict[str, ExampleSpecProto2SpecProto2Proto2Child] | None = Field(

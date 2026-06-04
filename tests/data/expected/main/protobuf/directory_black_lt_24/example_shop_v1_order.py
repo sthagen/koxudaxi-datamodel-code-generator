@@ -36,7 +36,7 @@ class ExampleShopV1Order(BaseModel):
     sfixed32_value: int | None = 0
     sfixed64_value: int | None = 0
     active: bool | None = False
-    payload: bytes | None = ''
+    payload: bytes | None = b''
     tags: list[str] | None = []
     items: dict[
         str, example_shop_v1_order_line_item.ExampleShopV1OrderLineItem
@@ -45,7 +45,9 @@ class ExampleShopV1Order(BaseModel):
         example_shop_v1_order_line_item.ExampleShopV1OrderLineItem
     ] | None = Field([], validate_default=True)
     shipping_address: example_common_address.ExampleCommonAddress | None = None
-    status: example_common_status.ExampleCommonStatus | None = 'STATUS_UNSPECIFIED'
+    status: example_common_status.ExampleCommonStatus | None = (
+        example_common_status.ExampleCommonStatus.STATUS_UNSPECIFIED
+    )
     created_at: AwareDatetime | None = None
     ttl: timedelta | None = None
     metadata: dict[str, Any] | None = None

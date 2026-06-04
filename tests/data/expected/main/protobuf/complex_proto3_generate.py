@@ -63,7 +63,7 @@ class ExampleShopV1Order(BaseModel):
     sfixed32_value: int | None = 0
     sfixed64_value: int | None = 0
     active: bool | None = False
-    payload: bytes | None = ''
+    payload: bytes | None = b''
     tags: list[str] | None = []
     items: dict[str, ExampleShopV1OrderLineItem] | None = Field(
         {}, validate_default=True
@@ -72,7 +72,7 @@ class ExampleShopV1Order(BaseModel):
         [], validate_default=True
     )
     shipping_address: ExampleCommonAddress | None = None
-    status: ExampleCommonStatus | None = 'STATUS_UNSPECIFIED'
+    status: ExampleCommonStatus | None = ExampleCommonStatus.STATUS_UNSPECIFIED
     created_at: AwareDatetime | None = None
     ttl: timedelta | None = None
     metadata: dict[str, Any] | None = None
