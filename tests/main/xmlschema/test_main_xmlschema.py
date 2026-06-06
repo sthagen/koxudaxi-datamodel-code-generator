@@ -57,6 +57,72 @@ def test_main_xmlschema_edge_cases(output_file: Path) -> None:
     )
 
 
+def test_main_xmlschema_fixed_decimal(output_file: Path) -> None:
+    """Generate Decimal defaults for fixed XML Schema decimal values."""
+    run_main_and_assert(
+        input_path=XML_SCHEMA_DATA_PATH / "fixed_decimal.xsd",
+        output_path=output_file,
+        input_file_type="xmlschema",
+        assert_func=assert_file_content,
+        expected_file="fixed_decimal.py",
+    )
+
+
+def test_main_xmlschema_special_float_defaults(output_file: Path) -> None:
+    """Generate non-finite float defaults from XML Schema lexical values."""
+    run_main_and_assert(
+        input_path=XML_SCHEMA_DATA_PATH / "special_float_defaults.xsd",
+        output_path=output_file,
+        input_file_type="xmlschema",
+        assert_func=assert_file_content,
+        expected_file="special_float_defaults.py",
+    )
+
+
+def test_main_xmlschema_special_float_bounds(output_file: Path) -> None:
+    """Generate non-finite float bounds from XML Schema lexical values."""
+    run_main_and_assert(
+        input_path=XML_SCHEMA_DATA_PATH / "special_float_bounds.xsd",
+        output_path=output_file,
+        input_file_type="xmlschema",
+        assert_func=assert_file_content,
+        expected_file="special_float_bounds.py",
+    )
+
+
+def test_main_xmlschema_union_defaults(output_file: Path) -> None:
+    """Generate typed defaults for XML Schema union values."""
+    run_main_and_assert(
+        input_path=XML_SCHEMA_DATA_PATH / "union_defaults.xsd",
+        output_path=output_file,
+        input_file_type="xmlschema",
+        assert_func=assert_file_content,
+        expected_file="union_defaults.py",
+    )
+
+
+def test_main_xmlschema_boolean_whitespace_defaults(output_file: Path) -> None:
+    """Generate boolean defaults after XML Schema whitespace normalization."""
+    run_main_and_assert(
+        input_path=XML_SCHEMA_DATA_PATH / "boolean_whitespace_defaults.xsd",
+        output_path=output_file,
+        input_file_type="xmlschema",
+        assert_func=assert_file_content,
+        expected_file="boolean_whitespace_defaults.py",
+    )
+
+
+def test_main_xmlschema_temporal_defaults(output_file: Path) -> None:
+    """Generate typed defaults for XML Schema temporal lexical values."""
+    run_main_and_assert(
+        input_path=XML_SCHEMA_DATA_PATH / "temporal_defaults.xsd",
+        output_path=output_file,
+        input_file_type="xmlschema",
+        assert_func=assert_file_content,
+        expected_file="temporal_defaults.py",
+    )
+
+
 def test_main_xmlschema_single_root_same_name(output_file: Path) -> None:
     """Inline a single root type when no other definition references it."""
     run_main_and_assert(
@@ -197,6 +263,17 @@ def test_main_xmlschema_spec_constructs(output_file: Path) -> None:
         input_file_type="xmlschema",
         assert_func=assert_file_content,
         expected_file="spec_constructs.py",
+    )
+
+
+def test_main_xmlschema_list_defaults(output_file: Path) -> None:
+    """Generate list-typed defaults from XML Schema list lexical values."""
+    run_main_and_assert(
+        input_path=XML_SCHEMA_DATA_PATH / "list_defaults.xsd",
+        output_path=output_file,
+        input_file_type="xmlschema",
+        assert_func=assert_file_content,
+        expected_file="list_defaults.py",
     )
 
 
@@ -472,6 +549,41 @@ def test_main_xmlschema_builtin_datatypes_matrix(output_file: Path) -> None:
         input_file_type="xmlschema",
         assert_func=assert_file_content,
         expected_file="builtin_datatypes_matrix.py",
+    )
+
+
+def test_main_xmlschema_datetime_classes_default(output_file: Path) -> None:
+    """Use XML Schema datetime defaults when no datetime class option is set."""
+    run_main_and_assert(
+        input_path=XML_SCHEMA_DATA_PATH / "datetime_classes.xsd",
+        output_path=output_file,
+        input_file_type="xmlschema",
+        assert_func=assert_file_content,
+        expected_file="datetime_classes.py",
+    )
+
+
+def test_main_xmlschema_datetime_classes_naive(output_file: Path) -> None:
+    """Respect an explicit NaiveDatetime class for XML Schema date-time types."""
+    run_main_and_assert(
+        input_path=XML_SCHEMA_DATA_PATH / "datetime_classes.xsd",
+        output_path=output_file,
+        input_file_type="xmlschema",
+        assert_func=assert_file_content,
+        expected_file="datetime_classes_naive.py",
+        extra_args=["--output-datetime-class", "NaiveDatetime"],
+    )
+
+
+def test_main_xmlschema_datetime_classes_aware(output_file: Path) -> None:
+    """Respect an explicit AwareDatetime class for XML Schema date-time types."""
+    run_main_and_assert(
+        input_path=XML_SCHEMA_DATA_PATH / "datetime_classes.xsd",
+        output_path=output_file,
+        input_file_type="xmlschema",
+        assert_func=assert_file_content,
+        expected_file="datetime_classes_aware.py",
+        extra_args=["--output-datetime-class", "AwareDatetime"],
     )
 
 
