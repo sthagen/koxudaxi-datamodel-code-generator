@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import socket
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
 import pytest
 
 from datamodel_code_generator import SchemaFetchError
-from datamodel_code_generator.http import get_body
+from datamodel_code_generator.http import MAX_HTTP_REDIRECTS, get_body
 
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
@@ -58,6 +59,193 @@ def test_get_body_succeeds_without_content_type(mocker: MockerFixture) -> None:
 
     result = get_body("https://example.com/schema.json")
     assert result == '{"type": "object"}'
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1/schema.json",
+        "http://127.1/schema.json",
+        "http://2130706433/schema.json",
+        "http://0x7f000001/schema.json",
+        "http://0177.0.0.1/schema.json",
+        "http://[::1]/schema.json",
+        "http://169.254.169.254/latest/meta-data",
+        "http://localhost/schema.json",
+        "http://schema.localhost/schema.json",
+    ],
+)
+def test_get_body_blocks_unsafe_url_hosts(mocker: MockerFixture, url: str) -> None:
+    """Block local and private network targets before fetching."""
+    mock_get = mocker.patch("httpx.get")
+
+    with pytest.raises(SchemaFetchError, match="--allow-private-network"):
+        get_body(url)
+    assert mock_get.call_count == 0
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.1/schema.json",
+        "http://2130706433/schema.json",
+        "http://0x7f000001/schema.json",
+        "http://0177.0.0.1/schema.json",
+    ],
+)
+def test_get_body_blocks_unsafe_ipv4_literals_without_dns(mocker: MockerFixture, url: str) -> None:
+    """Block legacy IPv4 literals without depending on platform DNS behavior."""
+    mocker.patch("socket.getaddrinfo", side_effect=OSError)
+    mock_get = mocker.patch("httpx.get")
+
+    with pytest.raises(SchemaFetchError, match="--allow-private-network"):
+        get_body(url)
+    assert mock_get.call_count == 0
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.1/schema.json",
+        "http://1.2.3.4.5/schema.json",
+        "http://256.0.0.1/schema.json",
+    ],
+)
+def test_get_body_handles_legacy_ipv4_literal_boundaries(mocker: MockerFixture, url: str) -> None:
+    """Cover legacy IPv4 parser boundary cases without platform DNS behavior."""
+    mocker.patch("socket.getaddrinfo", side_effect=OSError)
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.text = '{"type": "object"}'
+    mock_get = mocker.patch("httpx.get", return_value=mock_response)
+
+    if url == "http://127.0.1/schema.json":
+        with pytest.raises(SchemaFetchError, match="--allow-private-network"):
+            get_body(url)
+        assert mock_get.call_count == 0
+    else:
+        result = get_body(url)
+        assert result == '{"type": "object"}'
+        assert mock_get.call_count == 1
+
+
+def test_get_body_allows_unsafe_url_host_with_explicit_opt_in(mocker: MockerFixture) -> None:
+    """Allow trusted private network targets only when explicitly requested."""
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.text = '{"type": "object"}'
+    mock_get = mocker.patch("httpx.get", return_value=mock_response)
+
+    result = get_body("http://127.0.0.1/schema.json", allow_private_network=True)
+
+    assert result == '{"type": "object"}'
+    assert mock_get.call_count == 1
+
+
+def test_get_body_blocks_hostname_resolving_to_unsafe_ip(mocker: MockerFixture) -> None:
+    """Block hostnames that resolve to local or private network targets."""
+    mocker.patch(
+        "socket.getaddrinfo",
+        return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 0))],
+    )
+    mock_get = mocker.patch("httpx.get")
+
+    with pytest.raises(SchemaFetchError, match="--allow-private-network"):
+        get_body("https://metadata.example.com/schema.json")
+    assert mock_get.call_count == 0
+
+
+def test_get_body_blocks_redirect_to_unsafe_url(mocker: MockerFixture) -> None:
+    """Validate redirect targets before the next request."""
+    mock_response = Mock()
+    mock_response.status_code = 302
+    mock_response.headers = {"location": "http://127.0.0.1/schema.json"}
+    mock_get = mocker.patch("httpx.get", return_value=mock_response)
+
+    with pytest.raises(SchemaFetchError, match="--allow-private-network"):
+        get_body("https://example.com/schema.json")
+    assert mock_get.call_count == 1
+
+
+def test_get_body_allows_redirect_to_unsafe_url_with_explicit_opt_in(mocker: MockerFixture) -> None:
+    """Allow trusted redirects to private network targets only when explicitly requested."""
+    redirect_response = Mock()
+    redirect_response.status_code = 302
+    redirect_response.headers = {"location": "http://127.0.0.1/schema.json"}
+    success_response = Mock()
+    success_response.status_code = 200
+    success_response.headers = {"content-type": "application/json"}
+    success_response.text = '{"type": "object"}'
+    mock_get = mocker.patch("httpx.get", side_effect=[redirect_response, success_response])
+
+    result = get_body("https://example.com/schema.json", allow_private_network=True)
+
+    assert result == '{"type": "object"}'
+    assert [call.args[0] for call in mock_get.call_args_list] == [
+        "https://example.com/schema.json",
+        "http://127.0.0.1/schema.json",
+    ]
+
+
+def test_get_body_follows_relative_redirect(mocker: MockerFixture) -> None:
+    """Follow safe relative redirects."""
+    redirect_response = Mock()
+    redirect_response.status_code = 302
+    redirect_response.headers = {"location": "schema.json"}
+    success_response = Mock()
+    success_response.status_code = 200
+    success_response.headers = {"content-type": "application/json"}
+    success_response.text = '{"type": "object"}'
+    mock_get = mocker.patch("httpx.get", side_effect=[redirect_response, success_response])
+
+    result = get_body(
+        "https://example.com/schemas/root.json",
+        query_parameters=[("version", "v2")],
+    )
+
+    assert result == '{"type": "object"}'
+    assert [call.args[0] for call in mock_get.call_args_list] == [
+        "https://example.com/schemas/root.json",
+        "https://example.com/schemas/schema.json",
+    ]
+    assert mock_get.call_args_list[0].kwargs["params"] == [("version", "v2")]
+    assert mock_get.call_args_list[1].kwargs["params"] is None
+
+
+@pytest.mark.parametrize("url", ["ftp://example.com/schema.json", "https:///schema.json"])
+def test_get_body_rejects_invalid_fetch_urls(mocker: MockerFixture, url: str) -> None:
+    """Reject unsupported or incomplete URLs before fetching."""
+    mock_get = mocker.patch("httpx.get")
+
+    with pytest.raises(SchemaFetchError, match="HTTP fetch"):
+        get_body(url)
+    assert mock_get.call_count == 0
+
+
+def test_get_body_rejects_redirect_without_location(mocker: MockerFixture) -> None:
+    """Reject redirect responses that do not provide a target."""
+    mock_response = Mock()
+    mock_response.status_code = 302
+    mock_response.headers = {}
+    mock_get = mocker.patch("httpx.get", return_value=mock_response)
+
+    with pytest.raises(SchemaFetchError, match="missing a Location header"):
+        get_body("https://example.com/schema.json")
+    assert mock_get.call_count == 1
+
+
+def test_get_body_rejects_too_many_redirects(mocker: MockerFixture) -> None:
+    """Reject redirect chains that exceed the configured limit."""
+    mock_response = Mock()
+    mock_response.status_code = 302
+    mock_response.headers = {"location": "https://example.com/schema.json"}
+    mock_get = mocker.patch("httpx.get", return_value=mock_response)
+
+    with pytest.raises(SchemaFetchError, match="Too many redirects"):
+        get_body("https://example.com/schema.json")
+    assert mock_get.call_count == MAX_HTTP_REDIRECTS + 1
 
 
 def test_get_body_wraps_transport_error(mocker: MockerFixture) -> None:

@@ -16,6 +16,7 @@ OPTION_DESCRIPTIONS: dict[str, str] = {
     "--allow-extra-fields": "Allow extra fields in generated Pydantic models (extra='allow').",
     "--allow-leading-underscore-class-name": "Allow an explicitly specified root class name to start with an unders...",
     "--allow-population-by-field-name": "Allow Pydantic model population by field name (not just alias).",
+    "--allow-private-network": "Allow HTTP requests to private network schema endpoints.",
     "--allow-remote-refs": "Enable fetching of `$ref` targets over HTTP/HTTPS.",
     "--base-class": "Specify a custom base class for generated models.",
     "--base-class-map": "Specify different base classes for specific models via JSON mapping.",

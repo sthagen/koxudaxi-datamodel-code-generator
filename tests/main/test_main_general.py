@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import sys
 import warnings
 from argparse import ArgumentTypeError, Namespace
-from typing import TYPE_CHECKING
+from collections import defaultdict
+from typing import TYPE_CHECKING, Any
 
 import black
 import pytest
+from packaging import version
 
 import datamodel_code_generator
 from datamodel_code_generator import (
@@ -42,6 +45,7 @@ from tests.conftest import (
     assert_warnings_do_not_contain,
     create_assert_file_content,
     freeze_time,
+    validate_generated_code,
 )
 from tests.main.conftest import (
     DATA_PATH,
@@ -1689,6 +1693,130 @@ def test_cli_input_overrides_pyproject_url(
     assert_httpx_get_kwargs(httpx_get_mock, called=False)
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1/schema.json",
+        "http://2130706433/schema.json",
+        "http://169.254.169.254/latest/meta-data",
+        "http://localhost/schema.json",
+    ],
+)
+def test_cli_url_blocks_unsafe_host(
+    url: str,
+    output_file: Path,
+    mock_httpx_get: HttpxGetMockFactory,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Block local and private network targets."""
+    httpx_get_mock = mock_httpx_get()
+
+    run_main_with_args(
+        [
+            "--url",
+            url,
+            "--output",
+            str(output_file),
+            "--input-file-type",
+            "jsonschema",
+            "--disable-timestamp",
+        ],
+        expected_exit=Exit.ERROR,
+        capsys=capsys,
+        expected_stderr_contains="--allow-private-network",
+    )
+    assert_httpx_get_kwargs(httpx_get_mock, called=False)
+
+
+def test_cli_url_allows_unsafe_host_with_explicit_opt_in(
+    output_file: Path,
+    mock_httpx_get: HttpxGetMockFactory,
+) -> None:
+    """Allow trusted private network URL input only when explicitly requested."""
+    httpx_get_mock = mock_httpx_get(
+        MockHttpxResponse("http://127.0.0.1/schema.json", '{"type": "object", "title": "LocalSchema"}')
+    )
+
+    run_main_with_args(
+        [
+            "--url",
+            "http://127.0.0.1/schema.json",
+            "--output",
+            str(output_file),
+            "--input-file-type",
+            "jsonschema",
+            "--disable-timestamp",
+            "--allow-private-network",
+        ],
+    )
+    assert_httpx_get_kwargs(httpx_get_mock, expected_url="http://127.0.0.1/schema.json")
+
+
+def test_cli_url_blocks_unsafe_host_with_explicit_opt_out(
+    output_file: Path,
+    tmp_path: Path,
+    mock_httpx_get: HttpxGetMockFactory,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Allow CLI to override a configuration file that permits private network requests."""
+    pyproject_toml = tmp_path / "pyproject.toml"
+    pyproject_toml.write_text(
+        "[tool.datamodel-codegen]\nallow-private-network = true\n",
+        encoding="utf-8",
+    )
+    httpx_get_mock = mock_httpx_get()
+
+    with chdir(tmp_path):
+        run_main_with_args(
+            [
+                "--url",
+                "http://127.0.0.1/schema.json",
+                "--output",
+                str(output_file),
+                "--input-file-type",
+                "jsonschema",
+                "--disable-timestamp",
+                "--no-allow-private-network",
+            ],
+            expected_exit=Exit.ERROR,
+            capsys=capsys,
+            expected_stderr_contains="--allow-private-network",
+        )
+    assert_httpx_get_kwargs(httpx_get_mock, called=False)
+
+
+def test_cli_url_blocks_redirect_to_unsafe_host(
+    output_file: Path,
+    mock_httpx_get: HttpxGetMockFactory,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Validate redirect targets before fetching them."""
+    httpx_get_mock = mock_httpx_get(
+        MockHttpxResponse(
+            "https://example.com/schema.json",
+            "{}",
+            status_code=302,
+            headers={"location": "http://127.0.0.1/schema.json"},
+        )
+    )
+
+    run_main_with_args(
+        [
+            "--url",
+            "https://example.com/schema.json",
+            "--output",
+            str(output_file),
+            "--input-file-type",
+            "jsonschema",
+            "--disable-timestamp",
+        ],
+        expected_exit=Exit.ERROR,
+        capsys=capsys,
+        expected_stderr_contains="--allow-private-network",
+    )
+    assert_httpx_get_kwargs(httpx_get_mock, expected_url="https://example.com/schema.json")
+
+
 def test_cli_url_overrides_pyproject_input(
     output_file: Path, tmp_path: Path, mock_httpx_get: HttpxGetMockFactory
 ) -> None:
@@ -1707,7 +1835,7 @@ def test_cli_url_overrides_pyproject_input(
 
     httpx_get_mock = mock_httpx_get(
         MockHttpxResponse(
-            "http://127.0.0.1:8123/schema.json",
+            "https://example.com/schema.json",
             JSON_SCHEMA_DATA_PATH / "cli_url_overrides_pyproject_input.json",
         )
     )
@@ -1715,14 +1843,14 @@ def test_cli_url_overrides_pyproject_input(
     with chdir(tmp_path):
         run_main_with_args([
             "--url",
-            "http://127.0.0.1:8123/schema.json",
+            "https://example.com/schema.json",
             "--output",
             str(output_file),
             "--disable-timestamp",
         ])
 
     assert_file_content(output_file, "cli_url_overrides_pyproject_input.py")
-    assert_httpx_get_kwargs(httpx_get_mock, expected_url="http://127.0.0.1:8123/schema.json")
+    assert_httpx_get_kwargs(httpx_get_mock, expected_url="https://example.com/schema.json")
 
 
 @pytest.mark.cli_doc(
@@ -2407,6 +2535,133 @@ def test_generate_with_config_object(output_file: Path) -> None:
         config=config,
     )
     assert_file_content(output_file, "generate_with_config_object.py")
+
+
+_EXTRA_TEMPLATE_COMMENT = "safe comment\rprint('PWNED')\nraise SystemExit(1)\vimport os\fexec('PWNED')"
+_EXTRA_TEMPLATE_COMMENT_OBJECT_SCHEMA = """
+{
+  "title": "Model",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string"
+    }
+  }
+}
+"""
+_EXTRA_TEMPLATE_COMMENT_ROOT_SCHEMA = """
+{
+  "title": "Model",
+  "type": "string"
+}
+"""
+_EXTRA_TEMPLATE_COMMENT_FORBIDDEN_STARTS = ("print(", "raise ", "import os", "exec(")
+
+
+def _generate_with_extra_template_comment(input_: str, **generate_kwargs: Any) -> str:
+    result = generate(
+        input_=input_,
+        input_file_type=InputFileType.JsonSchema,
+        disable_timestamp=True,
+        extra_template_data=defaultdict(dict, {"Model": {"comment": _EXTRA_TEMPLATE_COMMENT}}),
+        **generate_kwargs,
+    )
+    if not isinstance(result, str):  # pragma: no cover
+        pytest.fail(f"Expected generate() to return str, got {type(result).__name__}")
+    validate_generated_code(result, "<generated>")
+    assert_no_uncommented_generated_code(
+        result,
+        forbidden_starts=_EXTRA_TEMPLATE_COMMENT_FORBIDDEN_STARTS,
+    )
+    return result
+
+
+@pytest.mark.parametrize(
+    ("input_", "generate_kwargs"),
+    [
+        (
+            _EXTRA_TEMPLATE_COMMENT_OBJECT_SCHEMA,
+            {"output_model_type": DataModelType.PydanticV2BaseModel},
+        ),
+        (
+            _EXTRA_TEMPLATE_COMMENT_ROOT_SCHEMA,
+            {"output_model_type": DataModelType.PydanticV2BaseModel},
+        ),
+        (
+            _EXTRA_TEMPLATE_COMMENT_ROOT_SCHEMA,
+            {
+                "output_model_type": DataModelType.PydanticV2BaseModel,
+                "use_root_model_type_alias": True,
+            },
+        ),
+        (
+            _EXTRA_TEMPLATE_COMMENT_ROOT_SCHEMA,
+            {
+                "output_model_type": DataModelType.PydanticV2BaseModel,
+                "use_type_alias": True,
+                "target_python_version": PythonVersion.PY_310,
+            },
+        ),
+        (
+            _EXTRA_TEMPLATE_COMMENT_ROOT_SCHEMA,
+            {
+                "output_model_type": DataModelType.TypingTypedDict,
+                "target_python_version": PythonVersion.PY_310,
+            },
+        ),
+    ],
+)
+def test_generate_extra_template_data_comment_is_safe(
+    input_: str,
+    generate_kwargs: dict[str, Any],
+) -> None:
+    """Ensure extra template comments cannot add Python statements."""
+    _generate_with_extra_template_comment(input_, **generate_kwargs)
+
+
+def test_main_extra_template_data_comment_is_safe(output_file: Path, tmp_path: Path) -> None:
+    """Ensure CLI extra template comments cannot add Python statements."""
+    input_path = tmp_path / "schema.json"
+    input_path.write_text(_EXTRA_TEMPLATE_COMMENT_OBJECT_SCHEMA, encoding="utf-8")
+    extra_template_data_path = tmp_path / "extra_template_data.json"
+    extra_template_data_path.write_text(
+        json.dumps({"Model": {"comment": _EXTRA_TEMPLATE_COMMENT}}),
+        encoding="utf-8",
+    )
+
+    run_main_with_args(
+        [
+            "--input",
+            str(input_path),
+            "--input-file-type",
+            "jsonschema",
+            "--output",
+            str(output_file),
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--extra-template-data",
+            str(extra_template_data_path),
+        ],
+    )
+
+    generated_content = output_file.read_text(encoding="utf-8")
+    validate_generated_code(generated_content, str(output_file))
+    assert_no_uncommented_generated_code(
+        generated_content,
+        forbidden_starts=_EXTRA_TEMPLATE_COMMENT_FORBIDDEN_STARTS,
+    )
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="type statement requires Python 3.12+")
+@pytest.mark.skipif(version.parse(black.__version__) < version.parse("23.3.0"), reason="black too old")
+def test_generate_extra_template_data_comment_is_safe_for_type_statement() -> None:
+    """Ensure type statement comments cannot add Python statements."""
+    _generate_with_extra_template_comment(
+        _EXTRA_TEMPLATE_COMMENT_ROOT_SCHEMA,
+        output_model_type=DataModelType.PydanticV2BaseModel,
+        use_type_alias=True,
+        target_python_version=PythonVersion.PY_312,
+    )
 
 
 def test_generate_config_with_union_mode() -> None:

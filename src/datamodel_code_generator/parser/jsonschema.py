@@ -77,6 +77,7 @@ from datamodel_code_generator.types import (
     extract_qualified_names,
     get_subscript_args,
     get_type_base_name,
+    is_python_type_annotation,
 )
 from datamodel_code_generator.util import BaseModel
 
@@ -613,6 +614,17 @@ DEFAULT_FIELD_KEYS: set[str] = {
     "xml",
 }
 
+ALLOWED_DEFAULT_FACTORIES: frozenset[str] = frozenset({"dict", "list", "set"})
+
+
+def _validate_default_factory(default_factory: Any) -> str:
+    if isinstance(default_factory, str) and default_factory in ALLOWED_DEFAULT_FACTORIES:
+        return default_factory
+    allowed_values = ", ".join(sorted(ALLOWED_DEFAULT_FACTORIES))
+    msg = f"default_factory must be one of: {allowed_values}"
+    raise Error(msg)
+
+
 DEFAULT_MODEL_EXTRA_KEYS: set[str] = {
     "contentEncoding",
     "contentMediaType",
@@ -809,6 +821,8 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             }
         if self.default_field_extras:
             extras.update(self.default_field_extras)
+        if (default_factory := extras.get("default_factory", UNDEFINED)) is not UNDEFINED:
+            extras["default_factory"] = _validate_default_factory(default_factory)
         return extras
 
     @cached_property
@@ -1939,7 +1953,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
         if model_extras:
             self.extra_template_data[path]["model_extras"] = model_extras
 
-    def _get_python_type_flags(self, obj: JsonSchemaObject) -> dict[str, bool]:  # noqa: PLR6301
+    def _get_python_type_flags(self, obj: JsonSchemaObject) -> dict[str, bool]:
         """Get container type flags from x-python-type extension.
 
         Returns a dict with flags like is_set, is_frozen_set, is_mapping, is_sequence
@@ -1948,8 +1962,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
         Note: This is an instance method (not static) due to the snooper_to_methods
         class decorator which does not preserve staticmethod descriptors.
         """
-        x_python_type = obj.extras.get("x-python-type")
-        if not x_python_type or not isinstance(x_python_type, str):
+        if (x_python_type := self._get_x_python_type(obj)) is None:
             return {}
 
         type_to_flag: dict[str, dict[str, bool]] = {
@@ -2010,6 +2023,16 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             pattern = r"(?<![.\w])([A-Za-z_]\w*)"
             return re.findall(pattern, type_str)
 
+    def _get_x_python_type(self, obj: JsonSchemaObject) -> str | None:  # noqa: PLR6301
+        """Return a validated x-python-type value."""
+        x_python_type = obj.extras.get("x-python-type")
+        if not x_python_type or not isinstance(x_python_type, str):
+            return None
+        if is_python_type_annotation(x_python_type):
+            return x_python_type
+        msg = "x-python-type must be a valid Python type annotation"
+        raise Error(msg)
+
     @staticmethod
     @lru_cache(maxsize=256)
     def _resolve_type_import_dynamic(type_name: str) -> Import | None:
@@ -2054,8 +2077,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
 
     def _get_python_type_override(self, obj: JsonSchemaObject) -> DataType | None:
         """Get DataType from x-python-type if it's incompatible with schema type."""
-        x_python_type = obj.extras.get("x-python-type")
-        if not x_python_type or not isinstance(x_python_type, str):
+        if (x_python_type := self._get_x_python_type(obj)) is None:
             return None
 
         schema_type = obj.type if isinstance(obj.type, str) else None
@@ -4780,13 +4802,20 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
                 if self.allow_remote_refs is False:
                     msg = (
                         f"Fetching remote $ref is disabled: {resolved_ref}\n"
-                        "Use --allow-remote-refs to enable HTTP fetching of remote references."
+                        "Reason: --no-allow-remote-refs was set, so HTTP(S) $ref targets are not fetched.\n"
+                        "If this schema and all of its remote references are trusted, pass --allow-remote-refs. "
+                        "If a trusted remote reference points to an internal schema registry, also pass "
+                        "--allow-private-network."
                     )
                     raise Error(msg)
                 if self.allow_remote_refs is None:
                     warn_deprecated(
                         "behavior.remote-ref-default",
-                        details=f"Reference: {resolved_ref}",
+                        details=(
+                            f"Reference: {resolved_ref}. Pass --allow-remote-refs for trusted remote schemas, "
+                            "or --no-allow-remote-refs to block HTTP(S) $ref fetching. Internal network targets "
+                            "also require --allow-private-network."
+                        ),
                         stacklevel=2,
                     )
             return self._get_ref_body_from_url(resolved_ref)

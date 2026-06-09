@@ -1050,11 +1050,11 @@ def test_main_url_with_relative_root_id_resolves_relative_refs(
     """Test --url input keeps resolving relative refs remotely when root $id is path-only."""
     httpx_get_mock = mock_httpx_get(
         MockHttpxResponse(
-            "http://localhost:8888/schemas/v1/main.schema.json",
+            "https://example.com/schemas/v1/main.schema.json",
             JSON_SCHEMA_DATA_PATH / "url_relative_root_id" / "main.schema.json",
         ),
         MockHttpxResponse(
-            "http://localhost:8888/schemas/v1/sub.schema.json",
+            "https://example.com/schemas/v1/sub.schema.json",
             JSON_SCHEMA_DATA_PATH / "url_relative_root_id" / "sub.schema.json",
         ),
     )
@@ -1062,7 +1062,7 @@ def test_main_url_with_relative_root_id_resolves_relative_refs(
 
     run_main_with_args([
         "--url",
-        "http://localhost:8888/schemas/v1/main.schema.json",
+        "https://example.com/schemas/v1/main.schema.json",
         "--output",
         str(output_dir),
         "--input-file-type",
@@ -1079,8 +1079,8 @@ def test_main_url_with_relative_root_id_resolves_relative_refs(
     assert_httpx_get_kwargs(
         httpx_get_mock,
         expected_urls=[
-            "http://localhost:8888/schemas/v1/main.schema.json",
-            "http://localhost:8888/schemas/v1/sub.schema.json",
+            "https://example.com/schemas/v1/main.schema.json",
+            "https://example.com/schemas/v1/sub.schema.json",
         ],
         call_count=2,
     )
@@ -1169,6 +1169,41 @@ def test_main_url_jsonschema_relative_ref_without_fragment(
     )
 
 
+def test_main_url_jsonschema_remote_ref_respects_explicit_disable(
+    mock_httpx_get: HttpxGetMockFactory,
+    output_file: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Respect explicit --no-allow-remote-refs with --url input."""
+    httpx_get_mock = mock_httpx_get(
+        MockHttpxResponse(
+            "https://example.com/schemas/root.json",
+            json.dumps({
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "title": "RemoteRoot",
+                "type": "object",
+                "properties": {"person": {"$ref": "person.json"}},
+            }),
+        )
+    )
+
+    run_main_with_args(
+        [
+            "--url",
+            "https://example.com/schemas/root.json",
+            "--output",
+            str(output_file),
+            "--input-file-type",
+            "jsonschema",
+            "--no-allow-remote-refs",
+        ],
+        expected_exit=Exit.ERROR,
+        capsys=capsys,
+        expected_stderr_contains="Fetching remote $ref is disabled",
+    )
+    assert_httpx_get_kwargs(httpx_get_mock, expected_url="https://example.com/schemas/root.json")
+
+
 def test_main_jsonschema_remote_relative_ref_without_fragment(
     mock_httpx_get: HttpxGetMockFactory, output_file: Path
 ) -> None:
@@ -1215,8 +1250,11 @@ def test_main_jsonschema_remote_relative_ref_without_fragment(
     )
 
 
-def test_main_remote_ref_emits_deprecation_warning(mock_httpx_get: HttpxGetMockFactory, output_file: Path) -> None:
-    """Test that implicit remote $ref fetching emits a FutureWarning when flag is not set."""
+def test_main_remote_ref_warns_without_explicit_allow(
+    mock_httpx_get: HttpxGetMockFactory,
+    output_file: Path,
+) -> None:
+    """Keep implicit public remote $ref fetching compatible, but warn."""
     httpx_get_mock = mock_httpx_get(
         MockHttpxResponse(
             "https://example.com/schema/../other/schema.json",
@@ -1241,9 +1279,81 @@ def test_main_remote_ref_blocked_when_explicitly_disabled(mock_httpx_get: HttpxG
     """Test that remote $ref fetching is blocked when allow_remote_refs=False."""
     httpx_get_mock = mock_httpx_get()
 
-    with pytest.raises(Error, match=r"Fetching remote \$ref is disabled"):
+    with pytest.raises(Error, match=r"--allow-remote-refs.*--allow-private-network"):
         generate(JSON_SCHEMA_DATA_PATH / "remote_ref" / "main.json", allow_remote_refs=False)
     assert_httpx_get_kwargs(httpx_get_mock, called=False)
+
+
+def test_main_remote_ref_blocks_private_network_without_explicit_allow(
+    tmp_path: Path,
+    output_file: Path,
+    mock_httpx_get: HttpxGetMockFactory,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Block private network HTTP $ref targets before fetching."""
+    schema_path = tmp_path / "schema.json"
+    schema_path.write_text(
+        json.dumps({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "title": "Root",
+            "type": "object",
+            "properties": {"local": {"$ref": "http://127.0.0.1/schema.json#/definitions/Local"}},
+        }),
+        encoding="utf-8",
+    )
+    httpx_get_mock = mock_httpx_get()
+
+    run_main_and_assert(
+        input_path=schema_path,
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=["--allow-remote-refs"],
+        expected_exit=Exit.ERROR,
+        output_should_not_exist=True,
+        capsys=capsys,
+        expected_stderr_contains="--allow-private-network",
+    )
+    assert_httpx_get_kwargs(httpx_get_mock, called=False)
+
+
+def test_main_remote_ref_allows_private_network_with_explicit_allow(
+    tmp_path: Path,
+    output_file: Path,
+    mock_httpx_get: HttpxGetMockFactory,
+) -> None:
+    """Allow trusted private network HTTP $ref targets only when explicitly requested."""
+    schema_path = tmp_path / "schema.json"
+    schema_path.write_text(
+        json.dumps({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "title": "Root",
+            "type": "object",
+            "properties": {"local": {"$ref": "http://127.0.0.1/schema.json#/definitions/Local"}},
+        }),
+        encoding="utf-8",
+    )
+    httpx_get_mock = mock_httpx_get(
+        MockHttpxResponse(
+            "http://127.0.0.1/schema.json",
+            json.dumps({
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "definitions": {
+                    "Local": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                    }
+                },
+            }),
+        )
+    )
+
+    run_main_and_assert(
+        input_path=schema_path,
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=["--allow-remote-refs", "--allow-private-network"],
+    )
+    assert_httpx_get_kwargs(httpx_get_mock, expected_url="http://127.0.0.1/schema.json")
 
 
 def test_main_missing_local_ref_error_message(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -3103,6 +3213,56 @@ def test_main_jsonschema_field_extras(output_file: Path) -> None:
         assert_func=assert_file_content,
         expected_file="field_extras_v2.py",
         extra_args=["--output-model-type", "pydantic_v2.BaseModel"],
+    )
+
+
+@pytest.mark.parametrize(
+    "default_factory",
+    [
+        "__import__('builtins').print('DF_EXEC') or str",
+        "lambda: []",
+        "datetime.utcnow",
+        None,
+    ],
+)
+@pytest.mark.parametrize(
+    "output_model",
+    [
+        "pydantic_v2.BaseModel",
+        "pydantic_v2.dataclass",
+        "dataclasses.dataclass",
+        "msgspec.Struct",
+    ],
+)
+def test_main_jsonschema_default_factory_rejects_unsafe_value(
+    default_factory: object,
+    output_model: str,
+    output_file: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Reject unsafe schema-supplied default_factory values."""
+    input_file = output_file.with_suffix(".json")
+    input_file.write_text(
+        json.dumps({
+            "type": "object",
+            "properties": {
+                "payload": {
+                    "type": "string",
+                    "default_factory": default_factory,
+                }
+            },
+        }),
+        encoding="utf-8",
+    )
+    run_main_and_assert(
+        input_path=input_file,
+        output_path=output_file,
+        input_file_type="jsonschema",
+        expected_exit=Exit.ERROR,
+        output_should_not_exist=True,
+        capsys=capsys,
+        expected_stderr_contains="default_factory must be one of: dict, list, set",
+        extra_args=["--output-model-type", output_model],
     )
 
 
@@ -10510,6 +10670,57 @@ def test_main_jsonschema_x_python_import_unused(output_file: Path) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "x_python_type",
+    [
+        "X[1]; __import__('builtins').print('XPT_EXEC') #",
+        "__import__('builtins').print('XPT_EXEC')",
+        "Callable[[str], __import__('builtins').print('XPT_EXEC')]",
+        "str\nprint('XPT_EXEC')\n#",
+    ],
+)
+@pytest.mark.parametrize(
+    "output_model",
+    [
+        "pydantic_v2.BaseModel",
+        "pydantic_v2.dataclass",
+        "dataclasses.dataclass",
+        "msgspec.Struct",
+        "typing.TypedDict",
+    ],
+)
+def test_x_python_type_rejects_unsafe_value(
+    x_python_type: str,
+    output_model: str,
+    output_file: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Reject unsafe x-python-type values."""
+    input_file = output_file.with_suffix(".json")
+    input_file.write_text(
+        json.dumps({
+            "type": "object",
+            "properties": {
+                "payload": {
+                    "type": "string",
+                    "x-python-type": x_python_type,
+                }
+            },
+        }),
+        encoding="utf-8",
+    )
+    run_main_and_assert(
+        input_path=input_file,
+        output_path=output_file,
+        input_file_type="jsonschema",
+        expected_exit=Exit.ERROR,
+        output_should_not_exist=True,
+        capsys=capsys,
+        expected_stderr_contains="x-python-type must be a valid Python type annotation",
+        extra_args=["--output-model-type", output_model],
+    )
+
+
 def test_x_python_type_callable(output_file: Path) -> None:
     """Test x-python-type with Callable preserves the Callable type."""
     run_main_and_assert(
@@ -10838,6 +11049,194 @@ def test_field_validators_multi_fields(output_file: Path) -> None:
             "--disable-timestamp",
         ],
         skip_code_validation=True,
+    )
+
+
+def test_extra_template_data_field_validators(output_file: Path, tmp_path: Path) -> None:
+    """Test validators supplied through extra template data."""
+    extra_template_data = tmp_path / "extra_template_data_validators.json"
+    extra_template_data.write_text(
+        json.dumps({
+            "User": {
+                "validators": [
+                    {
+                        "field": "name",
+                        "function": "myapp.validators.validate_name",
+                        "mode": "before",
+                    },
+                    {
+                        "field": "email",
+                        "function": "myapp.validators.validate_email",
+                        "mode": "after",
+                    },
+                ]
+            }
+        })
+    )
+
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "field_validators.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="field_validators.py",
+        extra_args=[
+            "--extra-template-data",
+            str(extra_template_data),
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--disable-timestamp",
+        ],
+        skip_code_validation=True,
+    )
+
+
+@pytest.mark.parametrize("extra_template_data_key", ["User", "#all#"])
+def test_extra_template_data_prepared_validators_ignored(
+    output_file: Path,
+    tmp_path: Path,
+    extra_template_data_key: str,
+) -> None:
+    """Ignore prepared validator data supplied through extra template data."""
+    extra_template_data = tmp_path / "extra_template_data_prepared_validators.json"
+    extra_template_data.write_text(
+        json.dumps({
+            extra_template_data_key: {
+                "prepared_validators": [
+                    {
+                        "fields_str": "'name'); __import__('os').system('touch pwned') #",
+                        "mode_str": "mode='after'",
+                        "method_name": "validate_name_validator",
+                        "function_name": "validate_name",
+                        "mode": "after",
+                    }
+                ]
+            }
+        })
+    )
+
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "field_validators.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="field_validators_all_skipped.py",
+        extra_args=[
+            "--extra-template-data",
+            str(extra_template_data),
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--disable-timestamp",
+        ],
+        skip_code_validation=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("validator", "expected_message"),
+    [
+        (
+            {
+                "field": "name', __import__('os').system('touch pwned'), 'email",
+                "function": "myapp.validators.validate_name",
+            },
+            (
+                "validators.0.field: must be a valid Python identifier: "
+                "\"name', __import__('os').system('touch pwned'), 'email\""
+            ),
+        ),
+        (
+            {
+                "fields": ["name", "email', __import__('os').system('touch pwned'), 'age"],
+                "function": "myapp.validators.validate_name",
+            },
+            (
+                "validators.0.fields: must be a valid Python identifier: "
+                "\"email', __import__('os').system('touch pwned'), 'age\""
+            ),
+        ),
+        (
+            {
+                "field": "name",
+                "function": "myapp.validators.validate_name;__import__('os').system('touch pwned')",
+            },
+            (
+                "validators.0.function: must be a dotted Python identifier path: "
+                "\"myapp.validators.validate_name;__import__('os').system('touch pwned')\""
+            ),
+        ),
+        (
+            {
+                "field": "name",
+                "function": "myapp.validators.validate_name",
+                "mode": "after', __import__('os').system('touch pwned'), mode='after",
+            },
+            "validators.0.mode: must be one of: 'before', 'after', 'wrap', 'plain'",
+        ),
+    ],
+)
+def test_extra_template_data_field_validators_reject_unsafe_values(
+    output_file: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    validator: dict[str, str | list[str]],
+    expected_message: str,
+) -> None:
+    """Test unsafe extra template data validators fail before code generation."""
+    extra_template_data = tmp_path / "extra_template_data_invalid_validators.json"
+    extra_template_data.write_text(json.dumps({"User": {"validators": [validator]}}))
+
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "field_validators.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        expected_exit=Exit.ERROR,
+        extra_args=[
+            "--extra-template-data",
+            str(extra_template_data),
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
+        capsys=capsys,
+        expected_stderr=f"Invalid validators configuration: {expected_message}\n",
+        output_should_not_exist=True,
+    )
+
+
+def test_validators_option_rejects_unsafe_values(
+    output_file: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Test unsafe validators file values fail before code generation."""
+    validators_config = tmp_path / "invalid_validators_config.json"
+    validators_config.write_text(
+        json.dumps({
+            "User": {
+                "validators": [
+                    {
+                        "field": "name', __import__('os').system('touch pwned'), 'email",
+                        "function": "myapp.validators.validate_name",
+                    }
+                ]
+            }
+        })
+    )
+
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "field_validators.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        expected_exit=Exit.ERROR,
+        extra_args=[
+            "--validators",
+            str(validators_config),
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
+        capsys=capsys,
+        expected_stderr_contains="must be a valid Python identifier",
+        output_should_not_exist=True,
     )
 
 

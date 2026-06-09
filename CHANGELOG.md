@@ -5,6 +5,64 @@ This changelog is automatically generated from GitHub Releases.
 
 ---
 
+## [0.61.0](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.61.0) - 2026-06-08
+
+## Breaking Changes
+
+* HTTP(S) schema fetching now blocks localhost, loopback, private, link-local, reserved, and other non-public network targets by default. Users who intentionally fetch schemas from trusted internal/private network endpoints must pass `--allow-private-network` or set `allow_private_network=True`.
+* HTTP(S) redirects are now followed manually and each redirect target is validated before fetching. Redirects to non-public network targets are blocked unless private network access is explicitly enabled.
+
+## Security
+
+* Fixed SSRF protections for HTTP(S) schema fetching via `--url` and remote JSON Schema/OpenAPI `$ref` URLs. (GHSA-rfr2-mq9m-x2qx, GHSA-954p-556p-r752)
+* Remote `$ref` fetching remains controlled by `--allow-remote-refs`; non-public remote references additionally require `--allow-private-network`.
+
+## What's Changed
+* Update CHANGELOG for 0.60.2 by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3277
+* Fix generated files by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3279
+* Sync generated docs by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3280
+
+
+**Full Changelog**: https://github.com/koxudaxi/datamodel-code-generator/compare/0.60.2...0.61.0
+
+---
+
+## [0.60.2](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.60.2) - 2026-06-08
+
+## Security
+
+* Fixed code injection from schema-provided `default_factory` values. (GHSA-386q-5hp3-95m9)
+* Fixed code injection from JSON Schema `x-python-type` extension values. (GHSA-m34r-v34r-rf9q)
+* Fixed code injection from `comment` entries supplied through `--extra-template-data`. (GHSA-wjv6-jcfj-mf9r)
+* Fixed code injection from Pydantic v2 validator definitions supplied through `--validators` or `--extra-template-data`. (GHSA-8m8r-38jm-f355)
+
+## What's Changed
+* Update CHANGELOG for 0.60.1 by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3274
+* Cover validator error formatting by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3276
+* Update CHANGELOG for 0.60.1 by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3275
+
+
+**Full Changelog**: https://github.com/koxudaxi/datamodel-code-generator/compare/0.60.1...0.60.2
+
+---
+
+## [0.60.1](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.60.1) - 2026-06-07
+
+## Security
+
+* Fixed code injection from GraphQL union descriptions containing carriage returns. (GHSA-j884-q54q-mmx3)
+
+## What's Changed
+* Update CHANGELOG for 0.60.0 by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3269
+* Fix readOnly/writeOnly option docs by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3270
+* Sync generated docs by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3271
+* Fix built-in formatter type alias union by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3273
+
+
+**Full Changelog**: https://github.com/koxudaxi/datamodel-code-generator/compare/0.60.0...0.60.1
+
+---
+
 ## [0.60.0](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.60.0) - 2026-06-04
 
 ## Breaking Changes

@@ -86,7 +86,7 @@ def test_json_schema_object_ref_url_json(mocker: MockerFixture) -> None:
             "https://example.com/person.schema.json",
             headers=None,
             verify=True,
-            follow_redirects=True,
+            follow_redirects=False,
             params=None,
             timeout=30.0,
         ),
@@ -118,7 +118,7 @@ class Pet(BaseModel):
         "https://example.org/schema.yaml",
         headers=None,
         verify=True,
-        follow_redirects=True,
+        follow_redirects=False,
         params=None,
         timeout=30.0,
     )
@@ -157,7 +157,7 @@ class User(BaseModel):
         "https://example.org/schema.yaml",
         headers=None,
         verify=True,
-        follow_redirects=True,
+        follow_redirects=False,
         params=None,
         timeout=30.0,
     )
@@ -194,7 +194,7 @@ class Pet(BaseModel):
         "https://example.org/schema.json",
         headers=None,
         verify=True,
-        follow_redirects=True,
+        follow_redirects=False,
         params=None,
         timeout=30.0,
     )
@@ -1392,6 +1392,7 @@ def test_json_schema_standard_string_formats_map_to_string(format_: str) -> None
         # Non-special container types
         ("List[str]", {}),
         ("Dict[str, int]", {}),
+        ("Literal[-1]", {}),
         ("str", {}),
         ("int", {}),
         ("CustomType", {}),
