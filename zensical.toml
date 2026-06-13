@@ -4,6 +4,7 @@ site_description = "This code generator creates pydantic model from an openapi f
 site_url = "https://datamodel-code-generator.koxudaxi.dev"
 repo_name = "koxudaxi/datamodel-code-generator"
 repo_url = "https://github.com/koxudaxi/datamodel-code-generator"
+copyright = 'Maintained by <a href="https://koxudaxi.dev/?utm_source=dm_docs&utm_medium=footer&utm_campaign=open_to_work">Koudai Aono</a>'
 
 nav = [
   { "Overview" = "index.md" },
@@ -70,7 +71,8 @@ nav = [
       { "Dynamic Model Generation" = "dynamic-model-generation.md" },
       { "pyproject.toml" = "pyproject_toml.md" },
       { "CI/CD Integration" = "ci-cd.md" },
-      { "LLM Integration" = "llm-integration.md" }
+      { "LLM Integration" = "llm-integration.md" },
+      { "Coding Agent Skill" = "coding-agent-skill.md" }
     ]}
   ]},
   { "Deprecations" = "deprecations.md" },

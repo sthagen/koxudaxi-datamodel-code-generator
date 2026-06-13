@@ -13,21 +13,26 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-try:
-    from tomllib import load as load_tomllib  # type: ignore[ignoreMissingImports]
-except ImportError:  # pragma: no cover
-    from tomli import load as load_tomllib  # type: ignore[ignoreMissingImports]
+
+@lru_cache(maxsize=1)
+def _get_toml_loader() -> Callable[[Any], dict[str, Any]]:
+    """Get the TOML parser lazily."""
+    try:
+        from tomllib import load as load_toml_data  # noqa: PLC0415  # type: ignore[ignoreMissingImports]
+    except ImportError:  # pragma: no cover
+        from tomli import load as load_toml_data  # noqa: PLC0415  # type: ignore[ignoreMissingImports]
+
+    return load_toml_data
 
 
 def load_toml(path: Path) -> dict[str, Any]:
     """Load and parse a TOML file."""
     with path.open("rb") as f:
-        return load_tomllib(f)
+        return _get_toml_loader()(f)
 
 
 _YAML_1_2_BOOL_PATTERN = re.compile(r"^(?:true|false|True|False|TRUE|FALSE)$")
-_YAML_DEPRECATED_BOOL_VALUES = {"True", "False", "TRUE", "FALSE"}
-_YAML_DEPRECATED_BOOL_WARNING_VALUES = ("True", "False", "TRUE", "FALSE")
+_YAML_DEPRECATED_BOOL_VALUES = ("True", "False", "TRUE", "FALSE")
 _YAML_DEPRECATED_BOOL_LINE_PATTERN = re.compile(r"(?m)(?::|-\s*)\s*(True|False|TRUE|FALSE)(?:\s*(?:#.*)?)$")
 _YAML_DEPRECATED_BOOL_WARNING_MESSAGE = "YAML bool "
 _YAML_DEPRECATED_BOOL_WARNING_MODULE = "datamodel_code_generator"
@@ -36,13 +41,21 @@ _YAML_DEPRECATED_BOOL_WARNING_MODULE = "datamodel_code_generator"
 _YAML_SCIENTIFIC_NOTATION_PATTERN = re.compile(r"^[-+]?[0-9][0-9_]*[eE][-+]?[0-9]+$")
 
 
+def _warning_filter_matches(pattern: Any, text: str) -> bool:
+    if pattern is None:
+        return True
+    if hasattr(pattern, "match"):
+        return bool(pattern.match(text))
+    return re.match(str(pattern), text) is not None
+
+
 def _is_yaml_deprecated_bool_warning_enabled() -> bool:
     for action, message, category, module, _ in warnings.filters:
         if not issubclass(DeprecationWarning, category):
             continue
-        if message is not None and not message.match(_YAML_DEPRECATED_BOOL_WARNING_MESSAGE):
+        if not _warning_filter_matches(message, _YAML_DEPRECATED_BOOL_WARNING_MESSAGE):
             continue
-        if module is not None and not module.match(_YAML_DEPRECATED_BOOL_WARNING_MODULE):
+        if not _warning_filter_matches(module, _YAML_DEPRECATED_BOOL_WARNING_MODULE):
             continue
         return action != "ignore"
     return True
@@ -51,7 +64,7 @@ def _is_yaml_deprecated_bool_warning_enabled() -> bool:
 def warn_yaml_deprecated_bool_values(text: str) -> None:
     """Warn for YAML 1.1-style boolean scalars when ryaml is used."""
     if not _is_yaml_deprecated_bool_warning_enabled() or not any(
-        value in text for value in _YAML_DEPRECATED_BOOL_WARNING_VALUES
+        value in text for value in _YAML_DEPRECATED_BOOL_VALUES
     ):
         return
 
@@ -66,7 +79,7 @@ def warn_yaml_deprecated_bool_values(text: str) -> None:
 
 def _construct_yaml_bool_with_warning(loader: Any, node: Any) -> bool:
     value = loader.construct_scalar(node)
-    if value in _YAML_DEPRECATED_BOOL_VALUES:  # pragma: no cover
+    if value in _YAML_DEPRECATED_BOOL_VALUES:
         warn_deprecated(
             "config.yaml-non-lowercase-bool",
             details=(
@@ -159,9 +172,6 @@ def _get_base_model_class() -> type:
     return _BaseModelV2
 
 
-_BaseModel: type | None = None
-
-
 def create_module_getattr(
     module_name: str,
     lazy_imports: dict[str, tuple[str, str]],
@@ -195,11 +205,8 @@ def create_module_getattr(
 
 def __getattr__(name: str) -> Any:
     """Provide lazy access to BaseModel and SafeLoader."""
-    global _BaseModel  # noqa: PLW0603
     if name == "BaseModel":
-        if _BaseModel is None:
-            _BaseModel = _get_base_model_class()
-        return _BaseModel
+        return _get_base_model_class()
     if name == "SafeLoader":
         return get_safe_loader()
     msg = f"module {__name__!r} has no attribute {name!r}"

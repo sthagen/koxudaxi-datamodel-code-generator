@@ -9,8 +9,14 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from datamodel_code_generator.model import DataModel, DataModelFieldBase, _rebuild_model_with_datamodel_namespace
 from datamodel_code_generator.model.base import UNDEFINED
-from datamodel_code_generator.model.dataclass import has_field_assignment
-from datamodel_code_generator.model.pydantic_v2.base_model import ConfigAttribute, Constraints
+from datamodel_code_generator.model.dataclass import _DataclassReuseMixin, has_field_assignment
+from datamodel_code_generator.model.pydantic_v2._config import (
+    ConfigAttribute,
+    build_base_config_parameters,
+)
+from datamodel_code_generator.model.pydantic_v2.base_model import (
+    Constraints as _Constraints,
+)
 from datamodel_code_generator.model.pydantic_v2.base_model import (
     DataModelField as DataModelFieldV2,
 )
@@ -18,7 +24,7 @@ from datamodel_code_generator.model.pydantic_v2.imports import (
     IMPORT_CONFIG_DICT,
     IMPORT_PYDANTIC_DATACLASS,
 )
-from datamodel_code_generator.reference import Reference
+from datamodel_code_generator.model.pydantic_v2.version import PYDANTIC_V2_DATACLASS_ALIAS_NEEDS_FALLBACK
 
 if TYPE_CHECKING:
     from collections import defaultdict
@@ -26,9 +32,12 @@ if TYPE_CHECKING:
 
     from datamodel_code_generator import DataclassArguments
     from datamodel_code_generator.imports import Import
+    from datamodel_code_generator.reference import Reference
+
+Constraints = _Constraints
 
 
-class DataClass(DataModel):
+class DataClass(_DataclassReuseMixin, DataModel):
     """DataModel implementation for Pydantic v2 dataclasses."""
 
     TEMPLATE_FILE_PATH: ClassVar[str] = "pydantic_v2/dataclass.jinja2"
@@ -97,91 +106,48 @@ class DataClass(DataModel):
                 self.dataclass_arguments["kw_only"] = True
         self._set_deprecated_decorator()
 
-        config_parameters: dict[str, Any] = {}
-
-        extra = self._get_config_extra()
-        if extra:
-            config_parameters["extra"] = extra
-
-        config_attributes = self._get_config_attributes()
-        for from_, to, invert in config_attributes:
-            if from_ in self.extra_template_data:
-                config_parameters[to] = (
-                    not self.extra_template_data[from_] if invert else self.extra_template_data[from_]
-                )
-
-        for data_type in self.all_data_types:
-            if data_type.is_custom_type:  # pragma: no cover
-                config_parameters["arbitrary_types_allowed"] = True
-                break
+        config_parameters = build_base_config_parameters(
+            extra_template_data=self.extra_template_data,
+            all_data_types=self.all_data_types,
+            config_attributes_v2=self._CONFIG_ATTRIBUTES_V2,
+            config_attributes_v2_11=self._CONFIG_ATTRIBUTES_V2_11,
+        )
 
         if config_parameters:
             self._additional_imports.append(IMPORT_CONFIG_DICT)
             self.extra_template_data["config"] = config_parameters
 
-    def _get_config_attributes(self) -> list[ConfigAttribute]:
-        """Get config attributes based on target Pydantic version."""
-        from datamodel_code_generator import TargetPydanticVersion  # noqa: PLC0415
 
-        target_version = self.extra_template_data.get("target_pydantic_version")
-        if target_version == TargetPydanticVersion.V2_11:
-            return self._CONFIG_ATTRIBUTES_V2_11
-        return self._CONFIG_ATTRIBUTES_V2
+if PYDANTIC_V2_DATACLASS_ALIAS_NEEDS_FALLBACK:
+    import keyword
 
-    def _get_config_extra(self) -> str | None:
-        """Get extra field configuration for ConfigDict."""
-        additional_properties = self.extra_template_data.get("additionalProperties")
-        unevaluated_properties = self.extra_template_data.get("unevaluatedProperties")
-        allow_extra_fields = self.extra_template_data.get("allow_extra_fields")
-        extra_fields = self.extra_template_data.get("extra_fields")
+    class DataModelField(DataModelFieldV2):
+        """Field implementation for Pydantic v2 dataclass models.
 
-        config_extra = None
-        if allow_extra_fields or extra_fields == "allow":
-            config_extra = "'allow'"
-        elif extra_fields == "forbid":
-            config_extra = "'forbid'"
-        elif extra_fields == "ignore":
-            config_extra = "'ignore'"
-        elif additional_properties is True:
-            config_extra = "'allow'"
-        elif additional_properties is False:
-            config_extra = "'forbid'"
-        elif unevaluated_properties is True:
-            config_extra = "'allow'"
-        elif unevaluated_properties is False:
-            config_extra = "'forbid'"
-        return config_extra
+        Inherits pydantic v2 Field() constraint handling from DataModelFieldV2.
+        """
 
-    def create_reuse_model(self, base_ref: Reference) -> DataClass:
-        """Create inherited model with empty fields pointing to base reference."""
-        return self.__class__(
-            fields=[],
-            base_classes=[base_ref],
-            description=self.description,
-            reference=Reference(
-                name=self.name,
-                path=self.reference.path + "/reuse",
-            ),
-            custom_template_dir=self._custom_template_dir,
-            custom_base_class=self.custom_base_class,
-            keyword_only=self.keyword_only,
-            frozen=self.frozen,
-            treat_dot_as_module=self._treat_dot_as_module,
-            dataclass_arguments=self.dataclass_arguments,
-        )
+        def __init__(self, **data: Any) -> None:
+            """Initialize and make non-identifier aliases safe for dataclass signatures."""
+            super().__init__(**data)
+            if self.alias is None or (self.alias.isidentifier() and not keyword.iskeyword(self.alias)):
+                return
 
+            validation_aliases = list(self.validation_aliases or ())
+            if self.alias not in validation_aliases:
+                validation_aliases.insert(0, self.alias)
+            if self.serialization_alias is None:
+                self.serialization_alias = self.alias
+            self.validation_aliases = validation_aliases
+            self.alias = None
 
-class DataModelField(DataModelFieldV2):
-    """Field implementation for Pydantic v2 dataclass models.
+else:
 
-    Inherits pydantic v2 Field() constraint handling from DataModelFieldV2.
-    """
+    class DataModelField(DataModelFieldV2):
+        """Field implementation for Pydantic v2 dataclass models.
 
-    constraints: Constraints | None = None  # ty: ignore
-
-    def process_const(self) -> None:
-        """Process const field constraint using literal type."""
-        self._process_const_as_literal()
+        Inherits pydantic v2 Field() constraint handling from DataModelFieldV2.
+        """
 
 
 _rebuild_model_with_datamodel_namespace(DataModelField)

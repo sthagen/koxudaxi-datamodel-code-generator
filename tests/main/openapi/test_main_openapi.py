@@ -30,6 +30,7 @@ from datamodel_code_generator import (
 from datamodel_code_generator.__main__ import Exit
 from datamodel_code_generator.config import GenerateConfig
 from datamodel_code_generator.model import base as model_base
+from datamodel_code_generator.model.pydantic_v2.version import PYDANTIC_V2_FIELD_DEPRECATED_NEEDS_JSON_SCHEMA_EXTRA
 from tests.conftest import (
     HttpxGetMockFactory,
     MockHttpxResponse,
@@ -680,6 +681,7 @@ def test_main_modular_filename(output_file: Path) -> None:
     )
 
 
+@pytest.mark.isolate_builtin_formatter_config
 def test_main_openapi_no_file(
     capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -700,6 +702,7 @@ def test_main_openapi_no_file(
     black.__version__.split(".")[0] == "19",
     reason="Installed black doesn't support the old style",
 )
+@pytest.mark.isolate_builtin_formatter_config
 @pytest.mark.cli_doc(
     options=["--extra-template-data"],
     option_description="""Pass custom template variables from JSON file for code generation.
@@ -742,6 +745,7 @@ def test_main_openapi_extra_template_data_config(
         )
 
 
+@pytest.mark.isolate_builtin_formatter_config
 def test_main_custom_template_dir_old_style(
     capsys: pytest.CaptureFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -776,6 +780,7 @@ to the templates.""",
     cli_args=["--custom-template-dir", "templates", "--extra-template-data", "openapi/extra_data.json"],
     golden_output="openapi/custom_template_dir.py",
 )
+@pytest.mark.isolate_builtin_formatter_config
 def test_main_openapi_custom_template_dir(
     capsys: pytest.CaptureFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -804,6 +809,7 @@ def test_main_openapi_custom_template_dir(
         )
 
 
+@pytest.mark.isolate_builtin_formatter_config
 def test_main_openapi_custom_template_dir_include_override(
     capsys: pytest.CaptureFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -830,6 +836,7 @@ def test_main_openapi_custom_template_dir_include_override(
         )
 
 
+@pytest.mark.isolate_builtin_formatter_config
 def test_main_openapi_schema_extensions(
     capsys: pytest.CaptureFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2173,11 +2180,12 @@ def test_main_openapi_nullable_use_union_operator(output_file: Path) -> None:
 
 def test_external_relative_ref(tmp_path: Path) -> None:
     """Test OpenAPI generation with external relative references."""
-    run_main_and_assert(
-        input_path=OPEN_API_DATA_PATH / "external_relative_ref" / "model_b",
-        output_path=tmp_path,
-        expected_directory=EXPECTED_OPENAPI_PATH / "external_relative_ref",
-    )
+    with pytest.warns(FutureWarning, match=r"outside the input base path"):
+        run_main_and_assert(
+            input_path=OPEN_API_DATA_PATH / "external_relative_ref" / "model_b",
+            output_path=tmp_path,
+            expected_directory=EXPECTED_OPENAPI_PATH / "external_relative_ref",
+        )
 
 
 def test_paths_external_ref(output_file: Path) -> None:
@@ -2919,7 +2927,10 @@ def test_main_dataclass_base_class(output_file: Path) -> None:
 def test_main_openapi_reference_same_hierarchy_directory(tmp_path: Path) -> None:
     """Test OpenAPI generation with reference in same hierarchy directory."""
     output_file: Path = tmp_path / "output.py"
-    with chdir(OPEN_API_DATA_PATH / "reference_same_hierarchy_directory"):
+    with (
+        chdir(OPEN_API_DATA_PATH / "reference_same_hierarchy_directory"),
+        pytest.warns(FutureWarning, match=r"outside the input base path"),
+    ):
         run_main_and_assert(
             input_path=Path("./public/entities.yaml"),
             output_path=output_file,
@@ -5488,6 +5499,21 @@ def test_main_openapi_deprecated_field(output_file: Path) -> None:
         assert_func=assert_file_content,
         expected_file="deprecated_field.py",
         extra_args=["--output-model-type", "pydantic_v2.BaseModel"],
+    )
+
+
+@pytest.mark.skipif(
+    not PYDANTIC_V2_FIELD_DEPRECATED_NEEDS_JSON_SCHEMA_EXTRA,
+    reason="Pydantic 2.7+ supports Field(deprecated=...) directly",
+)
+def test_main_openapi_deprecated_field_pydantic26(output_file: Path) -> None:
+    """Test OpenAPI deprecated fields stay importable before native Pydantic support."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "deprecated_field.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        extra_args=["--output-model-type", "pydantic_v2.BaseModel"],
+        force_exec_validation=True,
     )
 
 

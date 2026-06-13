@@ -11,7 +11,6 @@ import importlib
 import json
 import re
 from collections import defaultdict
-from collections.abc import Iterable
 from contextlib import contextmanager, suppress
 from fractions import Fraction
 from functools import cached_property, lru_cache
@@ -50,23 +49,22 @@ from datamodel_code_generator.format import (
 from datamodel_code_generator.imports import IMPORT_ANY, Import
 from datamodel_code_generator.model import DataModel, DataModelFieldBase
 from datamodel_code_generator.model.base import UNDEFINED, get_module_name, sanitize_module_name
-from datamodel_code_generator.model.dataclass import DataClass
 from datamodel_code_generator.model.enum import (
     SPECIALIZED_ENUM_TYPE_MATCH,
     Enum,
     StrEnum,
 )
-from datamodel_code_generator.model.pydantic_v2.dataclass import DataClass as PydanticV2DataClass
-from datamodel_code_generator.model.typed_dict import TypedDict as TypedDictModel
 from datamodel_code_generator.parser import DefaultPutDict, LiteralType
 from datamodel_code_generator.parser.base import (
     SPECIAL_PATH_FORMAT,
     Parser,
     Source,
+    _is_typed_dict_data_model,
     escape_characters,
     get_special_path,
     title_to_class_name,
 )
+from datamodel_code_generator.parser.schema_version import get_data_formats
 from datamodel_code_generator.reference import SPECIAL_PATH_MARKER, ModelType, Reference, is_url
 from datamodel_code_generator.types import (
     ANY,
@@ -80,6 +78,7 @@ from datamodel_code_generator.types import (
     is_python_type_annotation,
 )
 from datamodel_code_generator.util import BaseModel
+from datamodel_code_generator.validators import _validate_dotted_python_identifier_path
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
@@ -89,6 +88,16 @@ if TYPE_CHECKING:
     from datamodel_code_generator.parser.schema_version import JsonSchemaFeatures
 
 JsonSchemaLiteral = Union[bool, int, str]  # noqa: UP007
+
+
+def __getattr__(name: str) -> Any:
+    """Return compatibility model classes without importing them on parser load."""
+    match name:
+        case "TypedDictModel":
+            from datamodel_code_generator.model.typed_dict import TypedDict as TypedDictModel  # noqa: PLC0415
+
+            return TypedDictModel
+    raise AttributeError(name)
 
 
 def unescape_json_pointer_segment(segment: str) -> str:
@@ -167,72 +176,7 @@ def _split_json_pointer(schema: dict[str, YamlValue] | list[YamlValue], pointer:
     return parts, reference_parts
 
 
-# TODO: This dictionary contains formats valid only for OpenAPI and not for
-#       jsonschema and vice versa. They should be separated.
-json_schema_data_formats: dict[str, dict[str, Types]] = {
-    "integer": {
-        "int32": Types.int32,
-        "int64": Types.int64,
-        "default": Types.integer,
-        "date-time": Types.date_time,
-        "unix-time": Types.int64,
-        "unixtime": Types.int64,
-    },
-    "number": {
-        "float": Types.float,
-        "double": Types.double,
-        "decimal": Types.decimal,
-        "date-time": Types.date_time,
-        "time": Types.time,
-        "time-delta": Types.timedelta,
-        "default": Types.number,
-        "unixtime": Types.int64,
-    },
-    "string": {
-        "default": Types.string,
-        "byte": Types.byte,  # base64 encoded string
-        "binary": Types.binary,
-        "date": Types.date,
-        "date-time": Types.date_time,
-        "timestamp with time zone": Types.date_time,  # PostgreSQL format
-        "date-time-local": Types.date_time_local,
-        "duration": Types.timedelta,
-        "time": Types.time,
-        "time-local": Types.time_local,
-        "password": Types.password,
-        "path": Types.path,
-        "email": Types.email,
-        "idn-email": Types.email,
-        "idn-hostname": Types.string,
-        "iri": Types.string,
-        "iri-reference": Types.string,
-        "uuid": Types.uuid,
-        "uuid1": Types.uuid1,
-        "uuid2": Types.uuid2,
-        "uuid3": Types.uuid3,
-        "uuid4": Types.uuid4,
-        "uuid5": Types.uuid5,
-        "uri": Types.uri,
-        "uri-reference": Types.string,
-        "uri-template": Types.string,
-        "json-pointer": Types.string,
-        "relative-json-pointer": Types.string,
-        "regex": Types.string,
-        "hostname": Types.hostname,
-        "ipv4": Types.ipv4,
-        "ipv4-network": Types.ipv4_network,
-        "ipv6": Types.ipv6,
-        "ipv6-network": Types.ipv6_network,
-        "decimal": Types.decimal,
-        "integer": Types.integer,
-        "unixtime": Types.int64,
-        "ulid": Types.ulid,
-    },
-    "boolean": {"default": Types.boolean},
-    "object": {"default": Types.object},
-    "null": {"default": Types.null},
-    "array": {"default": Types.array},
-}
+json_schema_data_formats: dict[str, dict[str, Types]] = get_data_formats(is_openapi=True)
 
 
 class JSONReference(_enum.Enum):
@@ -278,6 +222,19 @@ class JsonSchemaObject(BaseModel):
         "pattern",
         "uniqueItems",
     }
+    __constraint_field_order__: ClassVar[tuple[str, ...]] = (
+        "exclusiveMinimum",
+        "minimum",
+        "exclusiveMaximum",
+        "maximum",
+        "multipleOf",
+        "minItems",
+        "maxItems",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "uniqueItems",
+    )
     __extra_key__: str = SPECIAL_PATH_FORMAT.format("extras")
     __metadata_only_fields__: set[str] = {  # noqa: RUF012
         "title",
@@ -448,18 +405,20 @@ class JsonSchemaObject(BaseModel):
     def __init__(self, **data: Any) -> None:
         """Initialize JsonSchemaObject with extra fields handling."""
         super().__init__(**data)
-        if data.get("items") is False:
+        items = data.get("items")
+        if items is False:
             self.items = False
-        elif data.get("items") == []:
+        elif items == []:
             self.items = []
         # Restore extras from alias key (for dict -> parse_obj round-trip)
         alias_extras = data.get(self.__extra_key__, {})
         # Collect custom keys from raw data
         raw_extras = {k: v for k, v in data.items() if k not in EXCLUDE_FIELD_KEYS}
-        # Merge: raw_extras takes precedence (original data is the source of truth)
-        self.extras = {**alias_extras, **raw_extras}
-        if "const" in alias_extras:  # pragma: no cover
-            self.extras["const"] = alias_extras["const"]
+        if alias_extras or raw_extras:
+            # Merge: raw_extras takes precedence (original data is the source of truth)
+            self.extras = {**alias_extras, **raw_extras}
+            if "const" in alias_extras:  # pragma: no cover
+                self.extras["const"] = alias_extras["const"]
         # Support x-propertyNames extension for OpenAPI 3.0
         if "x-propertyNames" in self.extras and self.propertyNames is None:
             x_prop_names = self.extras.pop("x-propertyNames")
@@ -625,6 +584,17 @@ def _validate_default_factory(default_factory: Any) -> str:
     raise Error(msg)
 
 
+def _validate_schema_python_import_path(value: Any, field_name: str) -> str:
+    if not isinstance(value, str):
+        msg = f"{field_name} must be a dotted Python identifier path: {value!r}"
+        raise Error(msg)
+    try:
+        return _validate_dotted_python_identifier_path(value)
+    except ValueError as exc:
+        msg = f"{field_name} {exc}"
+        raise Error(msg) from None
+
+
 DEFAULT_MODEL_EXTRA_KEYS: set[str] = {
     "contentEncoding",
     "contentMediaType",
@@ -653,12 +623,16 @@ EXCLUDE_FIELD_KEYS = (
 }
 
 
+_DEFAULT_SCHEMA_PATHS = ("#/definitions", "#/$defs")
+
+
 @snooper_to_methods()  # noqa: PLR0904
 class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
     """Parser for JSON Schema, JSON, YAML, Dict, and CSV formats."""
 
-    SCHEMA_PATHS: ClassVar[list[str]] = ["#/definitions", "#/$defs"]
+    SCHEMA_PATHS: ClassVar[list[str]] = list(_DEFAULT_SCHEMA_PATHS)
     SCHEMA_OBJECT_TYPE: ClassVar[type[JsonSchemaObject]] = JsonSchemaObject
+    _cache_local_sources_during_parse: ClassVar[bool] = True
 
     COMPATIBLE_PYTHON_TYPES: ClassVar[dict[str, frozenset[str]]] = {
         "string": frozenset({"str", "String"}),
@@ -791,6 +765,9 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
         self.reserved_refs: defaultdict[tuple[str, ...], set[str]] = defaultdict(set)
         self._dynamic_anchor_index: dict[tuple[str, ...], dict[str, str]] = {}
         self._recursive_anchor_index: dict[tuple[str, ...], list[str]] = {}
+        self._ref_data_type_facts: dict[str, tuple[Any, bool]] = {}
+        self._force_base_model_refs: set[str] = set()
+        self._force_base_model_generation = False
         self.field_keys: set[str] = {
             *DEFAULT_FIELD_KEYS,
             *self.field_extra_keys,
@@ -808,17 +785,11 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
 
     def get_field_extras(self, obj: JsonSchemaObject) -> dict[str, Any]:
         """Extract extra field metadata from a JSON Schema object."""
-        if self.field_include_all_keys:
-            extras = {
-                self.get_field_extra_key(k.lstrip("x-") if k in self.field_extra_keys_without_x_prefix else k): v
-                for k, v in obj.extras.items()
-            }
-        else:
-            extras = {
-                self.get_field_extra_key(k.lstrip("x-") if k in self.field_extra_keys_without_x_prefix else k): v
-                for k, v in obj.extras.items()
-                if k in self.field_keys
-            }
+        extras = {
+            self.get_field_extra_key(k.removeprefix("x-") if k in self.field_extra_keys_without_x_prefix else k): v
+            for k, v in obj.extras.items()
+            if self.field_include_all_keys or k in self.field_keys
+        }
         if self.default_field_extras:
             extras.update(self.default_field_extras)
         if (default_factory := extras.get("default_factory", UNDEFINED)) is not UNDEFINED:
@@ -865,7 +836,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
         OpenAPI subclass uses its own SCHEMA_PATHS (#/components/schemas).
         """
         # OpenAPI and other subclasses use their own SCHEMA_PATHS
-        if self.SCHEMA_PATHS != ["#/definitions", "#/$defs"]:
+        if list(_DEFAULT_SCHEMA_PATHS) != self.SCHEMA_PATHS:
             return [(s, s.lstrip("#/").split("/")) for s in self.SCHEMA_PATHS]
 
         # JsonSchema: use definitions_key from schema_features
@@ -1017,6 +988,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
         return self.SCHEMA_OBJECT_TYPE(
             type=enum_type,
             enum=final_enum,
+            nullable=nullable,
             title=original.title,
             description=original.description,
             **(enum_metadata | ({"default": original.default} if original.has_default else {})),
@@ -1035,6 +1007,14 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
                 or (obj.enum and not self.ignore_enum_constraints)
             )
         )
+
+    def _get_constraint_values(self, obj: JsonSchemaObject) -> dict[str, Any]:  # noqa: PLR6301
+        """Return JSON Schema constraint values without serializing nested schemas."""
+        return {
+            constraint: value
+            for constraint in obj.__constraint_field_order__
+            if (value := getattr(obj, constraint)) is not None
+        }
 
     def _is_fixed_length_tuple(self, obj: JsonSchemaObject) -> bool:
         """Check if an array field represents a fixed-length tuple."""
@@ -1376,6 +1356,23 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             return self.data_type(literals=[const])
         return self._get_data_type_from_json_value(const)
 
+    def _partition_enum_values(  # noqa: PLR6301
+        self, enum_values: list[Any]
+    ) -> tuple[list[JsonSchemaLiteral], list[object], bool]:
+        """Split enum values into literal and non-literal values."""
+        literal_values: list[JsonSchemaLiteral] = []
+        non_literal_values: list[object] = []
+        has_null = False
+        for enum_value in enum_values:
+            if enum_value is None:
+                has_null = True
+                non_literal_values.append(enum_value)
+            elif isinstance(enum_value, (bool, int, str)):
+                literal_values.append(enum_value)
+            else:
+                non_literal_values.append(enum_value)
+        return literal_values, non_literal_values, has_null
+
     def _resolve_field_flag(self, obj: JsonSchemaObject, flag: Literal["readOnly", "writeOnly"]) -> bool:
         """Resolve a field flag (readOnly/writeOnly) from direct value, $ref, and compositions."""
         if getattr(obj, flag) is True:
@@ -1447,7 +1444,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
 
     def _should_generate_base_model(self, *, generates_separate_models: bool = False) -> bool:
         """Determine if Base model should be generated."""
-        if getattr(self, "_force_base_model_generation", False):
+        if self._force_base_model_generation:
             return True
         if self.read_only_write_only_model_type is None:
             return True
@@ -1521,6 +1518,14 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             return False
         return not (has_write_only and not has_read_only)
 
+    def _preload_property_refs_for_rw_models(self, obj: JsonSchemaObject) -> None:
+        """Preload property refs needed for readOnly/writeOnly model splitting."""
+        if self.read_only_write_only_model_type is None or not obj.properties:
+            return
+        for prop in obj.properties.values():
+            if isinstance(prop, JsonSchemaObject) and prop.ref and self._resolve_external_ref_mapping(prop.ref) is None:
+                self._load_ref_schema_object(prop.ref)
+
     def _update_data_type_ref_for_variant(self, data_type: DataType, suffix: str) -> None:
         """Recursively update data type references to point to variant models."""
         if data_type.reference:
@@ -1534,8 +1539,6 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
                 variant_ref = self.model_resolver.add(path_parts, unique_name, class_name=True, unique=False)
                 self.generation_store.replace_data_type_ref(data_type, variant_ref)
             elif not self._ref_schema_has_model(ref_path):  # pragma: no branch
-                if not hasattr(self, "_force_base_model_refs"):
-                    self._force_base_model_refs: set[str] = set()
                 self._force_base_model_refs.add(ref_path)
         for nested_dt in data_type.data_types:
             self._update_data_type_ref_for_variant(nested_dt, suffix)
@@ -1558,8 +1561,6 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
 
     def _generate_forced_base_models(self) -> None:
         """Generate base models for schemas that are referenced as property types but lack models."""
-        if not hasattr(self, "_force_base_model_refs"):
-            return
         if not self._force_base_model_refs:  # pragma: no cover
             return
 
@@ -1668,7 +1669,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
         default_value = effective_default if effective_has_default is not None else field.default
         has_default = effective_has_default if effective_has_default is not None else field.has_default
 
-        constraints = field.model_dump(exclude_none=True) if self.is_constraints_field(field) else None
+        constraints = self._get_constraint_values(field) if self.is_constraints_field(field) else None
         consumed = self.data_type_manager.CONSTRAINED_TYPE_CONSUMED_KEYS
         if constraints is not None and field_type.type in consumed:
             for key in consumed[field_type.type]:
@@ -1841,25 +1842,42 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
         self.imports.append(import_)
         return self.data_type.from_import(import_)
 
+    def _get_x_python_import_path(self, x_python_import: dict[str, Any]) -> str | None:  # noqa: PLR6301
+        module = x_python_import.get("module")
+        type_name = x_python_import.get("name")
+        if not module and not type_name:
+            return None
+        if not module or not type_name:
+            msg = "x-python-import requires both module and name"
+            raise Error(msg)
+        return _validate_schema_python_import_path(f"{module}.{type_name}", "x-python-import")
+
     def get_ref_data_type(self, ref: str) -> DataType:
-        """Get a data type from a reference string."""
+        """Get a data type from a reference string.
+
+        The referenced schema only contributes its x-python-import extra and
+        null/nullable flags here, so those facts are cached per resolved ref to
+        avoid re-validating the same schema for every occurrence of the ref.
+        """
         # Check external ref mapping before loading the schema
         mapped = self._check_external_ref_mapping(ref)
         if mapped is not None:
             return mapped
 
-        ref_schema = self._load_ref_schema_object(ref)
-        x_python_import = ref_schema.extras.get("x-python-import")
-        if isinstance(x_python_import, dict):
-            module = x_python_import.get("module")
-            type_name = x_python_import.get("name")
-            if module and type_name:  # pragma: no branch
-                full_path = f"{module}.{type_name}"
-                import_ = Import.from_full_path(full_path)
-                self.imports.append(import_)
-                return self.data_type.from_import(import_)
+        resolved_ref = self.model_resolver.resolve_ref(ref)
+        if (facts := self._ref_data_type_facts.get(resolved_ref)) is None:
+            ref_schema = self._load_ref_schema_object(ref)
+            facts = (
+                ref_schema.extras.get("x-python-import"),
+                ref_schema.type == "null" or (self.strict_nullable and ref_schema.nullable is True),
+            )
+            self._ref_data_type_facts[resolved_ref] = facts
+        x_python_import, is_optional = facts
+        if isinstance(x_python_import, dict) and (full_path := self._get_x_python_import_path(x_python_import)):
+            import_ = Import.from_full_path(full_path)
+            self.imports.append(import_)
+            return self.data_type.from_import(import_)
         reference = self.model_resolver.add_ref(ref)
-        is_optional = ref_schema.type == "null" or (self.strict_nullable and ref_schema.nullable is True)
         return self.data_type(reference=reference, is_optional=is_optional)
 
     def set_additional_properties(self, path: str, obj: JsonSchemaObject) -> None:
@@ -1888,7 +1906,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             additional_props_type = self._build_lightweight_type(obj.additionalProperties)
             if additional_props_type:  # pragma: no branch
                 self.extra_template_data[path]["additionalPropertiesType"] = additional_props_type.type_hint
-                if issubclass(self.data_model_type, TypedDictModel) and (
+                if _is_typed_dict_data_model(self.data_model_type) and (
                     reference_classes := {
                         data_type.reference.path
                         for data_type in additional_props_type.all_data_types
@@ -2066,11 +2084,10 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
         try:
             ref_schema = self._load_ref_schema_object(f"#/$defs/{type_name}")
             x_python_import = ref_schema.extras.get("x-python-import")
-            if isinstance(x_python_import, dict):
-                module = x_python_import.get("module")
-                name = x_python_import.get("name")
-                if module and name:  # pragma: no branch
-                    return Import.from_full_path(f"{module}.{name}")
+            if isinstance(x_python_import, dict) and (full_path := self._get_x_python_import_path(x_python_import)):
+                return Import.from_full_path(full_path)
+        except Error:
+            raise
         except Exception:  # noqa: BLE001, S110
             pass
         return None
@@ -2150,18 +2167,21 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
 
         return self._validate_schema_object(target_schema, [resolved_ref])
 
+    def _anchor_ref_path(self, root_key: tuple[str, ...], path: list[str]) -> str:  # noqa: PLR6301
+        """Return the local ref path for an anchor under the current root."""
+        root_len = len(root_key)
+        if root_len >= len(path):
+            return "#"
+        suffix_parts = path[root_len:]
+        first = suffix_parts[0]
+        if first.startswith("#"):
+            suffix_parts = [first[1:].lstrip("/"), *suffix_parts[1:]]
+        return "#/" + "/".join(part.replace("~", "~0").replace("/", "~1") for part in suffix_parts if part)
+
     def _build_anchor_indexes(self, obj: JsonSchemaObject, path: list[str]) -> None:
         """Build $recursiveAnchor and $dynamicAnchor indexes for a schema object."""
         root_key = tuple(self.model_resolver.current_root)
-        root_len = len(root_key)
-        if root_len < len(path):
-            suffix_parts = path[root_len:]
-            first = suffix_parts[0]
-            if first.startswith("#"):
-                suffix_parts = [first[1:].lstrip("/"), *suffix_parts[1:]]
-            ref_path = "#/" + "/".join(suffix_parts)
-        else:
-            ref_path = "#"
+        ref_path = self._anchor_ref_path(root_key, path)
         if obj.recursiveAnchor:
             anchors = self._recursive_anchor_index.setdefault(root_key, [])
             if ref_path not in anchors:
@@ -2183,15 +2203,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
         anchors = self._recursive_anchor_index.get(root_key, [])
         if not anchors:
             return "#"
-        root_len = len(root_key)
-        if root_len < len(path):
-            suffix_parts = path[root_len:]
-            first = suffix_parts[0]
-            if first.startswith("#"):
-                suffix_parts = [first[1:].lstrip("/"), *suffix_parts[1:]]
-            current_ref = "#/" + "/".join(suffix_parts)
-        else:
-            current_ref = "#"  # pragma: no cover
+        current_ref = self._anchor_ref_path(root_key, path)
         best = "#"
         best_len = 0
         for anchor_ref in anchors:
@@ -2669,20 +2681,12 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             return self._get_const_data_type(schema.extras["const"])
 
         if schema.enum:
-            literal_values: list[JsonSchemaLiteral] = []
-            non_literal_values: list[object] = []
-            for enum_value in schema.enum:
-                if enum_value is None:
-                    continue
-                if isinstance(enum_value, (bool, int, str)):
-                    literal_values.append(enum_value)
-                else:
-                    non_literal_values.append(enum_value)
+            literal_values, non_literal_values, has_null = self._partition_enum_values(schema.enum)
             if not non_literal_values:
-                return self.data_type(literals=literal_values, is_optional=None in schema.enum)
+                return self.data_type(literals=literal_values, is_optional=has_null)
             data_types = [self.data_type(literals=literal_values)] if literal_values else []
             data_types.extend(self._get_data_type_from_json_value(value) for value in non_literal_values)
-            return self.data_type(data_types=data_types, is_optional=None in schema.enum)
+            return self.data_type(data_types=data_types, is_optional=has_null)
 
         if schema.is_array:
             return self._build_lightweight_array_type(schema, depth, visited, max_depth, max_union_elements)
@@ -2878,6 +2882,27 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
         if isinstance(alias, list):
             return None, alias
         return alias, None
+
+    def _effective_default_state(
+        self,
+        field_name: str,
+        default: Any,
+        *,
+        has_default: bool,
+        required: bool,
+        class_name: str | None,
+    ) -> tuple[Any, bool, bool]:
+        effective_default, effective_has_default = self.model_resolver.resolve_default_value(
+            field_name,
+            default,
+            has_default,
+            class_name=class_name,
+        )
+        return (
+            effective_default,
+            effective_has_default,
+            required and self.apply_default_values_for_required_fields and effective_has_default,
+        )
 
     def _get_inherited_field(self, prop_name: str, base_classes: list[Reference]) -> DataModelFieldBase | None:
         """Get an inherited generated field from parsed base models."""
@@ -3183,31 +3208,17 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
         """Parse oneOf schema into a list of data types."""
         return self.parse_combined_schema(name, obj, path, "oneOf")
 
-    def _create_data_model(self, model_type: type[DataModel] | None = None, **kwargs: Any) -> DataModel:
-        """Create data model instance with dataclass_arguments support for DataClass."""
-        # Add class decorators if not already provided
-        if "decorators" not in kwargs and self.class_decorators:
-            kwargs["decorators"] = list(self.class_decorators)
-        data_model_class = model_type or self.data_model_type
-        if issubclass(data_model_class, (DataClass, PydanticV2DataClass)):
-            # Use dataclass_arguments from kwargs, or fall back to self.dataclass_arguments
-            # If both are None, construct from legacy frozen_dataclasses/keyword_only flags
-            dataclass_arguments = kwargs.pop("dataclass_arguments", None)
-            if dataclass_arguments is None:
-                dataclass_arguments = self.dataclass_arguments
-            if dataclass_arguments is None:
-                # Construct from legacy flags for library API compatibility
-                dataclass_arguments = {}
-                if self.frozen_dataclasses:
-                    dataclass_arguments["frozen"] = True
-                if self.keyword_only:
-                    dataclass_arguments["kw_only"] = True
-            kwargs["dataclass_arguments"] = dataclass_arguments
-            kwargs.pop("frozen", None)
-            kwargs.pop("keyword_only", None)
-        else:
-            kwargs.pop("dataclass_arguments", None)
-        return data_model_class(**kwargs)
+    def _merge_type_modifiers(self, new_type: DataType, current_type: DataType) -> None:  # noqa: PLR6301
+        """Merge container modifiers from an overriding field type into an inherited type."""
+        new_type.is_optional = new_type.is_optional or current_type.is_optional
+        new_type.is_dict = new_type.is_dict or current_type.is_dict
+        new_type.is_list = new_type.is_list or current_type.is_list
+        new_type.is_set = new_type.is_set or current_type.is_set
+        new_type.is_frozen_set = new_type.is_frozen_set or current_type.is_frozen_set
+        new_type.is_mapping = new_type.is_mapping or current_type.is_mapping
+        new_type.is_sequence = new_type.is_sequence or current_type.is_sequence
+        if new_type.kwargs is None and current_type.kwargs is not None:  # pragma: no cover
+            new_type.kwargs = current_type.kwargs
 
     def _parse_object_common_part(  # noqa: PLR0912, PLR0913, PLR0915
         self,
@@ -3220,10 +3231,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
         base_classes: list[Reference],
         required: list[str],
     ) -> DataType:
-        if self.read_only_write_only_model_type is not None and obj.properties:
-            for prop in obj.properties.values():
-                if isinstance(prop, JsonSchemaObject) and prop.ref:
-                    self._load_ref_schema_object(prop.ref)
+        self._preload_property_refs_for_rw_models(obj)
         if obj.properties:
             fields.extend(
                 self.parse_object_fields(
@@ -3241,12 +3249,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
                     inherited_type = self._get_inherited_field_type(field_name, base_classes)
                     if inherited_type is not None:
                         new_type = inherited_type.model_copy(deep=True)
-                        new_type.is_optional = new_type.is_optional or current_type.is_optional
-                        new_type.is_dict = new_type.is_dict or current_type.is_dict
-                        new_type.is_list = new_type.is_list or current_type.is_list
-                        new_type.is_set = new_type.is_set or current_type.is_set
-                        if new_type.kwargs is None and current_type.kwargs is not None:  # pragma: no cover
-                            new_type.kwargs = current_type.kwargs
+                        self._merge_type_modifiers(new_type, current_type)
                         self.generation_store.replace_field_type(field, new_type)
                 # Handle List[Any] case: inherit item type from parent if items have Any type
                 elif field_name and self._is_list_with_any_item_type(current_type):
@@ -3258,12 +3261,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
 
                     # Preserve modifiers coming from the overriding schema.
                     if current_type is not None:  # pragma: no branch
-                        new_type.is_optional = new_type.is_optional or current_type.is_optional
-                        new_type.is_dict = new_type.is_dict or current_type.is_dict
-                        new_type.is_list = new_type.is_list or current_type.is_list
-                        new_type.is_set = new_type.is_set or current_type.is_set
-                        if new_type.kwargs is None and current_type.kwargs is not None:  # pragma: no cover
-                            new_type.kwargs = current_type.kwargs
+                        self._merge_type_modifiers(new_type, current_type)
 
                     # Some code paths represent the list type inside an outer container.
                     is_wrapped = (
@@ -3459,19 +3457,39 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             data_type=ref_data_type,
             required=True,
         )
-        data_model_root = self.data_model_root_type(
+        self._register_root_model(
             reference=reference,
             fields=[field],
-            custom_base_class=self._resolve_base_class(name, obj.custom_base_path),
+            obj=obj,
+            custom_base_class_name=name,
+            description=obj.description if self.use_schema_description else None,
+        )
+        return self.data_type(reference=reference)
+
+    def _register_root_model(  # noqa: PLR0913
+        self,
+        *,
+        reference: Reference,
+        fields: list[DataModelFieldBase],
+        obj: JsonSchemaObject,
+        custom_base_class_name: str,
+        description: str | None = None,
+        default: Any = UNDEFINED,
+    ) -> DataModel:
+        data_model_root = self.data_model_root_type(
+            reference=reference,
+            fields=fields,
+            custom_base_class=self._resolve_base_class(custom_base_class_name, obj.custom_base_path),
             custom_template_dir=self.custom_template_dir,
             extra_template_data=self.extra_template_data,
             path=self.current_source_path,
-            description=obj.description if self.use_schema_description else None,
+            description=description,
+            default=default,
             nullable=obj.type_has_null,
             treat_dot_as_module=self.treat_dot_as_module,
         )
         self.generation_store.register_model(data_model_root)
-        return self.data_type(reference=reference)
+        return data_model_root
 
     def _parse_all_of_single_ref(
         self,
@@ -3586,18 +3604,13 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             alias=None,
             original_field_name=None,
         )
-        data_model_root = self.data_model_root_type(
+        self._register_root_model(
             reference=reference,
             fields=[field],
-            custom_base_class=self._resolve_base_class(name, obj.custom_base_path),
-            custom_template_dir=self.custom_template_dir,
-            extra_template_data=self.extra_template_data,
-            path=self.current_source_path,
+            obj=obj,
+            custom_base_class_name=name,
             description=obj.description if self.use_schema_description else None,
-            nullable=obj.type_has_null,
-            treat_dot_as_module=self.treat_dot_as_module,
         )
-        self.generation_store.register_model(data_model_root)
         return self.data_type(reference=reference)
 
     def parse_object_fields(
@@ -3652,19 +3665,16 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
 
             field_type = self.parse_item(modular_name, field, [*path, field_name])
 
-            effective_default, effective_has_default = self.model_resolver.resolve_default_value(
-                original_field_name,
-                field.default,
-                field.has_default,
-                class_name=class_name,
-            )
-
             if self.force_optional_for_required_fields:
                 required: bool = False
             else:
                 required = original_field_name in requires
-            use_default_with_required = (
-                required and self.apply_default_values_for_required_fields and effective_has_default
+            effective_default, effective_has_default, use_default_with_required = self._effective_default_state(
+                original_field_name,
+                field.default,
+                has_default=field.has_default,
+                required=required,
+                class_name=class_name,
             )
             fields.append(
                 self.get_object_field(
@@ -3759,10 +3769,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
         class_name = reference.name
         self.set_title(reference.path, obj)
         self.set_schema_id(reference.path, obj)
-        if self.read_only_write_only_model_type is not None and obj.properties:
-            for prop in obj.properties.values():
-                if isinstance(prop, JsonSchemaObject) and prop.ref:
-                    self._load_ref_schema_object(prop.ref)
+        self._preload_property_refs_for_rw_models(obj)
         fields = self.parse_object_fields(
             obj,
             path,
@@ -4072,7 +4079,26 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
         )
         return bool(is_primitive)
 
-    def parse_item(  # noqa: PLR0911, PLR0912, PLR0914, PLR0915
+    def _parse_combined_const_enum(
+        self,
+        name: str,
+        obj: JsonSchemaObject,
+        combined_items: list[JsonSchemaObject | bool],
+        enum_path: list[str],
+        *,
+        singular_name: bool = False,
+    ) -> DataType | None:
+        const_enum_data = self._extract_const_enum_from_combined(combined_items, obj.type)
+        if const_enum_data is None:
+            return None
+
+        enum_values, varnames, descriptions, enum_type, nullable = const_enum_data
+        synthetic_obj = self._create_synthetic_enum_obj(obj, enum_values, varnames, descriptions, enum_type, nullable)
+        if self.should_parse_enum_as_literal(synthetic_obj, property_name=name, property_obj=obj):
+            return self.parse_enum_as_literal(synthetic_obj)
+        return self.parse_enum(name, synthetic_obj, enum_path, singular_name=singular_name)
+
+    def parse_item(  # noqa: PLR0911, PLR0912, PLR0915
         self,
         name: str,
         item: JsonSchemaObject,
@@ -4115,32 +4141,33 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
         if item.ref:
             return self.get_ref_data_type(item.ref)
         if item.custom_type_path:  # pragma: no cover
-            return self.data_type_manager.get_data_type_from_full_path(item.custom_type_path, is_custom_type=True)
+            return self.data_type_manager.get_data_type_from_full_path(
+                _validate_schema_python_import_path(item.custom_type_path, "customTypePath"),
+                is_custom_type=True,
+            )
         if item.is_array:
             return self.parse_array_fields(name, item, get_special_path("array", path)).data_type
         if item.discriminator and parent and parent.is_array and (item.oneOf or item.anyOf):
             return self.parse_root_type(name, item, path)
         if item.anyOf:
-            const_enum_data = self._extract_const_enum_from_combined(item.anyOf, item.type)
-            if const_enum_data is not None:
-                enum_values, varnames, descriptions, enum_type, nullable = const_enum_data
-                synthetic_obj = self._create_synthetic_enum_obj(
-                    item, enum_values, varnames, descriptions, enum_type, nullable
-                )
-                if self.should_parse_enum_as_literal(synthetic_obj, property_name=name, property_obj=item):
-                    return self.parse_enum_as_literal(synthetic_obj)
-                return self.parse_enum(name, synthetic_obj, get_special_path("enum", path), singular_name=singular_name)
+            if combined_const_enum := self._parse_combined_const_enum(
+                name,
+                item,
+                item.anyOf,
+                get_special_path("enum", path),
+                singular_name=singular_name,
+            ):
+                return combined_const_enum
             return self.data_type(data_types=self.parse_any_of(name, item, get_special_path("anyOf", path)))
         if item.oneOf:
-            const_enum_data = self._extract_const_enum_from_combined(item.oneOf, item.type)
-            if const_enum_data is not None:
-                enum_values, varnames, descriptions, enum_type, nullable = const_enum_data
-                synthetic_obj = self._create_synthetic_enum_obj(
-                    item, enum_values, varnames, descriptions, enum_type, nullable
-                )
-                if self.should_parse_enum_as_literal(synthetic_obj, property_name=name, property_obj=item):
-                    return self.parse_enum_as_literal(synthetic_obj)
-                return self.parse_enum(name, synthetic_obj, get_special_path("enum", path), singular_name=singular_name)
+            if combined_const_enum := self._parse_combined_const_enum(
+                name,
+                item,
+                item.oneOf,
+                get_special_path("enum", path),
+                singular_name=singular_name,
+            ):
+                return combined_const_enum
             return self.data_type(data_types=self.parse_one_of(name, item, get_special_path("oneOf", path)))
         if item.allOf:
             if self._contains_false_schema(item.allOf):
@@ -4278,7 +4305,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             data_types.append(self.parse_object(name, obj, get_special_path("object", path)))
         if obj.enum and not self.ignore_enum_constraints:
             data_types.append(self.parse_enum(name, obj, get_special_path("enum", path)))
-        constraints = obj.model_dump(exclude_none=True)
+        constraints = self._get_constraint_values(obj)
         constraints.update(self._get_array_items_constraints(obj))
         if suppress_item_constraints:
             self._suppress_array_length_constraints(constraints, obj)
@@ -4336,21 +4363,16 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
                 has_default=field.has_default,
             )
 
-        data_model_root = self.data_model_root_type(
+        self._register_root_model(
             reference=reference,
             fields=[field],
-            custom_base_class=self._resolve_base_class(name, obj.custom_base_path),
-            custom_template_dir=self.custom_template_dir,
-            extra_template_data=self.extra_template_data,
-            path=self.current_source_path,
+            obj=obj,
+            custom_base_class_name=name,
             description=obj.description if self.use_schema_description else None,
-            nullable=obj.type_has_null,
-            treat_dot_as_module=self.treat_dot_as_module,
         )
-        self.generation_store.register_model(data_model_root)
         return self.data_type(reference=reference)
 
-    def parse_root_type(  # noqa: PLR0912, PLR0914, PLR0915
+    def parse_root_type(  # noqa: PLR0912, PLR0915
         self,
         name: str,
         obj: JsonSchemaObject,
@@ -4362,7 +4384,8 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             data_type: DataType = self.get_ref_data_type(obj.ref)
         elif obj.custom_type_path:
             data_type = self.data_type_manager.get_data_type_from_full_path(
-                obj.custom_type_path, is_custom_type=True
+                _validate_schema_python_import_path(obj.custom_type_path, "customTypePath"),
+                is_custom_type=True,
             )  # pragma: no cover
         elif obj.is_array:
             data_type = self.parse_array_fields(
@@ -4370,16 +4393,8 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             ).data_type  # pragma: no cover
         elif obj.anyOf or obj.oneOf:
             combined_items = obj.anyOf or obj.oneOf
-            const_enum_data = self._extract_const_enum_from_combined(combined_items, obj.type)
-            if const_enum_data is not None:  # pragma: no cover
-                enum_values, varnames, descriptions, enum_type, nullable = const_enum_data
-                synthetic_obj = self._create_synthetic_enum_obj(
-                    obj, enum_values, varnames, descriptions, enum_type, nullable
-                )
-                if self.should_parse_enum_as_literal(synthetic_obj, property_name=name, property_obj=obj):
-                    data_type = self.parse_enum_as_literal(synthetic_obj)
-                else:
-                    data_type = self.parse_enum(name, synthetic_obj, path)
+            if const_enum_type := self._parse_combined_const_enum(name, obj, combined_items, path):
+                data_type = const_enum_type  # pragma: no cover
             else:
                 reference = self.model_resolver.add(path, name, loaded=True, class_name=True)
                 if obj.anyOf:
@@ -4451,14 +4466,14 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             reference = self.model_resolver.add(path, name, loaded=True, class_name=True)
         self._set_schema_metadata(reference.path, obj)
         self.set_schema_extensions(reference.path, obj)
-        constraints = obj.model_dump(exclude_none=True) if self.field_constraints else {}
+        constraints = self._get_constraint_values(obj) if self.field_constraints else {}
         if self._should_skip_root_field_constraints_for_multiple_types(obj):
             constraints = {}
         elif self.field_constraints and obj.format == "hostname":
             constraints["pattern"] = self.data_type_manager.HOSTNAME_REGEX
         if data_type.is_dict or data_type.is_mapping:
             constraints.update(self._get_property_count_constraints(obj))
-        data_model_root_type = self.data_model_root_type(
+        self._register_root_model(
             reference=reference,
             fields=[
                 self.data_model_field_type(
@@ -4477,15 +4492,10 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
                     has_default=has_default_override,
                 )
             ],
-            custom_base_class=self._resolve_base_class(name, obj.custom_base_path),
-            custom_template_dir=self.custom_template_dir,
-            extra_template_data=self.extra_template_data,
-            path=self.current_source_path,
-            nullable=obj.type_has_null,
-            treat_dot_as_module=self.treat_dot_as_module,
+            obj=obj,
+            custom_base_class_name=name,
             default=default_value if has_default_override else UNDEFINED,
         )
-        self.generation_store.register_model(data_model_root_type)
         return self.data_type(reference=reference)
 
     def _should_skip_root_field_constraints_for_multiple_types(self, obj: JsonSchemaObject) -> bool:
@@ -4523,10 +4533,10 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
         self._set_schema_metadata(reference.path, obj)
         self.set_schema_extensions(reference.path, obj)
 
-        constraints = obj.model_dump(exclude_none=True) if self.field_constraints else {}
+        constraints = self._get_constraint_values(obj) if self.field_constraints else {}
         if self._should_skip_root_field_constraints_for_multiple_types(obj):
             constraints = {}
-        data_model_root_type = self.data_model_root_type(
+        self._register_root_model(
             reference=reference,
             fields=[
                 self.data_model_field_type(
@@ -4545,31 +4555,18 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
                     has_default=obj.has_default,
                 )
             ],
-            custom_base_class=self._resolve_base_class(name, obj.custom_base_path),
-            custom_template_dir=self.custom_template_dir,
-            extra_template_data=self.extra_template_data,
-            path=self.current_source_path,
-            nullable=obj.type_has_null,
-            treat_dot_as_module=self.treat_dot_as_module,
+            obj=obj,
+            custom_base_class_name=name,
             default=obj.default if obj.has_default else UNDEFINED,
         )
-        self.generation_store.register_model(data_model_root_type)
 
     def parse_enum_as_literal(self, obj: JsonSchemaObject) -> DataType:
         """Parse enum values as a Literal type."""
-        literal_values: list[JsonSchemaLiteral] = []
-        non_literal_values: list[object] = []
-        for enum_value in obj.enum:
-            if enum_value is None:
-                continue
-            if isinstance(enum_value, (bool, int, str)):
-                literal_values.append(enum_value)
-            else:
-                non_literal_values.append(enum_value)
+        literal_values, non_literal_values, has_null = self._partition_enum_values(obj.enum)
         if not non_literal_values:
             return self.data_type(
                 literals=literal_values,
-                is_optional=None in obj.enum,
+                is_optional=has_null,
             )
 
         data_types: list[DataType] = []
@@ -4580,7 +4577,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             data_types.append(self.data_type_manager.get_data_type(Types.null))
         return self.data_type(
             data_types=data_types,
-            is_optional=None in obj.enum,
+            is_optional=has_null,
         )
 
     @classmethod
@@ -4612,8 +4609,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             )
         enum_fields: list[DataModelFieldBase] = []
 
-        if None in obj.enum and obj.type == "string":
-            # Nullable is valid in only OpenAPI
+        if None in obj.enum and (obj.type == "string" or obj.nullable):
             nullable: bool = True
             enum_times = [e for e in obj.enum if e is not None]
         else:
@@ -4678,7 +4674,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             )
             self._set_schema_metadata(reference.path, obj)
             self.set_schema_extensions(reference.path, obj)
-            data_model_root_type = self.data_model_root_type(
+            self._register_root_model(
                 reference=reference,
                 fields=[
                     self.data_model_field_type(
@@ -4696,15 +4692,10 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
                         original_name=None,
                     )
                 ],
-                custom_base_class=self._resolve_base_class(name, obj.custom_base_path),
-                custom_template_dir=self.custom_template_dir,
-                extra_template_data=self.extra_template_data,
-                path=self.current_source_path,
+                obj=obj,
+                custom_base_class_name=name,
                 default=obj.default if obj.has_default else UNDEFINED,
-                nullable=obj.type_has_null,
-                treat_dot_as_module=self.treat_dot_as_module,
             )
-            self.generation_store.register_model(data_model_root_type)
             return self.data_type(reference=reference)
 
         def create_enum(reference_: Reference) -> DataType:
@@ -4766,7 +4757,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             model_type="enum",
         )
 
-        data_model_root_type = self.data_model_root_type(
+        self._register_root_model(
             reference=reference,
             fields=[
                 self.data_model_field_type(
@@ -4784,31 +4775,28 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
                     original_name=None,
                 )
             ],
-            custom_base_class=self._resolve_base_class(reference.name, obj.custom_base_path),
-            custom_template_dir=self.custom_template_dir,
-            extra_template_data=self.extra_template_data,
-            path=self.current_source_path,
+            obj=obj,
+            custom_base_class_name=reference.name,
             default=obj.default if obj.has_default else UNDEFINED,
-            nullable=obj.type_has_null,
-            treat_dot_as_module=self.treat_dot_as_module,
         )
-        self.generation_store.register_model(data_model_root_type)
         return self.data_type(reference=reference)
 
     def _get_ref_body(self, resolved_ref: str) -> dict[str, YamlValue]:
         """Get the body of a reference from URL or remote file."""
         if is_url(resolved_ref):
-            if not resolved_ref.startswith("file://") and self.http_local_ref_path is None:
+            url_scheme = urlparse(resolved_ref).scheme
+            uses_local_http_path = url_scheme in {"http", "https"} and self.http_local_ref_path is not None
+            if not uses_local_http_path:
                 if self.allow_remote_refs is False:
                     msg = (
                         f"Fetching remote $ref is disabled: {resolved_ref}\n"
-                        "Reason: --no-allow-remote-refs was set, so HTTP(S) $ref targets are not fetched.\n"
+                        "Reason: --no-allow-remote-refs was set, so external $ref targets are not fetched.\n"
                         "If this schema and all of its remote references are trusted, pass --allow-remote-refs. "
                         "If a trusted remote reference points to an internal schema registry, also pass "
                         "--allow-private-network."
                     )
                     raise Error(msg)
-                if self.allow_remote_refs is None:
+                if self.allow_remote_refs is None and url_scheme in {"http", "https"}:
                     warn_deprecated(
                         "behavior.remote-ref-default",
                         details=(
@@ -4820,6 +4808,32 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
                     )
             return self._get_ref_body_from_url(resolved_ref)
         return self._get_ref_body_from_remote(resolved_ref)
+
+    def _resolve_local_ref_path(self, path: Path, ref: str) -> Path:
+        base_path = self.base_path.resolve()
+        resolved_path = path.resolve()
+        if resolved_path.is_relative_to(base_path) or self.allow_remote_refs is True:
+            return resolved_path
+
+        details = (
+            f"Reference: {ref}. Reason: the resolved file is outside the input base path. "
+            f"Base path: {base_path}. Resolved path: {resolved_path}. "
+            "Move trusted referenced schemas under the input directory, pass --allow-remote-refs to allow this "
+            "external local file reference without a warning, or pass --no-allow-remote-refs to block it."
+        )
+        if self.allow_remote_refs is None:
+            warn_deprecated("behavior.remote-ref-default", details=details, stacklevel=3)
+            return resolved_path
+
+        msg = (
+            f"Blocked unsafe local $ref: {ref}\n"
+            "Reason: --no-allow-remote-refs was set and the resolved file is outside the input base path.\n"
+            f"Base path: {base_path}\n"
+            f"Resolved path: {resolved_path}\n"
+            "Move trusted referenced schemas under the input directory, or pass --allow-remote-refs only when the "
+            "schema and referenced files are trusted."
+        )
+        raise Error(msg)
 
     def _get_ref_body_from_local_http_path(self, ref: str) -> dict[str, YamlValue]:
         assert self.http_local_ref_path is not None
@@ -4864,9 +4878,9 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             # Handle UNC paths (file://server/share/path)
             if parsed.netloc:
                 path = f"//{parsed.netloc}{path}"
-            file_path = Path(path)
+            file_path = self._resolve_local_ref_path(Path(path), ref)
             return self.remote_object_cache.get_or_put(
-                ref, default_factory=lambda _: load_data_from_path(file_path, self.encoding)
+                str(file_path), default_factory=lambda _: load_data_from_path(file_path, self.encoding)
             )
         if self.http_local_ref_path is not None and urlparse(ref).scheme in {"http", "https"}:
             return self._get_ref_body_from_local_http_path(ref)
@@ -4876,7 +4890,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
 
     def _get_ref_body_from_remote(self, resolved_ref: str) -> dict[str, YamlValue]:
         """Get reference body from a remote file path."""
-        full_path = self.base_path / resolved_ref
+        full_path = self._resolve_local_ref_path(self.base_path / resolved_ref, resolved_ref)
 
         try:
             return self.remote_object_cache.get_or_put(
@@ -5302,8 +5316,9 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
         """Get source and path parts for each input file with context managers."""
         if isinstance(self.source, list) or (isinstance(self.source, Path) and self.source.is_dir()):
             self.current_source_path = Path()
+            self._cache_local_sources = self._cache_local_sources_during_parse
             self.model_resolver.after_load_files = {
-                self.base_path.joinpath(s.path).resolve().as_posix() for s in self.iter_source
+                path.resolve().as_posix() for path in self._iter_local_source_paths()
             }
 
         for source in self.iter_source:
@@ -5319,44 +5334,82 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
             ):
                 yield source, path_parts
 
+    def _iter_local_source_paths(self) -> Iterator[Path]:
+        match self.source:
+            case Path() as path if path.is_dir():
+                yield from (
+                    file_path
+                    for file_path in sorted(path.rglob("*"), key=lambda item: item.name)
+                    if file_path.is_file()
+                )
+            case list() as paths:
+                yield from ((self.base_path / path) for path in paths)
+
+    def _load_source_dict(self, source: Source) -> dict[str, Any]:  # noqa: PLR6301
+        return dict(source.raw_data) if source.raw_data is not None else load_data(source.text)
+
+    def _resolve_root_model_name(self, raw_obj: dict[str, Any]) -> tuple[str, bool]:
+        title = raw_obj.get("title")
+        title_str = str(title) if title is not None else "Model"
+        if self.custom_class_name_generator:
+            return title_str, False
+
+        if class_name := self.class_name:
+            if not self.model_resolver.validate_name(class_name):
+                raise InvalidClassNameError(class_name)
+            return class_name, self._should_preserve_explicit_root_class_name(class_name)
+
+        obj_name = title_str
+        if not self.model_resolver.validate_name(obj_name):
+            obj_name = title_to_class_name(obj_name)
+        if not self.model_resolver.validate_name(obj_name):
+            raise InvalidClassNameError(obj_name)
+        return obj_name, False
+
+    def _parse_converted_sources(self, make_converter: Callable[[], Any]) -> None:
+        try:
+            for source, path_parts in self._get_context_source_path_parts():
+                raw_obj = make_converter().convert(source)
+                source.raw_data = raw_obj
+                if source.path.parts:
+                    self.remote_object_cache[str((self.base_path / source.path).resolve())] = raw_obj
+                self.raw_obj = raw_obj
+                obj_name, preserve_root_class_name = self._resolve_root_model_name(raw_obj)
+                self._parse_file(
+                    raw_obj,
+                    obj_name,
+                    path_parts,
+                    preserve_root_class_name=preserve_root_class_name,
+                )
+
+            self._resolve_unparsed_json_pointer()
+            self._generate_forced_base_models()
+        finally:
+            self._reset_local_source_cache()
+
     def parse_raw(self) -> None:
         """Parse all raw input sources into data models."""
-        for source, path_parts in self._get_context_source_path_parts():
-            if source.raw_data is not None:
-                raw_obj = source.raw_data
-                if not isinstance(raw_obj, dict):  # pragma: no cover
-                    warn(f"{source.path} is empty or not a dict. Skipping this file", stacklevel=2)
-                    continue
-            else:
-                try:
-                    raw_obj = load_data(source.text)
-                except TypeError:
-                    warn(f"{source.path} is empty or not a dict. Skipping this file", stacklevel=2)
-                    continue
-            self.raw_obj = raw_obj
-            title = self.raw_obj.get("title")
-            title_str = str(title) if title is not None else "Model"
-            preserve_root_class_name = False
-            validate_obj_name = False
-            match (self.custom_class_name_generator, self.class_name):
-                case (custom_generator, _) if custom_generator:
-                    obj_name = title_str
-                case (_, class_name) if class_name:
-                    obj_name = class_name
-                    preserve_root_class_name = self._should_preserve_explicit_root_class_name(obj_name)
-                    validate_obj_name = True
-                case _:
-                    # backward compatible
-                    obj_name = title_str
-                    if not self.model_resolver.validate_name(obj_name):
-                        obj_name = title_to_class_name(obj_name)
-                    validate_obj_name = True
-            if validate_obj_name and not self.model_resolver.validate_name(obj_name):
-                raise InvalidClassNameError(obj_name)
-            self._parse_file(self.raw_obj, obj_name, path_parts, preserve_root_class_name=preserve_root_class_name)
+        try:
+            for source, path_parts in self._get_context_source_path_parts():
+                if source.raw_data is not None:
+                    raw_obj = source.raw_data
+                    if not isinstance(raw_obj, dict):  # pragma: no cover
+                        warn(f"{source.path} is empty or not a dict. Skipping this file", stacklevel=2)
+                        continue
+                else:
+                    try:
+                        raw_obj = load_data(source.text)
+                    except TypeError:
+                        warn(f"{source.path} is empty or not a dict. Skipping this file", stacklevel=2)
+                        continue
+                self.raw_obj = raw_obj
+                obj_name, preserve_root_class_name = self._resolve_root_model_name(self.raw_obj)
+                self._parse_file(self.raw_obj, obj_name, path_parts, preserve_root_class_name=preserve_root_class_name)
 
-        self._resolve_unparsed_json_pointer()
-        self._generate_forced_base_models()
+            self._resolve_unparsed_json_pointer()
+            self._generate_forced_base_models()
+        finally:
+            self._reset_local_source_cache()
 
     def _resolve_unparsed_json_pointer(self) -> None:
         """Resolve any remaining unparsed JSON pointer references recursively."""
@@ -5375,7 +5428,7 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
                 for reserved_ref in sorted(reserved_refs):
                     if self.model_resolver.add_ref(reserved_ref, resolved=True).loaded:
                         continue
-                    self.raw_obj = dict(source.raw_data) if source.raw_data is not None else load_data(source.text)
+                    self.raw_obj = self._load_source_dict(source)
                     self.parse_json_pointer(self.raw_obj, reserved_ref, path_parts)
 
         if model_count != len(self.results):
@@ -5430,12 +5483,15 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
                 # parse $id before parsing $ref
                 root_obj = self._validate_schema_object(raw, path_parts or ["#"])
                 self.parse_id(root_obj, [*path_parts, "#"] if path_parts else ["#"])
+                root_key = tuple(path_parts)
                 if root_obj.recursiveAnchor:
-                    root_key = tuple(path_parts)
-                    self._recursive_anchor_index.setdefault(root_key, []).append("#")
+                    self._recursive_anchor_index.setdefault(root_key, []).append(
+                        self._anchor_ref_path(root_key, path_parts)
+                    )
                 if root_obj.dynamicAnchor:
-                    root_key = tuple(path_parts)
-                    self._dynamic_anchor_index.setdefault(root_key, {}).setdefault(root_obj.dynamicAnchor, "#")
+                    self._dynamic_anchor_index.setdefault(root_key, {}).setdefault(
+                        root_obj.dynamicAnchor, self._anchor_ref_path(root_key, path_parts)
+                    )
                 definitions: dict[str, YamlValue] = {}
                 schema_path = ""
                 for schema_path_candidate, split_schema_path in self.schema_paths:
@@ -5451,12 +5507,10 @@ class JsonSchemaParser(Parser["JSONSchemaParserConfig", "JsonSchemaFeatures"]):
                     obj = self._validate_schema_object(model, definition_path)
                     self.parse_id(obj, definition_path)
                     if obj.recursiveAnchor:
-                        root_key = tuple(path_parts)
-                        ref_path = "#/" + schema_path.lstrip("#/") + "/" + key
+                        ref_path = self._anchor_ref_path(root_key, definition_path)
                         self._recursive_anchor_index.setdefault(root_key, []).append(ref_path)
                     if obj.dynamicAnchor:
-                        root_key = tuple(path_parts)
-                        ref_path = "#/" + schema_path.lstrip("#/") + "/" + key
+                        ref_path = self._anchor_ref_path(root_key, definition_path)
                         self._dynamic_anchor_index.setdefault(root_key, {}).setdefault(obj.dynamicAnchor, ref_path)
 
                 if object_paths:

@@ -54,6 +54,30 @@ in another Python file to a different output type.
 
 ---
 
+## Coding agent skill
+
+This repository includes an experimental Agent Skill that teaches compatible coding agents to run `datamodel-codegen` when generating Python models from OpenAPI, AsyncAPI, JSON Schema, GraphQL, JSON/YAML/CSV sample data, MCP tool schemas, Protocol Buffers, XML Schema, Apache Avro, or existing Python model objects.
+
+See [Coding Agent Skill](docs/coding-agent-skill.md) for detailed guidance and troubleshooting.
+
+Install the directory for your agent:
+
+```bash
+# Codex, project-local
+mkdir -p .agents/skills
+cp -R skills/datamodel-code-generator .agents/skills/datamodel-code-generator
+
+# Claude Code, project-local
+mkdir -p .claude/skills
+cp -R skills/datamodel-code-generator .claude/skills/datamodel-code-generator
+```
+
+For a personal install, copy the same directory to `$HOME/.agents/skills/datamodel-code-generator/` for Codex or `~/.claude/skills/datamodel-code-generator/` for Claude Code.
+
+Check your agent's current documentation for exact search paths.
+
+---
+
 ## 📦 Installation
 
 Recommended for standalone CLI use:
@@ -267,6 +291,12 @@ See [CI/CD Integration](https://datamodel-code-generator.koxudaxi.dev/ci-cd/) fo
         <p>Astral</p>
       </a>
     </td>
+    <td valign="top" align="center">
+      <a href="https://github.com/openai">
+        <img src="https://avatars.githubusercontent.com/u/14957082?s=200&v=4" alt="OpenAI Logo" style="width: 100px;">
+        <p>OpenAI</p>
+      </a>
+    </td>
   </tr>
 </table>
 
@@ -308,6 +338,14 @@ These projects use datamodel-code-generator. See the linked examples for real-wo
 ## 🤝 Contributing
 
 See [Development & Contributing](https://datamodel-code-generator.koxudaxi.dev/development-contributing/) for how to get started!
+
+---
+
+## 👤 Maintainer
+
+[Koudai Aono](https://koxudaxi.dev/?utm_source=github_readme&utm_medium=maintainer_section&utm_campaign=open_to_work) ([@koxudaxi](https://github.com/koxudaxi))
+
+---
 
 ## 📄 License
 

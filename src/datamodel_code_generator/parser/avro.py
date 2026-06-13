@@ -6,13 +6,21 @@ JSON Schema parser while preserving Avro named type and logical type semantics.
 
 from __future__ import annotations
 
-import copy
 import re
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from typing_extensions import Unpack
 
 from datamodel_code_generator import Error, YamlValue, load_yaml
+from datamodel_code_generator.parser import _avro_detection
+from datamodel_code_generator.parser._avro_detection import (
+    NAMED_TYPES,
+    PRIMITIVE_TYPES,
+)
+from datamodel_code_generator.parser._avro_detection import (
+    is_avro_schema_data as _is_avro_schema_data,
+)
+from datamodel_code_generator.parser._convert_common import _copy_schema, _namespace_name, _unique_name
 from datamodel_code_generator.parser.jsonschema import JsonSchemaParser
 
 if TYPE_CHECKING:
@@ -25,10 +33,6 @@ if TYPE_CHECKING:
 
 JsonSchema = dict[str, Any]
 
-PRIMITIVE_TYPES = frozenset({"null", "boolean", "int", "long", "float", "double", "bytes", "string"})
-NAMED_TYPES = frozenset({"record", "enum", "fixed"})
-COMPLEX_TYPES = NAMED_TYPES | {"array", "map"}
-JSON_SCHEMA_MARKER_KEYS = frozenset({"$schema", "$defs", "definitions", "properties", "allOf", "anyOf", "oneOf"})
 NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 STRING_SCHEMA: JsonSchema = {"type": "string"}
@@ -48,43 +52,19 @@ PRIMITIVE_SCHEMAS: dict[str, JsonSchema] = {
 }
 
 
-def _is_avro_union_item(item: YamlValue) -> bool:
-    match item:
-        case str() as type_name:
-            return type_name in PRIMITIVE_TYPES or "." in type_name
-        case [*_] as union:
-            return _is_avro_union(union)
-        case {"type": [*_] as union}:
-            return _is_avro_union(union)
-        case {"type": dict() as nested_schema}:
-            return _is_avro_union_item(nested_schema)
-        case {"type": str() as type_name}:
-            return _is_avro_typed_schema(item, type_name) or "." in type_name
-    return False
+def is_avro_schema_data(data: YamlValue) -> bool:
+    """Return whether loaded data appears to be an Avro schema."""
+    return _is_avro_schema_data(data)
 
 
-def _is_avro_union(union: list[YamlValue]) -> bool:
-    return bool(union) and all(_is_avro_union_item(child) for child in union)
-
-
-def _is_avro_typed_schema(schema: JsonSchema, type_name: str) -> bool:
-    if type_name in PRIMITIVE_TYPES:
-        return True
-
-    match type_name:
-        case "record":
-            required_key, required_type = "fields", list
-        case "enum":
-            required_key, required_type = "symbols", list
-        case "fixed":
-            required_key, required_type = "size", int
-        case "array":
-            return "items" in schema
-        case "map":
-            return "values" in schema
-        case _:
-            return False
-    return isinstance(schema.get("name"), str) and isinstance(schema.get(required_key), required_type)
+def __getattr__(name: str) -> Any:
+    """Return compatibility constants moved to the lightweight detector."""
+    match name:
+        case "COMPLEX_TYPES":
+            return _avro_detection.COMPLEX_TYPES
+        case "JSON_SCHEMA_MARKER_KEYS":
+            return _avro_detection.JSON_SCHEMA_MARKER_KEYS
+    raise AttributeError(name)
 
 
 class _Name(NamedTuple):
@@ -93,46 +73,8 @@ class _Name(NamedTuple):
     name: str
 
 
-def is_avro_schema_data(data: YamlValue) -> bool:
-    """Return whether loaded data appears to be an Avro schema."""
-    match data:
-        case [*_] as union:
-            return _is_avro_union(union)
-        case str() as type_name:
-            return type_name in PRIMITIVE_TYPES
-        case dict() as schema if not any(key in schema for key in JSON_SCHEMA_MARKER_KEYS):
-            return _is_avro_schema_object(schema)
-        case _:
-            return False
-    return False
-
-
-def _is_avro_schema_object(schema: JsonSchema) -> bool:
-    match schema.get("type"):
-        case [*_]:
-            return False
-        case dict() as nested_schema:
-            return is_avro_schema_data(nested_schema)
-        case str() as type_name if type_name in PRIMITIVE_TYPES:
-            return any(key in schema for key in ("logicalType", "namespace", "aliases"))
-        case str() as type_name:
-            return _is_avro_typed_schema(schema, type_name) or (type_name not in COMPLEX_TYPES and "." in type_name)
-    return False
-
-
-def _copy_schema(schema: JsonSchema) -> JsonSchema:
-    return copy.deepcopy(schema)
-
-
 def _to_class_title(name: str) -> str:
     return f"{name[:1].upper()}{name[1:]}"
-
-
-def _namespace_name(namespace: str | None) -> str:
-    if not namespace:
-        return "NoNamespace"
-    parts = re.findall(r"[A-Za-z0-9]+", namespace)
-    return "".join(_to_class_title(part) for part in parts) or "Namespace"
 
 
 def _is_valid_name(name: str) -> bool:
@@ -248,13 +190,9 @@ class _AvroSchemaConverter:
                 name = (
                     _to_class_title(local)
                     if len(fullnames) == 1
-                    else f"{_namespace_name(name_info.namespace)}{_to_class_title(local)}"
+                    else f"{_namespace_name(name_info.namespace, _to_class_title)}{_to_class_title(local)}"
                 )
-                candidate = name
-                suffix = 2
-                while candidate in used_names:
-                    candidate = f"{name}{suffix}"
-                    suffix += 1
+                candidate = _unique_name(name, used_names)
                 self.definition_names[fullname] = candidate
                 used_names.add(candidate)
 
@@ -570,23 +508,7 @@ class AvroParser(JsonSchemaParser):
 
     def parse_raw(self) -> None:
         """Parse all Avro schema input sources into data models."""
-        for source, path_parts in self._get_context_source_path_parts():
-            raw_obj = _AvroSchemaConverter().convert(source)
-            source.raw_data = raw_obj
-            if source.path.parts:
-                self.remote_object_cache[str(self.base_path / source.path)] = raw_obj
-            self.raw_obj = raw_obj
-            title = str(raw_obj.get("title") or "Model")
-            obj_name = self.class_name or title
-            self._parse_file(
-                raw_obj,
-                obj_name,
-                path_parts,
-                preserve_root_class_name=self._should_preserve_explicit_root_class_name(obj_name),
-            )
-
-        self._resolve_unparsed_json_pointer()
-        self._generate_forced_base_models()
+        self._parse_converted_sources(_AvroSchemaConverter)
 
 
 def convert_avro_schema_data(data: YamlValue) -> dict[str, YamlValue]:

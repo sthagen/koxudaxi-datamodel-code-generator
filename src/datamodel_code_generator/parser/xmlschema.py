@@ -8,13 +8,10 @@ from __future__ import annotations
 
 import codecs
 import contextlib
-import copy
-import datetime as datetime_module
 import io
 import re
 import warnings
 from decimal import Decimal, InvalidOperation
-from math import inf, isfinite, nan
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 from xml.etree import ElementTree as ET  # noqa: S405
@@ -24,8 +21,26 @@ from typing_extensions import Unpack
 from datamodel_code_generator import Error, YamlValue
 from datamodel_code_generator.enums import VersionMode, XMLSchemaVersion
 from datamodel_code_generator.format import DatetimeClassType
-from datamodel_code_generator.imports import Import
-from datamodel_code_generator.parser._math_imports import add_math_imports_for_non_finite_literals
+from datamodel_code_generator.parser import _xmlschema_literals
+from datamodel_code_generator.parser._convert_common import _copy_schema, _namespace_name, _unique_name
+from datamodel_code_generator.parser._math_imports import apply_math_imports_to_parse_result
+from datamodel_code_generator.parser._xmlschema_detection import (
+    XML_SCHEMA_NAMESPACE,
+    XML_SCHEMA_TAG,
+)
+from datamodel_code_generator.parser._xmlschema_detection import (
+    is_xml_schema_text as _is_xml_schema_text,
+)
+from datamodel_code_generator.parser._xmlschema_literals import (
+    _collect_python_expression_imports,
+    _PythonExpression,
+    _safe_bool,
+    _safe_date_expression,
+    _safe_datetime_expression,
+    _safe_day_time_duration_expression,
+    _safe_float,
+    _safe_time_expression,
+)
 from datamodel_code_generator.parser.base import Source, title_to_class_name
 from datamodel_code_generator.parser.jsonschema import JsonSchemaParser
 
@@ -36,25 +51,37 @@ if TYPE_CHECKING:
     from datamodel_code_generator._types import XMLSchemaParserConfigDict
     from datamodel_code_generator.config import XMLSchemaParserConfig
 
-XML_SCHEMA_NAMESPACE = "http://www.w3.org/2001/XMLSchema"
 XML_SCHEMA_VERSIONING_NAMESPACE = "http://www.w3.org/2007/XMLSchema-versioning"
-XML_SCHEMA_TAG = f"{{{XML_SCHEMA_NAMESPACE}}}schema"
 XSD11_ELEMENTS = frozenset({"alternative", "assert", "assertion", "defaultOpenContent", "openContent", "override"})
 UNBOUNDED = "unbounded"
 INTERNAL_OCCURS_ARRAY = "x-xsd-occurs-array"
 UNSUPPORTED_XSD_PATTERN = re.compile(r"\\[iIcCpP]|-\[|&&")
 
+DAY_TIME_DURATION_PATTERN = _xmlschema_literals.DAY_TIME_DURATION_PATTERN
+IMPORT_DATETIME_MODULE = _xmlschema_literals.IMPORT_DATETIME_MODULE
+XML_DATE_PATTERN = _xmlschema_literals.XML_DATE_PATTERN
+XSD_WHITESPACE_CHARS = _xmlschema_literals.XSD_WHITESPACE_CHARS
+_datetime_expression = _xmlschema_literals._datetime_expression  # noqa: SLF001
+_normalize_timezone = _xmlschema_literals._normalize_timezone  # noqa: SLF001
+
+_XMLSCHEMA_LITERAL_REEXPORTS: tuple[tuple[str, object], ...] = (
+    ("DAY_TIME_DURATION_PATTERN", DAY_TIME_DURATION_PATTERN),
+    ("IMPORT_DATETIME_MODULE", IMPORT_DATETIME_MODULE),
+    ("XML_DATE_PATTERN", XML_DATE_PATTERN),
+    ("XSD_WHITESPACE_CHARS", XSD_WHITESPACE_CHARS),
+    ("_datetime_expression", _datetime_expression),
+    ("_normalize_timezone", _normalize_timezone),
+)
+for _xmlschema_literal_reexport_name, _xmlschema_literal_reexport in _XMLSCHEMA_LITERAL_REEXPORTS:
+    if globals()[_xmlschema_literal_reexport_name] is not _xmlschema_literal_reexport:  # pragma: no cover
+        msg = f"XML Schema literal re-export mismatch: {_xmlschema_literal_reexport_name}"
+        raise RuntimeError(msg)
+del _xmlschema_literal_reexport_name, _xmlschema_literal_reexport
+
 JsonSchema = dict[str, Any]
 QNameKey = tuple[str | None, str]
 DefinitionKey = tuple[str, str | None, str]
 PYTHON_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-XML_DATE_PATTERN = re.compile(r"^(?P<date>-?\d{4,}-\d{2}-\d{2})(?:Z|[+-]\d{2}:\d{2})?$")
-DAY_TIME_DURATION_PATTERN = re.compile(
-    r"^(?P<sign>-)?P(?:(?P<days>\d+)D)?"
-    r"(?:T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+(?:\.\d+)?)S)?)?$"
-)
-XSD_WHITESPACE_CHARS = " \t\n\r"
-IMPORT_DATETIME_MODULE = Import(import_="datetime", alias="datetime_module")
 
 
 STRING_SCHEMA: JsonSchema = {"type": "string"}
@@ -63,29 +90,6 @@ NUMBER_SCHEMA: JsonSchema = {"type": "number"}
 BOOLEAN_SCHEMA: JsonSchema = {"type": "boolean"}
 DECIMAL_SCHEMA: JsonSchema = {"type": "number", "format": "decimal"}
 DATETIME_SCHEMA: JsonSchema = {"type": "string", "format": "date-time"}
-
-
-class _PythonExpression:
-    """Raw Python expression rendered through repr() with required imports."""
-
-    __slots__ = ("code", "imports")
-
-    def __init__(self, code: str, *imports: Import) -> None:
-        self.code = code
-        self.imports = imports
-
-    def __repr__(self) -> str:
-        return self.code
-
-
-def _collect_python_expression_imports(value: Any) -> tuple[Import, ...]:
-    if isinstance(value, _PythonExpression):
-        return value.imports
-    if isinstance(value, dict):
-        return tuple(import_ for item in value.values() for import_ in _collect_python_expression_imports(item))
-    if isinstance(value, (list, tuple, set)):
-        return tuple(import_ for item in value for import_ in _collect_python_expression_imports(item))
-    return ()
 
 
 class _OccurrenceContext(NamedTuple):
@@ -153,11 +157,7 @@ BUILTIN_TYPE_SCHEMAS: dict[str, JsonSchema] = {
 
 def is_xml_schema_text(text: str) -> bool:
     """Return whether text is an XML Schema document."""
-    try:
-        root = ET.fromstring(text)  # noqa: S314
-    except ET.ParseError:
-        return False
-    return root.tag == XML_SCHEMA_TAG
+    return _is_xml_schema_text(text)
 
 
 def _local_name(tag_or_qname: str) -> str:
@@ -196,10 +196,6 @@ def _documentation(element: ET.Element) -> str | None:
     return "\n\n".join(docs) or None
 
 
-def _copy_schema(schema: JsonSchema) -> JsonSchema:
-    return copy.deepcopy(schema)
-
-
 def _to_class_title(name: str) -> str:
     if PYTHON_NAME_PATTERN.match(name):
         return f"{name[:1].upper()}{name[1:]}"
@@ -211,24 +207,6 @@ def _safe_int(value: str) -> int | None:
         return int(value)
     except ValueError:
         return None
-
-
-def _safe_float(value: str) -> float | None:
-    try:
-        number = float(value)
-    except ValueError:
-        return None
-    if isfinite(number):
-        return number
-    match value:
-        case "INF" | "+INF":
-            return inf
-        case "-INF":
-            return -inf
-        case "NaN":
-            return nan
-        case _:
-            return None
 
 
 def _is_supported_pattern(value: str) -> bool:
@@ -249,89 +227,6 @@ def _safe_decimal(value: str) -> Decimal | None:
         return Decimal(value)
     except InvalidOperation:
         return None
-
-
-def _safe_bool(value: str) -> bool | None:
-    match value.strip(XSD_WHITESPACE_CHARS):
-        case "true" | "1":
-            return True
-        case "false" | "0":
-            return False
-        case _:
-            return None
-
-
-def _datetime_expression(code: str) -> _PythonExpression:
-    return _PythonExpression(code, IMPORT_DATETIME_MODULE)
-
-
-def _normalize_timezone(value: str) -> str:
-    return f"{value[:-1]}+00:00" if value.endswith("Z") else value
-
-
-def _safe_date_expression(value: str) -> _PythonExpression | None:
-    date_match = XML_DATE_PATTERN.match(value)
-    if date_match is None:
-        return None
-    date_value = date_match["date"]
-    if value != date_value:
-        return None
-    with contextlib.suppress(ValueError):
-        datetime_module.date.fromisoformat(date_value)
-        return _datetime_expression(f"datetime_module.date.fromisoformat({date_value!r})")
-    return None
-
-
-def _safe_time_expression(value: str) -> _PythonExpression | None:
-    normalized = _normalize_timezone(value)
-    with contextlib.suppress(ValueError):
-        datetime_module.time.fromisoformat(normalized)
-        return _datetime_expression(f"datetime_module.time.fromisoformat({normalized!r})")
-    return None
-
-
-def _safe_datetime_expression(value: str) -> _PythonExpression | None:
-    normalized = _normalize_timezone(value)
-    with contextlib.suppress(ValueError):
-        datetime_module.datetime.fromisoformat(normalized)
-        return _datetime_expression(f"datetime_module.datetime.fromisoformat({normalized!r})")
-    return None
-
-
-def _safe_day_time_duration_expression(value: str) -> _PythonExpression | None:
-    duration_match = DAY_TIME_DURATION_PATTERN.match(value)
-    if duration_match is None:
-        return None
-
-    days = duration_match["days"]
-    hours = duration_match["hours"]
-    minutes = duration_match["minutes"]
-    seconds = duration_match["seconds"]
-    if not any((days, hours, minutes, seconds)):
-        return None
-
-    arguments: list[str] = []
-    if days:
-        arguments.append(f"days={int(days)}")
-    if hours:
-        arguments.append(f"hours={int(hours)}")
-    if minutes:
-        arguments.append(f"minutes={int(minutes)}")
-    if seconds:
-        seconds_in_microseconds = Decimal(seconds) * 1_000_000
-        integral_microseconds = seconds_in_microseconds.to_integral_value()
-        if seconds_in_microseconds != integral_microseconds:
-            return None
-        whole_seconds, microseconds = divmod(int(integral_microseconds), 1_000_000)
-        if whole_seconds:
-            arguments.append(f"seconds={whole_seconds}")
-        if microseconds:
-            arguments.append(f"microseconds={microseconds}")
-
-    expression = f"datetime_module.timedelta({', '.join(arguments)})" if arguments else "datetime_module.timedelta(0)"
-    if duration_match["sign"]:
-        expression = f"-{expression}"
-    return _datetime_expression(expression)
 
 
 def _versioning_value(element: ET.Element, name: str) -> Decimal | None:
@@ -510,7 +405,7 @@ class _XMLSchemaConverter:
             schema_location = child.get("schemaLocation")
             if not schema_location:
                 continue
-            location = (source_dir / schema_location).resolve()
+            location = self._resolve_schema_location(source_dir, schema_location)
             if location in seen or not location.is_file():
                 continue
             seen.add(location)
@@ -519,6 +414,21 @@ class _XMLSchemaConverter:
             if _version_decimal(included_version) > _version_decimal(version):
                 version = included_version
         return version
+
+    def _resolve_schema_location(self, source_dir: Path, schema_location: str) -> Path:
+        base_path = self.base_path.resolve()
+        location = (source_dir / schema_location).resolve()
+        if location.is_relative_to(base_path):
+            return location
+
+        msg = (
+            f"Blocked unsafe XML Schema schemaLocation: {schema_location}\n"
+            "Reason: the resolved file is outside the input base path.\n"
+            f"Base path: {base_path}\n"
+            f"Resolved path: {location}\n"
+            "Move trusted included schemas under the input directory before generating models."
+        )
+        raise Error(msg)
 
     def _prepare_schema_root(self, root: ET.Element, version: XMLSchemaVersion) -> None:
         self._check_version_specific_features(root, version)
@@ -605,7 +515,7 @@ class _XMLSchemaConverter:
             schema_location = child.get("schemaLocation")
             if not schema_location:
                 continue
-            location = (source_dir / schema_location).resolve()
+            location = self._resolve_schema_location(source_dir, schema_location)
             if not location.is_file():
                 continue
             included_root = self._parse_schema(_read_xml_text(location, self.encoding), location)
@@ -713,14 +623,10 @@ class _XMLSchemaConverter:
                 if len(sorted_keys) == 1:
                     name = local
                 else:
-                    namespace_name = self._namespace_name(key[1]) if len(namespaces) > 1 else ""
+                    namespace_name = _namespace_name(key[1], _to_class_title) if len(namespaces) > 1 else ""
                     kind_name = _to_class_title(key[0]) if same_qname_count > 1 else ""
                     name = f"{namespace_name}{_to_class_title(local)}{kind_name}"
-                candidate = name
-                suffix = 2
-                while candidate in used_names:
-                    candidate = f"{name}{suffix}"
-                    suffix += 1
+                candidate = _unique_name(name, used_names)
                 self._definition_names[key] = candidate
                 used_names.add(candidate)
 
@@ -1027,17 +933,30 @@ class _XMLSchemaConverter:
     def _is_numeric_schema(schema: JsonSchema) -> bool:
         return schema.get("type") in {"integer", "number"}
 
+    def _new_object_schema(
+        self,
+        owner: ET.Element,
+        *,
+        mixed_owners: tuple[ET.Element, ...] | None = None,
+    ) -> JsonSchema:
+        schema: JsonSchema = {"type": "object", "properties": {}}
+        self._apply_open_content(owner, schema)
+        self._apply_model_group(owner, schema)
+        self._apply_attributes(owner, schema)
+        if mixed_owners:
+            mixed_owner, *additional_owners = mixed_owners
+            self._apply_mixed_content(mixed_owner, schema, *additional_owners)
+        else:
+            self._apply_mixed_content(owner, schema)
+        return schema
+
     def _convert_complex_type(self, complex_type: ET.Element) -> JsonSchema:
         if (complex_content := _first_xsd_child(complex_type, "complexContent")) is not None:
             return self._convert_complex_content(complex_content, complex_type)
         if (simple_content := _first_xsd_child(complex_type, "simpleContent")) is not None:
             return self._convert_simple_content(simple_content, complex_type)
 
-        schema: JsonSchema = {"type": "object", "properties": {}}
-        self._apply_open_content(complex_type, schema)
-        self._apply_model_group(complex_type, schema)
-        self._apply_attributes(complex_type, schema)
-        self._apply_mixed_content(complex_type, schema)
+        schema = self._new_object_schema(complex_type)
         if documentation := _documentation(complex_type):
             schema["description"] = documentation
         return schema
@@ -1047,11 +966,7 @@ class _XMLSchemaConverter:
         if child is None:
             return self._convert_complex_type_without_content(owner)
 
-        schema: JsonSchema = {"type": "object", "properties": {}}
-        self._apply_open_content(child, schema)
-        self._apply_model_group(child, schema)
-        self._apply_attributes(child, schema)
-        self._apply_mixed_content(complex_content, schema, owner)
+        schema = self._new_object_schema(child, mixed_owners=(complex_content, owner))
         if _local_name(child.tag) == "extension" and (base := child.get("base")):
             owner_key = self._key_for_declaration(self.complex_types, owner)
             base_key = self._resolve_key(base, self.simple_types, self.complex_types, element=child)
@@ -1064,12 +979,7 @@ class _XMLSchemaConverter:
         return schema
 
     def _convert_complex_type_without_content(self, complex_type: ET.Element) -> JsonSchema:
-        schema: JsonSchema = {"type": "object", "properties": {}}
-        self._apply_open_content(complex_type, schema)
-        self._apply_model_group(complex_type, schema)
-        self._apply_attributes(complex_type, schema)
-        self._apply_mixed_content(complex_type, schema)
-        return schema
+        return self._new_object_schema(complex_type)
 
     def _apply_open_content(self, owner: ET.Element, schema: JsonSchema) -> None:
         open_content = _first_xsd_child(owner, "openContent")
@@ -1477,13 +1387,6 @@ class _XMLSchemaConverter:
         return self._element_namespaces.get(id(element), self.namespaces)
 
     @staticmethod
-    def _namespace_name(namespace: str | None) -> str:
-        if not namespace:
-            return "NoNamespace"
-        parts = re.findall(r"[A-Za-z0-9]+", namespace)
-        return "".join(_to_class_title(part) for part in parts) or "Namespace"
-
-    @staticmethod
     def _sort_key(key: QNameKey) -> tuple[str, str]:
         namespace, local = key
         return namespace or "", local
@@ -1523,12 +1426,7 @@ class XMLSchemaParser(JsonSchemaParser):
 
     def parse(self, *args: Any, **kwargs: Any) -> str | dict[tuple[str, ...], Any]:
         """Parse XML Schema and add imports for non-finite float literals."""
-        result = super().parse(*args, **kwargs)
-        if isinstance(result, str):
-            return add_math_imports_for_non_finite_literals(result)
-        for item in result.values():
-            item.body = add_math_imports_for_non_finite_literals(item.body)
-        return result
+        return apply_math_imports_to_parse_result(super().parse(*args, **kwargs))
 
     @property
     def iter_source(self) -> Iterator[Source]:
@@ -1553,30 +1451,15 @@ class XMLSchemaParser(JsonSchemaParser):
     def parse_raw(self) -> None:
         """Parse all XML Schema input sources into data models."""
         config = cast("XMLSchemaParserConfig", self.config)
-        for source, path_parts in self._get_context_source_path_parts():
-            converter = _XMLSchemaConverter(
+        self._parse_converted_sources(
+            lambda: _XMLSchemaConverter(
                 base_path=self.base_path,
                 encoding=self.encoding,
                 xmlschema_version=config.xmlschema_version,
                 schema_version_mode=config.schema_version_mode,
                 use_xmlschema_datetime_default=self.use_xmlschema_datetime_default,
             )
-            raw_obj = converter.convert(source)
-            source.raw_data = raw_obj
-            if source.path.parts:
-                self.remote_object_cache[str(self.base_path / source.path)] = raw_obj
-            self.raw_obj = raw_obj
-            title = str(raw_obj.get("title") or "Model")
-            obj_name = self.class_name or title
-            self._parse_file(
-                raw_obj,
-                obj_name,
-                path_parts,
-                preserve_root_class_name=self._should_preserve_explicit_root_class_name(obj_name),
-            )
-
-        self._resolve_unparsed_json_pointer()
-        self._generate_forced_base_models()
+        )
         self._append_python_expression_imports()
 
     def _append_python_expression_imports(self) -> None:

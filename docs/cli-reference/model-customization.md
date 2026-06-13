@@ -53,6 +53,8 @@ Allow extra fields in generated Pydantic models (extra='allow').
 
 The `--allow-extra-fields` flag configures the code generation behavior.
 
+**Deprecated:** --allow-extra-fields is deprecated. Use --extra-fields=allow instead.
+
 !!! tip "Usage"
 
     ```bash
@@ -1130,7 +1132,7 @@ naming convention than what's in the schema.
             None, description='Age in years which must be equal to or greater than zero.'
         )
         friends: list[Any] | None = None
-        comment: None = None
+        comment: None = Field(None)
     ```
 
 ---
@@ -5141,7 +5143,7 @@ This prevents breaking changes when generated code is used on older Pydantic ver
             None, description='Age in years which must be equal to or greater than zero.'
         )
         friends: list[Any] | None = None
-        comment: None = None
+        comment: None = Field(None)
     ```
 
 ---
@@ -5223,7 +5225,7 @@ This affects import statements and type annotation syntax in generated code.
                 None, description='Age in years which must be equal to or greater than zero.'
             )
             friends: list[Any] | None = None
-            comment: None = None
+            comment: None = Field(None)
         ```
 
 ---

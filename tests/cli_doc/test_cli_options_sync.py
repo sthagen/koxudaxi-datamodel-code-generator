@@ -10,14 +10,21 @@ from __future__ import annotations
 
 import pytest
 
+from datamodel_code_generator import cli_options
 from datamodel_code_generator.arguments import arg_parser as argument_parser
 from datamodel_code_generator.cli_options import (
     CLI_OPTION_META,
     MANUAL_DOCS,
+    OPTION_RELATION_KINDS,
+    CLIOptionMeta,
+    OptionCategory,
     _canonical_option_key,
     get_all_argparse_options,
     get_all_canonical_options,
     get_canonical_option,
+    get_option_meta,
+    is_excluded_from_docs,
+    is_manual_doc,
 )
 
 
@@ -27,6 +34,43 @@ def test_get_canonical_option() -> None:
     assert get_canonical_option("-h") == "--help"
     assert get_canonical_option("--input") == "--input"
     assert get_canonical_option("--unknown-option") == "--unknown-option"
+
+
+def test_is_manual_doc() -> None:
+    """Test that is_manual_doc detects manual documentation options."""
+    assert is_manual_doc("--help") is True
+    assert is_manual_doc("-h") is True
+    assert is_manual_doc("--input") is False
+    assert is_manual_doc("--unknown-option") is False
+
+
+def test_is_excluded_from_docs() -> None:
+    """Test that is_excluded_from_docs remains compatible with manual docs."""
+    assert is_excluded_from_docs("--help") is True
+    assert is_excluded_from_docs("-h") is True
+    assert is_excluded_from_docs("--input") is False
+    assert is_excluded_from_docs("--unknown-option") is False
+
+
+def test_get_option_meta() -> None:
+    """Test that get_option_meta returns explicit, canonical, and empty metadata."""
+    assert get_option_meta("--use-annotated") is CLI_OPTION_META["--use-annotated"]
+    assert get_option_meta("--treat-dot-as-module") is CLI_OPTION_META["--no-treat-dot-as-module"]
+    assert get_option_meta("--help") is None
+    assert get_option_meta("-h") is None
+    assert get_option_meta("--unknown-option") is None
+
+
+def test_get_option_meta_returns_default_for_known_argparse_option(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that get_option_meta auto-categorizes known argparse options without metadata."""
+    option = "--future-option"
+
+    def get_future_options() -> frozenset[str]:
+        return frozenset({option})
+
+    monkeypatch.setattr(cli_options, "get_all_canonical_options", get_future_options)
+
+    assert get_option_meta(option) == CLIOptionMeta(name=option, category=OptionCategory.GENERAL)
 
 
 class TestCLIOptionMetaSync:
@@ -78,6 +122,24 @@ class TestCLIOptionMetaSync:
 
         if mismatches:
             pytest.fail("CLIOptionMeta.name mismatches:\n" + "\n".join(mismatches))
+
+    def test_option_relations_reference_argparse_options(self) -> None:
+        """Verify that option relation metadata points at real argparse options."""
+        argparse_options = get_all_argparse_options()
+        missing = [
+            f"  {source} {relation_kind} {relation.option}"
+            for source, meta in CLI_OPTION_META.items()
+            for relation_kind in OPTION_RELATION_KINDS
+            for relation in getattr(meta, relation_kind)
+            if relation.option not in argparse_options
+        ]
+
+        if missing:
+            pytest.fail(
+                "CLI option relation targets missing from argparse:\n"
+                + "\n".join(sorted(missing))
+                + "\n\nRemove the relation or add the target option to arguments.py."
+            )
 
     def test_all_argparse_options_are_documented_or_excluded(self) -> None:
         """Verify that all argparse options are either documented or explicitly excluded.

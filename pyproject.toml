@@ -285,6 +285,7 @@ markers = [
   "perf: marks tests as performance tests (excluded from CI benchmarks)",
   "benchmark: marks tests as benchmark tests",
   "allow_direct_assert: marks guarded tests where direct assert statements are intentionally allowed",
+  "isolate_builtin_formatter_config: marks tests that must not inherit repository formatter config",
 ]
 
 [tool.coverage]
@@ -302,12 +303,18 @@ paths.other = [
   "*/datamodel-code-generator",
   "*\\datamodel-code-generator",
 ]
+paths.skill_tests = [
+  "tests/skills/datamodel-code-generator",
+  "*/datamodel-code-generator/tests/skills/datamodel-code-generator",
+  "*\\datamodel-code-generator\\tests\\skills\\datamodel-code-generator",
+]
 run.dynamic_context = "none"
 run.omit = [
   "*/_types/*",
   "tests/cli_doc/*",
   "tests/data/*",
   "tests/main/payload_validation/*",
+  "tests/main/test_jsonschema_suite_conformance.py",
   "tests/main/test_performance.py",
 ]
 report.fail_under = 0

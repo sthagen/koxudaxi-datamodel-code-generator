@@ -232,6 +232,12 @@ See [CI/CD Integration](ci-cd.md) for more options.
         <p>Astral</p>
       </a>
     </td>
+    <td valign="top" align="center">
+      <a href="https://github.com/openai">
+        <img src="https://avatars.githubusercontent.com/u/14957082?s=200&v=4" alt="OpenAI Logo" style="width: 100px;">
+        <p>OpenAI</p>
+      </a>
+    </td>
   </tr>
 </table>
 
@@ -307,7 +313,7 @@ This documentation is auto-generated from test cases.
 | 📘 [OpenAPI-only Options](openapi-only-options.md) | 8 | OpenAPI-specific features |
 | 📋 [GraphQL-only Options](graphql-only-options.md) | 1 |  |
 | ⚙️ [General Options](general-options.md) | 18 | Utilities and meta options |
-| 📝 [Utility Options](utility-options.md) | 8 | Help, version, debug options |
+| 📝 [Utility Options](utility-options.md) | 10 | Help, version, debug options |
 
 ## All Options
 
@@ -450,6 +456,8 @@ This documentation is auto-generated from test cases.
 - [`--output`](base-options.md#output)
 - [`--output-date-class`](typing-customization.md#output-date-class)
 - [`--output-datetime-class`](typing-customization.md#output-datetime-class)
+- [`--output-format`](utility-options.md#output-format)
+- [`--output-format-json-schema`](utility-options.md#output-format-json-schema)
 - [`--output-model-type`](model-customization.md#output-model-type)
 
 ### P {#p}
@@ -1353,6 +1361,8 @@ Source: https://datamodel-code-generator.koxudaxi.dev/cli-reference/model-custom
 Allow extra fields in generated Pydantic models (extra='allow').
 
 The `--allow-extra-fields` flag configures the code generation behavior.
+
+**Deprecated:** --allow-extra-fields is deprecated. Use --extra-fields=allow instead.
 
 !!! tip "Usage"
 
@@ -2431,7 +2441,7 @@ naming convention than what's in the schema.
             None, description='Age in years which must be equal to or greater than zero.'
         )
         friends: list[Any] | None = None
-        comment: None = None
+        comment: None = Field(None)
     ```
 
 ---
@@ -6442,7 +6452,7 @@ This prevents breaking changes when generated code is used on older Pydantic ver
             None, description='Age in years which must be equal to or greater than zero.'
         )
         friends: list[Any] | None = None
-        comment: None = None
+        comment: None = Field(None)
     ```
 
 ---
@@ -6524,7 +6534,7 @@ This affects import statements and type annotation syntax in generated code.
                 None, description='Age in years which must be equal to or greater than zero.'
             )
             friends: list[Any] | None = None
-            comment: None = None
+            comment: None = Field(None)
         ```
 
 ---
@@ -9290,7 +9300,7 @@ The `--field-include-all-keys` flag configures the code generation behavior.
             None, description='Age in years which must be equal to or greater than zero.'
         )
         friends: list[Any] | None = None
-        comment: None = None
+        comment: None = Field(None)
     ```
 
 ---
@@ -11504,7 +11514,7 @@ format as the default.
 
     from typing import Any
 
-    from pydantic import BaseModel, conint
+    from pydantic import BaseModel, Field, conint
 
 
     class Person(BaseModel):
@@ -11515,7 +11525,7 @@ format as the default.
         age: conint(ge=0) | None = None
         """Age in years which must be equal to or greater than zero."""
         friends: list[Any] | None = None
-        comment: None = None
+        comment: None = Field(None)
     ```
 
 ---
@@ -15100,13 +15110,21 @@ precise decimal arithmetic when validating values against the constraint.
 
     from __future__ import annotations
 
+    from decimal import Decimal
+
     from pydantic import BaseModel, condecimal, confloat
 
 
     class Model(BaseModel):
-        price: condecimal(ge=0, le=99999.99, multiple_of=0.01) | None = None
-        quantity: condecimal(multiple_of=0.1) | None = None
-        rate: condecimal(multiple_of=0.001, lt=1.0, gt=0.0) | None = None
+        price: (
+            condecimal(ge=Decimal('0'), le=Decimal('99999.99'), multiple_of=Decimal('0.01'))
+            | None
+        ) = None
+        quantity: condecimal(multiple_of=Decimal('0.1')) | None = None
+        rate: (
+            condecimal(multiple_of=Decimal('0.001'), lt=Decimal('1.0'), gt=Decimal('0.0'))
+            | None
+        ) = None
         simple_float: confloat(ge=0.0, le=100.0) | None = None
     ```
 
@@ -23883,7 +23901,10 @@ Allow HTTP requests to private network schema endpoints.
 
 The `--allow-private-network` flag permits trusted HTTP(S) schema requests to
 private, loopback, link-local, or otherwise non-public network hosts. Without
-this flag, those targets are blocked by default to reduce SSRF risk.
+this flag, those targets are blocked by default to reduce server-side request
+forgery (SSRF) risk. If a trusted internal schema endpoint is blocked, verify
+the URL and pass `--allow-private-network`; otherwise use a local schema file
+or public endpoint.
 
 !!! tip "Usage"
 
@@ -24010,7 +24031,7 @@ Automatically enabled when using `--url` input.
             None, description='Age in years which must be equal to or greater than zero.'
         )
         friends: list[Any] | None = None
-        comment: None = None
+        comment: None = Field(None)
 
 
     class OriginalPerson(RootModel[Person]):
@@ -24095,7 +24116,7 @@ and generated code stay in sync. Works with both single files and directory outp
             None, description='Age in years which must be equal to or greater than zero.'
         )
         friends: list[Any] | None = None
-        comment: None = None
+        comment: None = Field(None)
     ```
 
 ---
@@ -24971,6 +24992,8 @@ Source: https://datamodel-code-generator.koxudaxi.dev/cli-reference/utility-opti
 | [`--list-deprecations`](#list-deprecations) | List registered deprecations and scheduled breaking changes |
 | [`--list-experimental`](#list-experimental) | List registered experimental features |
 | [`--no-color`](#no-color) | Disable colorized output |
+| [`--output-format`](#output-format) | Choose the command output format |
+| [`--output-format-json-schema`](#output-format-json-schema) | Output JSON Schema for structured command output |
 | [`--profile`](#profile) | Use a named profile from pyproject.toml |
 | [`--version`](#version) | Show program version and exit |
 
@@ -25009,17 +25032,31 @@ Outputs a formatted prompt containing your current options, all available
 options by category, and full help text. Pipe to CLI LLM tools or copy
 to clipboard for web-based LLM chats.
 
+Use `--output-format json` when an LLM agent or tool should consume structured
+option metadata instead of Markdown.
+Use `--output-format-json-schema generate-prompt` when the agent needs the JSON
+Schema for that structured payload, such as when defining a tool contract.
+
 **See also:** [LLM Integration](../llm-integration.md) for detailed usage examples
+
+!!! note "For LLM agents"
+
+    See [LLM Integration: If You Are an LLM Agent](../llm-integration.md#if-you-are-an-llm-agent)
+    for workflow guidance.
 
 !!! tip "Usage"
 
     ```bash
     datamodel-codegen --generate-prompt # (1)!
     datamodel-codegen --generate-prompt "How do I generate strict types?" # (2)!
+    datamodel-codegen --generate-prompt --output-format json # (3)!
+    datamodel-codegen --output-format-json-schema generate-prompt # (4)!
     ```
 
     1. :material-arrow-left: `--generate-prompt` - generate prompt without a question
     2. :material-arrow-left: Include a specific question in the prompt
+    3. :material-arrow-left: Emit structured JSON for LLM/tool ingestion
+    4. :material-arrow-left: Emit JSON Schema for structured prompt JSON
 
 ??? example "Quick Examples"
 
@@ -25027,6 +25064,7 @@ to clipboard for web-based LLM chats.
     ```bash
     datamodel-codegen --generate-prompt | claude -p    # Claude Code
     datamodel-codegen --generate-prompt | codex exec   # OpenAI Codex
+    datamodel-codegen --generate-prompt --output-format json | codex exec
     ```
 
     **Copy to clipboard:**
@@ -25034,6 +25072,28 @@ to clipboard for web-based LLM chats.
     datamodel-codegen --generate-prompt | pbcopy      # macOS
     datamodel-codegen --generate-prompt | xclip -selection clipboard  # Linux
     datamodel-codegen --generate-prompt | clip.exe    # WSL2
+    ```
+
+    **Ask about an existing OpenAPI command:**
+    ```bash
+    datamodel-codegen \
+        --input openapi.yaml \
+        --input-file-type openapi \
+        --output models.py \
+        --output-model-type pydantic_v2.BaseModel \
+        --target-python-version 3.12 \
+        --generate-prompt "Find the minimal options for strict API response models." \
+        | claude -p
+    ```
+
+    **Review a command with current options:**
+    ```bash
+    datamodel-codegen \
+        --input schema.json \
+        --output models.py \
+        --output-model-type pydantic_v2.BaseModel \
+        --generate-prompt "Review this command for stable generated output in CI." \
+        | claude -p
     ```
 
 ---
@@ -25120,6 +25180,122 @@ or when redirecting output to files.
     ```bash
     NO_COLOR=1 datamodel-codegen --input schema.json
     ```
+
+---
+
+## `--output-format` {#output-format}
+
+Choose the command output format.
+
+The default output format is `text`. Use `json` when another program or LLM
+agent should inspect structured output.
+
+In normal generation mode, `--output-format json` wraps generated modules in a
+structured payload on stdout. If `--output` is also supplied, files are still
+written to disk and the JSON payload mirrors the generated files. `--check`
+also supports JSON output for difference reports. `--watch` keeps its existing
+text output contract and does not support `--output-format json`.
+
+Structured JSON is emitted on stdout for successful commands and for `--check`
+difference reports. CLI usage errors, validation errors, and runtime generation
+errors continue to use text on stderr with a non-zero exit code.
+
+Generation JSON includes the normalized requested output path in top-level
+`output` when `--output` is supplied, or `null` for stdout generation.
+`files[].path` is the output file name for single-file disk output, and the
+path relative to the output directory for directory output. For stdout-only
+single-file generation it is `null`, and for multi-module stdout generation it
+is the generated module path.
+
+Use `--output-format json` with `--generate-prompt` to emit structured option
+metadata instead of Markdown. Use `--output-format-json-schema` when an LLM
+agent or tool needs the schema for a structured output payload.
+
+Schema targets are intentionally scoped. `generate-prompt` emits the
+`PromptPayload` schema for `--generate-prompt --output-format json`.
+`generation` emits only the `GenerationPayload` schema for generated-file JSON.
+`structured-output` emits the broader `StructuredOutputPayload` schema, a union
+covering `GenerationPayload`, `PromptPayload`, `CommandOutputPayload`, and
+`CheckOutputPayload`. Structured payloads use `kind` as the discriminator.
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --output-format text # (1)!
+    datamodel-codegen --input schema.json --output-format json # (2)!
+    datamodel-codegen --generate-prompt --output-format json # (3)!
+    datamodel-codegen --output-format-json-schema generation # (4)!
+    datamodel-codegen --output-format-json-schema generate-prompt # (5)!
+    datamodel-codegen --output-format-json-schema structured-output # (6)!
+    ```
+
+    1. :material-arrow-left: Emit the default generated Python text
+    2. :material-arrow-left: Emit structured JSON containing generated files
+    3. :material-arrow-left: Emit structured JSON with current options and argparse metadata
+    4. :material-arrow-left: Emit JSON Schema for generated-file JSON output
+    5. :material-arrow-left: Emit JSON Schema for structured prompt JSON
+    6. :material-arrow-left: Emit JSON Schema for any structured command JSON output
+
+??? example "Generation JSON output"
+
+    ```json
+    {
+      "version": 1,
+      "format": "json",
+      "kind": "generation",
+      "output": null,
+      "files": [
+        {
+          "path": null,
+          "content": "# generated by datamodel-codegen:\n..."
+        }
+      ]
+    }
+    ```
+
+??? example "Prompt JSON output"
+
+    ```bash
+    datamodel-codegen \
+        --input schema.json \
+        --output-model-type pydantic_v2.BaseModel \
+        --generate-prompt "Choose strict model options." \
+        --output-format json
+    ```
+
+---
+
+## `--output-format-json-schema` {#output-format-json-schema}
+
+Output JSON Schema for a structured command output format and exit.
+
+Use this when an LLM agent, tool call definition, or validation layer needs the
+contract before consuming JSON output. The schema is emitted separately from the
+JSON payload so tools can fetch the contract once and validate later command
+output independently.
+
+Currently supported schema targets:
+
+- `generate-prompt`: schema for `--generate-prompt --output-format json`
+- `generation`: schema for normal generation with `--output-format json`
+- `structured-output`: tagged union schema for all structured command outputs,
+  discriminated by `kind`
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --output-format-json-schema generate-prompt # (1)!
+    datamodel-codegen --output-format-json-schema generation # (2)!
+    datamodel-codegen --output-format-json-schema structured-output # (3)!
+    datamodel-codegen --generate-prompt --output-format json # (4)!
+    datamodel-codegen --input schema.json --output-format json # (5)!
+    ```
+
+    1. :material-arrow-left: Emit the JSON Schema for structured prompt output
+    2. :material-arrow-left: Emit the JSON Schema for generated-file output
+    3. :material-arrow-left: Emit the JSON Schema for all structured command outputs
+    4. :material-arrow-left: Emit prompt payloads that match the prompt schema
+    5. :material-arrow-left: Emit generation payloads that match the generation schema
 
 ---
 
@@ -25414,6 +25590,8 @@ datamodel-codegen [OPTIONS]
 | [`--list-deprecations`](utility-options.md#list-deprecations) | List registered deprecations and scheduled breaking changes |
 | [`--list-experimental`](utility-options.md#list-experimental) | List registered experimental features |
 | [`--no-color`](utility-options.md#no-color) | Disable colorized output |
+| [`--output-format`](utility-options.md#output-format) | Choose the command output format |
+| [`--output-format-json-schema`](utility-options.md#output-format-json-schema) | Output JSON Schema for structured command output |
 | [`--profile`](utility-options.md#profile) | Use a named profile from pyproject.toml |
 | [`--version`](utility-options.md#version) | Show program version and exit |
 
@@ -25518,6 +25696,8 @@ All options sorted alphabetically:
 - [`--output`](base-options.md#output) - Specify the destination path for generated Python code.
 - [`--output-date-class`](typing-customization.md#output-date-class) - Specify date class type for date schema fields.
 - [`--output-datetime-class`](typing-customization.md#output-datetime-class) - Specify datetime class type for date-time schema fields.
+- [`--output-format`](utility-options.md#output-format) - Choose the command output format
+- [`--output-format-json-schema`](utility-options.md#output-format-json-schema) - Output JSON Schema for structured command output
 - [`--output-model-type`](model-customization.md#output-model-type) - Select the output model type (Pydantic v2, Pydantic v2 datac...
 - [`--parent-scoped-naming`](model-customization.md#parent-scoped-naming) - Namespace models by their parent scope to avoid naming confl...
 - [`--profile`](utility-options.md#profile) - Use a named profile from pyproject.toml
@@ -25771,17 +25951,31 @@ Outputs a formatted prompt containing your current options, all available
 options by category, and full help text. Pipe to CLI LLM tools or copy
 to clipboard for web-based LLM chats.
 
+Use `--output-format json` when an LLM agent or tool should consume structured
+option metadata instead of Markdown.
+Use `--output-format-json-schema generate-prompt` when the agent needs the JSON
+Schema for that structured payload, such as when defining a tool contract.
+
 **See also:** [LLM Integration](../../llm-integration.md) for detailed usage examples
+
+!!! note "For LLM agents"
+
+    See [LLM Integration: If You Are an LLM Agent](../../llm-integration.md#if-you-are-an-llm-agent)
+    for workflow guidance.
 
 !!! tip "Usage"
 
     ```bash
     datamodel-codegen --generate-prompt # (1)!
     datamodel-codegen --generate-prompt "How do I generate strict types?" # (2)!
+    datamodel-codegen --generate-prompt --output-format json # (3)!
+    datamodel-codegen --output-format-json-schema generate-prompt # (4)!
     ```
 
     1. :material-arrow-left: `--generate-prompt` - generate prompt without a question
     2. :material-arrow-left: Include a specific question in the prompt
+    3. :material-arrow-left: Emit structured JSON for LLM/tool ingestion
+    4. :material-arrow-left: Emit JSON Schema for structured prompt JSON
 
 ??? example "Quick Examples"
 
@@ -25789,6 +25983,7 @@ to clipboard for web-based LLM chats.
     ```bash
     datamodel-codegen --generate-prompt | claude -p    # Claude Code
     datamodel-codegen --generate-prompt | codex exec   # OpenAI Codex
+    datamodel-codegen --generate-prompt --output-format json | codex exec
     ```
 
     **Copy to clipboard:**
@@ -25796,6 +25991,28 @@ to clipboard for web-based LLM chats.
     datamodel-codegen --generate-prompt | pbcopy      # macOS
     datamodel-codegen --generate-prompt | xclip -selection clipboard  # Linux
     datamodel-codegen --generate-prompt | clip.exe    # WSL2
+    ```
+
+    **Ask about an existing OpenAPI command:**
+    ```bash
+    datamodel-codegen \
+        --input openapi.yaml \
+        --input-file-type openapi \
+        --output models.py \
+        --output-model-type pydantic_v2.BaseModel \
+        --target-python-version 3.12 \
+        --generate-prompt "Find the minimal options for strict API response models." \
+        | claude -p
+    ```
+
+    **Review a command with current options:**
+    ```bash
+    datamodel-codegen \
+        --input schema.json \
+        --output models.py \
+        --output-model-type pydantic_v2.BaseModel \
+        --generate-prompt "Review this command for stable generated output in CI." \
+        | claude -p
     ```
 
 ---
@@ -32745,7 +32962,7 @@ target-python-version = "3.14"
 
 Source: https://datamodel-code-generator.koxudaxi.dev/llm-integration/
 
-<!-- related-cli-options: --generate-prompt -->
+<!-- related-cli-options: --generate-prompt, --output-format, --output-format-json-schema -->
 
 The `--generate-prompt` option generates a formatted prompt that you can use
 to consult Large Language Models (LLMs) about datamodel-code-generator CLI options.
@@ -32753,8 +32970,10 @@ to consult Large Language Models (LLMs) about datamodel-code-generator CLI optio
 ## Overview
 
 When you're unsure which CLI options to use for your specific use case,
-you can generate a prompt containing all available options and their descriptions,
-then ask an LLM for recommendations.
+generate a prompt that includes the options already selected for the command,
+the available options grouped by category, and the full help text. Give that
+prompt to an LLM and ask it to propose the smallest command that satisfies your
+schema and generation goal.
 
 ```bash
 datamodel-codegen --generate-prompt "How do I generate strict Pydantic v2 models?"
@@ -32766,6 +32985,70 @@ The generated prompt includes:
 - Current CLI options you've specified
 - All options organized by category with descriptions
 - Full help text for reference
+
+## If You Are an LLM Agent
+
+Use `--generate-prompt` as an option discovery step before you recommend or run
+a final `datamodel-codegen` command.
+
+1. Inspect the user's goal and the input schema when it is available.
+2. Start from any options the user or existing project already selected.
+3. Run `datamodel-codegen [known options] --generate-prompt "<goal>"`.
+4. Preserve current options unless they conflict with the goal or another option.
+5. Choose the minimal additional options needed for the requested output.
+6. Return the final CLI command, reasons for each non-obvious option, rejected
+   alternatives, and a verification command.
+
+Use current options in the prompt command so the generated prompt reflects the
+real configuration you are improving:
+
+```bash
+datamodel-codegen \
+    --input openapi.yaml \
+    --input-file-type openapi \
+    --output models.py \
+    --output-model-type pydantic_v2.BaseModel \
+    --target-python-version 3.12 \
+    --generate-prompt "Find the minimal options for strict API response models."
+```
+
+A useful answer should keep the command runnable and explain tradeoffs:
+
+- Final command to run
+- Why each added or changed option is needed
+- Current options that should remain unchanged
+- Options considered but rejected, with a short reason
+- Verification command, such as `datamodel-codegen ... --check` or a focused
+  generation command against a fixture schema
+
+## Structured Output for Tools
+
+Use `--output-format json` when an LLM agent or tool should consume structured option
+metadata instead of Markdown:
+
+```bash
+datamodel-codegen --generate-prompt "How do I generate strict Pydantic v2 models?" --output-format json
+```
+
+The JSON payload includes the user question, current options, options grouped by
+category, full option metadata from argparse, and help text without ANSI color
+codes.
+
+Use `--output-format-json-schema` when a tool or agent needs a JSON Schema before
+it consumes command output:
+
+```bash
+datamodel-codegen --output-format-json-schema generate-prompt
+datamodel-codegen --output-format-json-schema generation
+datamodel-codegen --output-format-json-schema structured-output
+```
+
+The schema targets are scoped:
+
+- `generate-prompt`: schema for `--generate-prompt --output-format json`
+- `generation`: schema for normal generation with `--output-format json`
+- `structured-output`: tagged union schema for all structured command outputs,
+  including prompt, generation, command metadata, and check result payloads
 
 ## CLI LLM Tools
 
@@ -32787,6 +33070,12 @@ Use `exec` subcommand for non-interactive mode:
 
 ```bash
 datamodel-codegen --generate-prompt "How to handle nullable fields?" | codex exec
+```
+
+For agents that can inspect structured input, prefer JSON:
+
+```bash
+datamodel-codegen --generate-prompt "How to handle nullable fields?" --output-format json | codex exec
 ```
 
 ### Other CLI Tools
@@ -32846,6 +33135,14 @@ Generate a prompt without a specific question:
 datamodel-codegen --generate-prompt
 ```
 
+### JSON Output
+
+Generate structured option metadata for automated tools:
+
+```bash
+datamodel-codegen --generate-prompt "Find the minimal strict-model options." --output-format json
+```
+
 ### With a Question
 
 Include your specific question in the prompt:
@@ -32866,21 +33163,149 @@ datamodel-codegen \
     --generate-prompt "Are there any other options I should consider?"
 ```
 
-### Pipe to Claude with Options
+### Strict Pydantic v2 Models
 
 ```bash
 datamodel-codegen \
     --input openapi.yaml \
-    --output-model-type dataclasses.dataclass \
-    --generate-prompt "How can I add JSON serialization support?" \
+    --input-file-type openapi \
+    --output models.py \
+    --output-model-type pydantic_v2.BaseModel \
+    --target-python-version 3.12 \
+    --strict-types str int float bool \
+    --generate-prompt "Which additional options should I use for strict API response models?" \
     | claude -p
+```
+
+### Review an Existing Command
+
+```bash
+datamodel-codegen \
+    --input schema.json \
+    --output models.py \
+    --output-model-type pydantic_v2.BaseModel \
+    --target-python-version 3.11 \
+    --snake-case-field \
+    --generate-prompt "Review this command and suggest only necessary option changes." \
+    | codex exec
 ```
 
 ## Tips
 
 1. **Be specific** - Include a clear question to get more relevant recommendations
 2. **Show context** - Add your current options so the LLM understands your setup
-3. **Iterate** - Use the suggestions, then ask follow-up questions if needed
+3. **Keep options minimal** - Prefer the fewest options that satisfy the goal
+4. **Verify output** - Run the final command against the target schema or fixture
+
+---
+
+# Using datamodel-code-generator with coding agents
+
+Source: https://datamodel-code-generator.koxudaxi.dev/coding-agent-skill/
+
+This repository includes an experimental Agent Skill for skills-compatible coding agents. The skill teaches an agent to run `datamodel-codegen` when a user asks for Python models from OpenAPI, AsyncAPI, JSON Schema, GraphQL, JSON/YAML/CSV sample data, MCP tool schemas, Protocol Buffers, XML Schema, Apache Avro, or existing Python model objects.
+
+The skill is a directory, not a package-manager install. The required entrypoint is `SKILL.md`, and supporting files live under `references/`.
+
+Treat this skill as experimental. The workflow, trigger wording, and client-specific install guidance can change as Codex, Claude Code, and other skills-compatible agents evolve.
+
+## Why agents should run the CLI
+
+Agents should run `datamodel-codegen` instead of hand-writing generated models when a usable input artifact exists.
+
+The CLI handles refs, enums, nested models, unions, `allOf`, `oneOf`, `anyOf`, and model reuse. It also produces output that can be imported and checked after generation.
+
+Agents should also use the CLI for option discovery. `datamodel-codegen --help` links to this skill documentation, and `--generate-prompt` can produce either Markdown guidance or structured JSON for tool-aware agents.
+
+```bash
+datamodel-codegen [known options] --generate-prompt "Find the minimal options for this schema."
+datamodel-codegen [known options] --generate-prompt "Find the minimal options for this schema." --output-format json
+datamodel-codegen --output-format-json-schema structured-output
+```
+
+Use the generated prompt output before recommending a final command when the correct input type, output model type, strictness, aliasing, module layout, or verification flags are not obvious.
+
+## Install for Claude Code
+
+Claude Code project skills load from `.claude/skills/` in the starting directory and parent directories up to the repository root. Personal skills can be placed under `~/.claude/skills/`.
+
+For a project skill, run:
+
+```bash
+mkdir -p .claude/skills
+cp -R skills/datamodel-code-generator .claude/skills/datamodel-code-generator
+```
+
+For a personal skill, run:
+
+```bash
+mkdir -p ~/.claude/skills
+cp -R skills/datamodel-code-generator ~/.claude/skills/datamodel-code-generator
+```
+
+Claude Code can invoke a skill directly with `/datamodel-code-generator`, or load it automatically when the description matches the task. Existing top-level skill directories are watched for changes. If the top-level skills directory did not exist when the session started, restart Claude Code.
+
+## Install for Codex
+
+Codex reads project skills from `.agents/skills` in the current directory, parent directories, and the repository root. It reads personal skills from `$HOME/.agents/skills`.
+
+For a project skill, run:
+
+```bash
+mkdir -p .agents/skills
+cp -R skills/datamodel-code-generator .agents/skills/datamodel-code-generator
+```
+
+For a personal skill, run:
+
+```bash
+mkdir -p ~/.agents/skills
+cp -R skills/datamodel-code-generator ~/.agents/skills/datamodel-code-generator
+```
+
+Codex can invoke skills explicitly through `/skills` or `$` mention, or load them automatically when the description matches the task.
+
+## Other agents
+
+Other skills-compatible agents may support this directory format. Check the client documentation for its skill search path.
+
+## Distribution paths
+
+| Form | Install method | Best use |
+| --- | --- | --- |
+| Repository skill | Copy to `.agents/skills/` or `.claude/skills/` | OSS and internal repositories |
+| Personal skill | Copy to `~/.agents/skills/` or `~/.claude/skills/` | Reuse across a user's projects |
+| Codex local install | Use `$skill-installer` when appropriate | Codex local experiments |
+| Codex plugin | Package separately as a plugin | Reusable Codex distribution |
+| Claude plugin | Package separately as a plugin | Bundle skills with hooks, MCP, or agents |
+
+Start with the repository skill. Consider Codex or Claude plugin packaging only as a separate distribution task.
+
+## Example prompt
+
+```text
+Create Pydantic v2 models from openapi.yaml.
+```
+
+Expected agent behavior:
+
+1. Runs `datamodel-codegen`.
+2. Writes the generated file.
+3. Imports the generated file.
+4. Summarizes generated classes.
+
+## Troubleshooting
+
+- The CLI command is `datamodel-codegen`.
+- The package name is `datamodel-code-generator`.
+- Use extras for HTTP, GraphQL, msgspec, and protobuf when needed.
+- If a JSON or YAML file is a schema, choose `openapi`, `asyncapi`, or `jsonschema` input type instead of raw sample data mode.
+
+## References
+
+- [Agent Skills specification](https://agentskills.io/specification)
+- [Codex Agent Skills](https://developers.openai.com/codex/skills)
+- [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/skills)
 
 ---
 

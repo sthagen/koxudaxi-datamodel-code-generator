@@ -6,21 +6,12 @@ Generates Python models using msgspec.Struct for high-performance serialization.
 from __future__ import annotations
 
 from functools import lru_cache, wraps
+from math import isfinite
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypeVar
 
-from pydantic import Field
-
-from datamodel_code_generator import DateClassType, DatetimeClassType, PythonVersion, PythonVersionMin
-from datamodel_code_generator.imports import (
-    IMPORT_DATE,
-    IMPORT_DATETIME,
-    IMPORT_TIME,
-    IMPORT_TIMEDELTA,
-    IMPORT_UNION,
-    Import,
-)
+from datamodel_code_generator.imports import IMPORT_UNION, Import
 from datamodel_code_generator.model import DataModel, DataModelFieldBase, _rebuild_model_with_datamodel_namespace
-from datamodel_code_generator.model.base import UNDEFINED, BaseClassDataType
+from datamodel_code_generator.model.base import UNDEFINED, BaseClassDataType, _nested_model_default_factory
 from datamodel_code_generator.model.imports import (
     IMPORT_MSGSPEC_CONVERT,
     IMPORT_MSGSPEC_FIELD,
@@ -30,22 +21,21 @@ from datamodel_code_generator.model.imports import (
     IMPORT_MSGSPEC_UNSETTYPE,
 )
 from datamodel_code_generator.model.pydantic_base import (
-    Constraints as _Constraints,
+    PatternConstraints as _Constraints,
 )
 from datamodel_code_generator.model.type_alias import TypeAliasBase
 from datamodel_code_generator.model.types import DataTypeManager as _DataTypeManager
-from datamodel_code_generator.model.types import standard_primitive_type_map_factory, type_map_factory
+from datamodel_code_generator.python_literal import represent_python_value
 from datamodel_code_generator.types import (
     NONE,
     OPTIONAL_PREFIX,
     UNION_DELIMITER,
     UNION_OPERATOR_DELIMITER,
     UNION_PREFIX,
-    DataType,
-    StrictTypes,
-    Types,
     _remove_none_from_union,
     chain_as_tuple,
+    merge_normalized_constraint,
+    normalize_integer_constraint,
 )
 
 UNSET_TYPE = "UnsetType"
@@ -63,17 +53,15 @@ UNSET = _UNSET()
 
 if TYPE_CHECKING:
     from collections import defaultdict
-    from collections.abc import Sequence
     from pathlib import Path
 
     from datamodel_code_generator.reference import Reference
 
 
-def _has_field_assignment(field: DataModelFieldBase) -> bool:
-    return (
-        bool(field.field)
-        or field.use_default_with_required
-        or not (field.required or (field.represented_default == "None" and field.strip_default_none))
+def has_field_assignment(field: DataModelFieldBase) -> bool:
+    """Return whether a msgspec field renders with a default assignment."""
+    return field.use_default_with_required or not (
+        field.required or (field.represented_default == "None" and field.strip_default_none)
     )
 
 
@@ -93,7 +81,7 @@ def import_extender(cls: type[DataModelFieldBaseT]) -> type[DataModelFieldBaseT]
         # TODO: Improve field detection
         if field and field.startswith("field("):
             extra_imports.append(IMPORT_MSGSPEC_FIELD)
-        if self.field and "lambda: convert" in self.field:
+        if field and "lambda: convert" in field:
             extra_imports.append(IMPORT_MSGSPEC_CONVERT)
         if isinstance(self, DataModelField) and self.needs_meta_import:
             extra_imports.append(IMPORT_MSGSPEC_META)
@@ -118,6 +106,7 @@ class Struct(DataModel):
     BASE_CLASS_ALIAS: ClassVar[str] = "_Struct"
     DEFAULT_IMPORTS: ClassVar[tuple[Import, ...]] = ()
     SUPPORTS_DISCRIMINATOR: ClassVar[bool] = True
+    SUPPORTS_KW_ONLY: ClassVar[bool] = True
     CONFIG_MAPPING: ClassVar[dict[tuple[str, Any], tuple[str, Any] | None]] = {
         ("allow_mutation", False): ("frozen", True),
         ("extra_fields", "forbid"): ("forbid_unknown_fields", True),
@@ -149,7 +138,7 @@ class Struct(DataModel):
         """Initialize msgspec Struct with fields sorted by field assignment requirement."""
         super().__init__(
             reference=reference,
-            fields=sorted(fields, key=_has_field_assignment),
+            fields=sorted(fields, key=has_field_assignment),
             decorators=decorators,
             base_classes=base_classes,
             custom_base_class=custom_base_class,
@@ -215,10 +204,6 @@ class Struct(DataModel):
 class Constraints(_Constraints):
     """Constraint model for msgspec fields."""
 
-    # To override existing pattern alias
-    regex: Optional[str] = Field(None, alias="regex")  # noqa: UP045
-    pattern: Optional[str] = Field(None, alias="pattern")  # noqa: UP045
-
 
 @lru_cache
 def get_neither_required_nor_nullable_type(type_: str, use_union_operator: bool) -> str:  # noqa: FBT001
@@ -265,8 +250,8 @@ class DataModelField(DataModelFieldBase):
         "lt",
         "le",
         "multiple_of",
-        # 'min_items', # not supported by msgspec
-        # 'max_items', # not supported by msgspec
+        "min_items",
+        "max_items",
         "min_length",
         "max_length",
         "pattern",
@@ -287,14 +272,28 @@ class DataModelField(DataModelFieldBase):
         if self.data_type.type == "str" and isinstance(const, str):  # pragma: no cover
             self.replace_data_type(self.data_type.__class__(literals=[const]), clear_old_parent=False)
 
-    def _get_strict_field_constraint_value(self, constraint: str, value: Any) -> Any:
-        """Get constraint value with appropriate numeric type."""
-        if value is None or constraint not in self._COMPARE_EXPRESSIONS:
-            return value
+    def _has_numeric_data_type(self, type_name: str) -> bool:
+        """Return whether any field data type is the given numeric type."""
+        return any(data_type.type == type_name for data_type in self.data_type.all_data_types)
 
-        if any(data_type.type == "float" for data_type in self.data_type.all_data_types):
-            return float(value)
-        return int(value)
+    def _get_strict_field_constraint(
+        self, constraint: str, value: Any, *, is_float_type: bool, is_int_type: bool
+    ) -> tuple[str, Any] | None:
+        """Return a constraint normalized for the field's numeric type.
+
+        Non-finite bounds are dropped because msgspec Meta only accepts finite values.
+        """
+        if value is None or constraint not in self._COMPARE_EXPRESSIONS:
+            return constraint, value
+        if isinstance(value, float) and not isfinite(value):
+            return None
+        if is_float_type:
+            return constraint, float(value)
+        if is_int_type:
+            return normalize_integer_constraint(constraint, value)
+        if isinstance(value, float) and value.is_integer():
+            return constraint, int(value)
+        return constraint, value
 
     @property
     def field(self) -> str | None:
@@ -334,10 +333,7 @@ class DataModelField(DataModelFieldBase):
         if "default" in data and isinstance(data["default"], (list, dict, set)) and "default_factory" not in data:
             default_value = data.pop("default")
             if default_value:
-                from datamodel_code_generator.model.base import repr_set_sorted  # noqa: PLC0415
-
-                default_repr = repr_set_sorted(default_value) if isinstance(default_value, set) else repr(default_value)
-                data["default_factory"] = f"lambda: {default_repr}"
+                data["default_factory"] = f"lambda: {represent_python_value(default_value)}"
             else:
                 data["default_factory"] = type(default_value).__name__
 
@@ -356,9 +352,9 @@ class DataModelField(DataModelFieldBase):
             return ""
 
         if len(data) == 1 and "default" in data:
-            return repr(data["default"])
+            return represent_python_value(data["default"])
 
-        kwargs = [f"{k}={v if k == 'default_factory' else repr(v)}" for k, v in data.items()]
+        kwargs = [f"{k}={v if k == 'default_factory' else represent_python_value(v)}" for k, v in data.items()]
         return f"field({', '.join(kwargs)})"
 
     @property
@@ -389,16 +385,28 @@ class DataModelField(DataModelFieldBase):
             and not self.self_reference()
             and not (self.data_type.strict and has_type_constraints)
         ):
-            data = {
-                **data,
-                **{
-                    k: self._get_strict_field_constraint_value(k, v)
-                    for k, v in self.constraints.model_dump().items()
-                    if k in self._META_FIELD_KEYS
-                },
-            }
+            dumped = self.constraints.model_dump()
+            has_integer_constraints = any(dumped.get(key) is not None for key in self._COMPARE_EXPRESSIONS)
+            is_float_type = has_integer_constraints and self._has_numeric_data_type("float")
+            is_int_type = has_integer_constraints and not is_float_type and self._has_numeric_data_type("int")
+            constraint_data: dict[str, Any] = {}
+            for k, v in dumped.items():
+                if k not in self._META_FIELD_KEYS or v is None:
+                    continue
+                if (
+                    normalized := self._get_strict_field_constraint(
+                        k, v, is_float_type=is_float_type, is_int_type=is_int_type
+                    )
+                ) is not None:
+                    merge_normalized_constraint(constraint_data, normalized[0], normalized[1])
+            data = {**data, **constraint_data}
 
-        meta_arguments = sorted(f"{k}={v!r}" for k, v in data.items() if v is not None)
+        if (min_items := data.pop("min_items", None)) is not None:
+            data["min_length"] = min_items
+        if (max_items := data.pop("max_items", None)) is not None:
+            data["max_length"] = max_items
+
+        meta_arguments = sorted(f"{k}={represent_python_value(v)}" for k, v in data.items() if v is not None)
         return f"Meta({', '.join(meta_arguments)})" if meta_arguments else None
 
     @property
@@ -448,7 +456,7 @@ class DataModelField(DataModelFieldBase):
     @property
     def needs_meta_import(self) -> bool:
         """Check if this field requires the Meta import."""
-        return self._get_meta_string() is not None
+        return self.use_annotated and self._get_meta_string() is not None
 
     def _get_default_as_struct_model(self) -> str | None:
         """Convert default value to Struct model using msgspec convert."""
@@ -465,7 +473,7 @@ class DataModelField(DataModelFieldBase):
                     and isinstance(self.default, list)
                 ):
                     return (
-                        f"lambda: {self._PARSE_METHOD}({self.default!r},  "
+                        f"lambda: {self._PARSE_METHOD}({represent_python_value(self.default)},  "
                         f"type=list[{data_type_child.alias or data_type_child.reference.source.class_name}])"
                     )
             elif data_type.reference and isinstance(data_type.reference.source, Struct):
@@ -475,7 +483,7 @@ class DataModelField(DataModelFieldBase):
                     if isinstance(self.default, dict) and any(dt.is_dict for dt in self.data_type.data_types):
                         continue
                 return (
-                    f"lambda: {self._PARSE_METHOD}({self.default!r},  "
+                    f"lambda: {self._PARSE_METHOD}({represent_python_value(self.default)},  "
                     f"type={data_type.alias or data_type.reference.source.class_name})"
                 )
         return None
@@ -486,71 +494,11 @@ class DataModelField(DataModelFieldBase):
         Returns the class name if the field type references a Struct,
         otherwise returns None.
         """
-        for data_type in self.data_type.data_types or (self.data_type,):
-            if data_type.is_dict:
-                continue
-            if data_type.reference and isinstance(data_type.reference.source, Struct):
-                return data_type.alias or data_type.reference.source.class_name
-        return None
+        return _nested_model_default_factory(self, Struct)
 
 
 class DataTypeManager(_DataTypeManager):
     """Type manager for msgspec Struct models."""
-
-    def __init__(  # noqa: PLR0913, PLR0917
-        self,
-        python_version: PythonVersion = PythonVersionMin,
-        use_standard_collections: bool = False,  # noqa: FBT001, FBT002
-        use_generic_container_types: bool = False,  # noqa: FBT001, FBT002
-        strict_types: Sequence[StrictTypes] | None = None,
-        use_non_positive_negative_number_constrained_types: bool = False,  # noqa: FBT001, FBT002
-        use_decimal_for_multiple_of: bool = False,  # noqa: FBT001, FBT002
-        use_union_operator: bool = False,  # noqa: FBT001, FBT002
-        use_pendulum: bool = False,  # noqa: FBT001, FBT002
-        use_standard_primitive_types: bool = False,  # noqa: FBT001, FBT002
-        use_object_type: bool = False,  # noqa: FBT001, FBT002
-        target_datetime_class: DatetimeClassType | None = None,
-        target_date_class: DateClassType | None = None,  # noqa: ARG002
-        treat_dot_as_module: bool | None = None,  # noqa: FBT001
-        use_serialize_as_any: bool = False,  # noqa: FBT001, FBT002
-    ) -> None:
-        """Initialize type manager with optional datetime type mapping."""
-        super().__init__(
-            python_version=python_version,
-            use_standard_collections=use_standard_collections,
-            use_generic_container_types=use_generic_container_types,
-            strict_types=strict_types,
-            use_non_positive_negative_number_constrained_types=use_non_positive_negative_number_constrained_types,
-            use_decimal_for_multiple_of=use_decimal_for_multiple_of,
-            use_union_operator=use_union_operator,
-            use_pendulum=use_pendulum,
-            use_standard_primitive_types=use_standard_primitive_types,
-            use_object_type=use_object_type,
-            target_datetime_class=target_datetime_class,
-            treat_dot_as_module=treat_dot_as_module,
-            use_serialize_as_any=use_serialize_as_any,
-        )
-
-        datetime_map = (
-            {
-                Types.time: self.data_type.from_import(IMPORT_TIME),
-                Types.date: self.data_type.from_import(IMPORT_DATE),
-                Types.date_time: self.data_type.from_import(IMPORT_DATETIME),
-                Types.timedelta: self.data_type.from_import(IMPORT_TIMEDELTA),
-            }
-            if target_datetime_class is DatetimeClassType.Datetime
-            else {}
-        )
-
-        standard_primitive_map = (
-            standard_primitive_type_map_factory(self.data_type) if use_standard_primitive_types else {}
-        )
-
-        self.type_map: dict[Types, DataType] = {
-            **type_map_factory(self.data_type, use_object_type=use_object_type),
-            **datetime_map,
-            **standard_primitive_map,
-        }
 
 
 _rebuild_model_with_datamodel_namespace(DataModelField)

@@ -25,6 +25,23 @@ def test_main_xmlschema_purchase_order(output_file: Path) -> None:
     )
 
 
+def test_main_xmlschema_purchase_order_from_normalized_external_path(tmp_path: Path, output_file: Path) -> None:
+    """Generate XML Schema models when the external input path needs normalization."""
+    redirect_dir = tmp_path / "redirect"
+    redirect_dir.mkdir()
+    run_main_and_assert(
+        input_path=redirect_dir / ".." / "purchase_order.xsd",
+        output_path=output_file,
+        input_file_type="xmlschema",
+        assert_func=assert_file_content,
+        expected_file="purchase_order.py",
+        copy_files=[
+            (XML_SCHEMA_DATA_PATH / "purchase_order.xsd", tmp_path / "purchase_order.xsd"),
+            (XML_SCHEMA_DATA_PATH / "common.xsd", tmp_path / "common.xsd"),
+        ],
+    )
+
+
 def test_main_xmlschema_infer_input_file_type(output_file: Path) -> None:
     """Infer XML Schema input and generate a model."""
     run_main_and_assert(
@@ -587,6 +604,85 @@ def test_main_xmlschema_datetime_classes_aware(output_file: Path) -> None:
     )
 
 
+def test_main_xmlschema_blocks_relative_schema_location_outside_base_path(
+    capsys: pytest.CaptureFixture[str],
+    output_file: Path,
+) -> None:
+    """Reject XML Schema includes that resolve outside the input base path."""
+    project_dir = output_file.parent / "project"
+    secret_dir = output_file.parent / "secret"
+    project_dir.mkdir()
+    secret_dir.mkdir()
+    (secret_dir / "leak.xsd").write_text(
+        """<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:simpleType name="Leaked"><xs:restriction base="xs:string"/></xs:simpleType>
+</xs:schema>
+""",
+        encoding="utf-8",
+    )
+    input_file = project_dir / "attack.xsd"
+    input_file.write_text(
+        """<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="../secret/leak.xsd"/>
+  <xs:element name="Root" type="Leaked"/>
+</xs:schema>
+""",
+        encoding="utf-8",
+    )
+
+    run_main_and_assert(
+        input_path=input_file,
+        output_path=output_file,
+        input_file_type="xmlschema",
+        expected_exit=Exit.ERROR,
+        capsys=capsys,
+        expected_stderr_contains="Blocked unsafe XML Schema schemaLocation",
+        output_should_not_exist=True,
+    )
+
+
+def test_main_xmlschema_blocks_absolute_schema_location_outside_base_path(
+    capsys: pytest.CaptureFixture[str],
+    output_file: Path,
+) -> None:
+    """Reject absolute XML Schema includes outside the input base path."""
+    project_dir = output_file.parent / "project"
+    secret_dir = output_file.parent / "secret"
+    project_dir.mkdir()
+    secret_dir.mkdir()
+    secret_schema = secret_dir / "leak.xsd"
+    secret_schema.write_text(
+        """<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:simpleType name="Leaked"><xs:restriction base="xs:string"/></xs:simpleType>
+</xs:schema>
+""",
+        encoding="utf-8",
+    )
+    input_file = project_dir / "attack.xsd"
+    input_file.write_text(
+        f"""<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="{secret_schema}"/>
+  <xs:element name="Root" type="Leaked"/>
+</xs:schema>
+""",
+        encoding="utf-8",
+    )
+
+    run_main_and_assert(
+        input_path=input_file,
+        output_path=output_file,
+        input_file_type="xmlschema",
+        expected_exit=Exit.ERROR,
+        capsys=capsys,
+        expected_stderr_contains="Blocked unsafe XML Schema schemaLocation",
+        output_should_not_exist=True,
+    )
+
+
 def test_main_xmlschema_parse_error(capsys: pytest.CaptureFixture[str], output_file: Path) -> None:
     """Report invalid XML Schema syntax through the CLI."""
     run_main_and_assert(
@@ -596,7 +692,7 @@ def test_main_xmlschema_parse_error(capsys: pytest.CaptureFixture[str], output_f
         expected_exit=Exit.ERROR,
         capsys=capsys,
         expected_stderr_contains="Invalid XML Schema document",
-        assert_output_path_not_exists=True,
+        output_should_not_exist=True,
     )
 
 
@@ -609,7 +705,7 @@ def test_main_xmlschema_wrong_root_error(capsys: pytest.CaptureFixture[str], out
         expected_exit=Exit.ERROR,
         capsys=capsys,
         expected_stderr_contains="XML Schema root element must be xs:schema",
-        assert_output_path_not_exists=True,
+        output_should_not_exist=True,
     )
 
 
@@ -621,7 +717,7 @@ def test_main_xmlschema_auto_broken_xml_error(capsys: pytest.CaptureFixture[str]
         expected_exit=Exit.ERROR,
         capsys=capsys,
         expected_stderr_contains="Can't infer input file type",
-        assert_output_path_not_exists=True,
+        output_should_not_exist=True,
     )
 
 
@@ -633,5 +729,5 @@ def test_main_xmlschema_auto_wrong_root_error(capsys: pytest.CaptureFixture[str]
         expected_exit=Exit.ERROR,
         capsys=capsys,
         expected_stderr_contains="Can't infer input file type",
-        assert_output_path_not_exists=True,
+        output_should_not_exist=True,
     )

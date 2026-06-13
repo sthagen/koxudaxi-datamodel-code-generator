@@ -310,6 +310,22 @@ class FieldNameResolver:
             count += 1
         return new_name
 
+    def _resolve_alias_value(
+        self,
+        field_name: str,
+        alias_value: object,
+        excludes: set[str] | None,
+    ) -> tuple[str, str | list[str]] | None:
+        if isinstance(alias_value, list) and alias_value:
+            if not all(isinstance(alias, str) for alias in alias_value):
+                return None
+            alias_values = cast("list[str]", alias_value)
+            valid_name = self.get_valid_name(alias_values[0], excludes=excludes)
+            return valid_name, [field_name, *alias_values]
+        if isinstance(alias_value, str):
+            return alias_value, field_name
+        return None
+
     def get_valid_field_name_and_alias(
         self,
         field_name: str,
@@ -338,23 +354,13 @@ class FieldNameResolver:
         del path
         if class_name:
             scoped_key = f"{class_name}.{field_name}"
-            if scoped_key in self.aliases:
-                alias_value = self.aliases[scoped_key]
-                if isinstance(alias_value, list) and alias_value:
-                    # Multiple aliases: validate first alias as field name, return all aliases including original
-                    valid_name = self.get_valid_name(alias_value[0], excludes=excludes)
-                    return valid_name, [field_name, *alias_value]
-                if isinstance(alias_value, str):
-                    return alias_value, field_name
+            resolved_alias = self._resolve_alias_value(field_name, self.aliases.get(scoped_key), excludes)
+            if resolved_alias is not None:
+                return resolved_alias
 
-        if field_name in self.aliases:
-            alias_value = self.aliases[field_name]
-            if isinstance(alias_value, list) and alias_value:
-                # Multiple aliases: validate first alias as field name, return all aliases including original
-                valid_name = self.get_valid_name(alias_value[0], excludes=excludes)
-                return valid_name, [field_name, *alias_value]
-            if isinstance(alias_value, str):
-                return alias_value, field_name
+        resolved_alias = self._resolve_alias_value(field_name, self.aliases.get(field_name), excludes)
+        if resolved_alias is not None:
+            return resolved_alias
 
         valid_name = self.get_valid_name(field_name, excludes=excludes)
         return (
@@ -553,6 +559,16 @@ class ModelResolver:  # noqa: PLR0904
         self.default_value_overrides: Mapping[str, Any] = (
             {} if default_value_overrides is None else {**default_value_overrides}
         )
+
+    def _reset_for_reuse(self, exclude_names: set[str]) -> None:
+        """Reset naming state so this resolver behaves like a freshly constructed one.
+
+        Internal helper for hot paths that would otherwise construct a new
+        ModelResolver per call; only the state touched by add() is reset.
+        """
+        self.exclude_names = exclude_names
+        self.references.clear()
+        self._reference_names_cache.clear()
 
     def _get_reference_names(self) -> set[str]:
         """Get the set of all reference names for uniqueness checking."""
@@ -953,27 +969,16 @@ class ModelResolver:  # noqa: PLR0904
                 # For primary definitions, try to use the clean name first
                 # If an external reference has the same name, rename it
                 self._rename_external_ref_with_same_name(name, joined_path)
-                name, duplicate_name = self.get_class_name(
-                    name=name,
-                    unique=unique,
-                    reserved_name=reference.name if reference else None,
-                    singular_name=singular_name,
-                    singular_name_suffix=singular_name_suffix,
-                    model_type=model_type,
-                    is_root=is_root,
-                    preserve_name=preserve_class_name,
-                )
-            else:
-                name, duplicate_name = self.get_class_name(
-                    name=name,
-                    unique=unique,
-                    reserved_name=reference.name if reference else None,
-                    singular_name=singular_name,
-                    singular_name_suffix=singular_name_suffix,
-                    model_type=model_type,
-                    is_root=is_root,
-                    preserve_name=preserve_class_name,
-                )
+            name, duplicate_name = self.get_class_name(
+                name=name,
+                unique=unique,
+                reserved_name=reference.name if reference else None,
+                singular_name=singular_name,
+                singular_name_suffix=singular_name_suffix,
+                model_type=model_type,
+                is_root=is_root,
+                preserve_name=preserve_class_name,
+            )
         else:
             # TODO: create a validate for module name
             name = self.get_valid_field_name(name, model_type=ModelType.CLASS)
@@ -1213,6 +1218,9 @@ class ModelResolver:  # noqa: PLR0904
         return original_default, has_default
 
 
+_inflect_engine: inflect.engine | None = None
+
+
 def _get_inflect_engine() -> inflect.engine:
     """Get or create the inflect engine lazily."""
     global _inflect_engine  # noqa: PLW0603
@@ -1223,10 +1231,7 @@ def _get_inflect_engine() -> inflect.engine:
     return _inflect_engine
 
 
-_inflect_engine: inflect.engine | None = None
-
-
-@lru_cache
+@lru_cache(maxsize=4096)
 def get_singular_name(name: str, suffix: str = SINGULAR_NAME_SUFFIX) -> str:
     """Convert a plural name to singular form."""
     singular_name = _get_inflect_engine().singular_noun(cast("inflect.Word", name))  # ty: ignore
@@ -1235,7 +1240,7 @@ def get_singular_name(name: str, suffix: str = SINGULAR_NAME_SUFFIX) -> str:
     return singular_name  # ty: ignore
 
 
-@lru_cache
+@lru_cache(maxsize=4096)
 def snake_to_upper_camel(word: str, delimiter: str = "_") -> str:
     """Convert snake_case or delimited string to UpperCamelCase."""
     prefix = ""

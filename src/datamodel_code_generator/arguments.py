@@ -142,6 +142,7 @@ arg_parser = ArgumentParser(
     description="Generate Python data models from schema definitions or structured data\n\n"
     "For detailed usage, see: https://datamodel-code-generator.koxudaxi.dev",
     epilog="Documentation: https://datamodel-code-generator.koxudaxi.dev\n"
+    "Agent skill: https://datamodel-code-generator.koxudaxi.dev/coding-agent-skill/\n"
     "GitHub: https://github.com/koxudaxi/datamodel-code-generator",
     formatter_class=SortingHelpFormatter,
     add_help=False,
@@ -174,7 +175,9 @@ base_options.add_argument(
     "--allow-private-network",
     help=(
         "Allow HTTP(S) schema requests to private, loopback, link-local, or otherwise non-public network hosts. "
-        "By default these targets are blocked to reduce SSRF risk. Use only for trusted internal schema endpoints. "
+        "By default these targets are blocked to reduce server-side request forgery (SSRF) risk. "
+        "If a trusted internal schema endpoint is blocked, verify the URL and pass this option; otherwise use a "
+        "local schema file or public endpoint. "
         "Pass --no-allow-private-network to override a configuration file that enables it."
     ),
     action=BooleanOptionalAction,
@@ -1214,6 +1217,19 @@ general_options.add_argument(
     action="store_true",
     default=False,
     help="disable colorized output",
+)
+general_options.add_argument(
+    "--output-format",
+    choices=["text", "json"],
+    default=None,
+    help="Format for command output (default: text). Use json for structured output when supported.",
+)
+general_options.add_argument(
+    "--output-format-json-schema",
+    choices=["generate-prompt", "generation", "structured-output"],
+    default=None,
+    metavar="{generate-prompt,generation,structured-output}",
+    help="Output JSON Schema for the selected structured output format and exit.",
 )
 general_options.add_argument(
     "--generate-pyproject-config",

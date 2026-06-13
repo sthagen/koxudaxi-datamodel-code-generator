@@ -6,7 +6,9 @@ import difflib
 import importlib
 import inspect
 import json
+import os
 import re
+import socket
 import sys
 import time
 from collections import Counter
@@ -16,6 +18,7 @@ from datetime import datetime, timezone
 from itertools import starmap
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, cast
+from urllib.parse import urlparse
 
 import httpx
 import pytest
@@ -32,7 +35,10 @@ if TYPE_CHECKING:
 
 CLI_DOC_COLLECTION_OUTPUT = Path(__file__).parent / "cli_doc" / ".cli_doc_collection.json"
 CLI_DOC_SCHEMA_VERSION = 1
+TEST_DEFAULT_FORMATTER_ENV = "DATAMODEL_CODE_GENERATOR_TEST_DEFAULT_FORMATTER"
+BUILTIN_FORMATTER_VALUE = "builtin"
 _VERSION_PATTERN = re.compile(r"^\d+\.\d+$")
+_MOCK_PUBLIC_IP = "93.184.216.34"
 
 
 class CliDocKwargs(TypedDict, total=False):
@@ -447,7 +453,11 @@ def freeze_time(time_to_freeze: str, **kwargs: Any) -> time_machine.travel:  # n
 
 
 def _normalize_line_endings(text: str) -> str:
-    """Normalize line endings to LF for cross-platform comparison."""
+    """Normalize line endings to LF for cross-platform comparison.
+
+    This keeps snapshot comparisons platform-neutral; byte-level generated-file
+    newline invariants are pinned separately.
+    """
     return text.replace("\r\n", "\n")
 
 
@@ -460,14 +470,14 @@ def _normalize_generated_text(text: str) -> str:
 def _get_tox_env() -> str:  # pragma: no cover
     """Get the current tox environment name from TOX_ENV_NAME or fallback.
 
-    Strips '-parallel' suffix since inline-snapshot requires -n0 (single process).
+    Strips parallel-only suffixes since inline-snapshot requires -n0 (single process).
     Only called in assertion failure hints.
     """
     import os
 
     env = os.environ.get("TOX_ENV_NAME", "<version>")
-    # Remove -parallel suffix since inline-snapshot needs single process mode
-    return env.removesuffix("-parallel")
+    # Remove parallel-only suffixes since inline-snapshot needs single process mode.
+    return env.removesuffix("-nocov-parallel").removesuffix("-parallel")
 
 
 def _format_snapshot_hint(action: str) -> str:  # pragma: no cover
@@ -556,6 +566,15 @@ def _format_diff(expected: str, actual: str, expected_path: Path) -> str:  # pra
             console.print(Text(line_stripped, style="default"))
 
     return output.getvalue()
+
+
+def _infer_expected_file(caller_function_name: str) -> str:
+    name = caller_function_name
+    for prefix in ("test_main_", "test_"):  # pragma: no branch
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    return f"{name}.py"
 
 
 def _assert_with_external_file(content: str, expected_path: Path) -> None:
@@ -651,14 +670,8 @@ def create_assert_file_content(
             frame = inspect.currentframe()
             assert frame is not None
             assert frame.f_back is not None
-            func_name = frame.f_back.f_code.co_name
+            expected_name = _infer_expected_file(frame.f_back.f_code.co_name)
             del frame
-            name = func_name
-            for prefix in ("test_main_", "test_"):  # pragma: no branch
-                if name.startswith(prefix):
-                    name = name[len(prefix) :]
-                    break
-            expected_name = f"{name}.py"
 
         expected_path = base_path / expected_name
         content = output_file.read_text(encoding=encoding)
@@ -776,8 +789,12 @@ def assert_parser_results(
     __tracebackhide__ = True
     for expected_path in expected_dir.rglob(pattern):
         key = str(expected_path.relative_to(expected_dir))
+        if key not in results:
+            msg = f"Parser result missing expected file: {key}"
+            raise AssertionError(msg)
         result_obj = results.pop(key)
         _assert_with_external_file(_get_full_body(result_obj), expected_path)
+    assert not results, list(results)
 
 
 def assert_parser_modules(
@@ -795,6 +812,15 @@ def assert_parser_modules(
         assert_parser_modules(modules, EXPECTED_PATH / "parser_modular")
     """
     __tracebackhide__ = True
+    output_files = set(starmap(Path, modules))
+    expected_files = {path.relative_to(expected_dir) for path in expected_dir.rglob("*.py")}
+
+    extra = expected_files - output_files
+    assert not extra, f"Expected files not in parser modules: {extra}"
+
+    missing = output_files - expected_files
+    assert not missing, f"Parser modules not in expected files: {missing}"
+
     for paths, result in modules.items():
         expected_path = expected_dir.joinpath(*paths)
         _assert_with_external_file(_get_full_body(result), expected_path)
@@ -981,6 +1007,14 @@ def mock_httpx_get(mocker: Any) -> HttpxGetMockFactory:
         for response in responses:
             queued_responses.setdefault(response.url, []).append(response)
 
+        def _getaddrinfo_for_public_host(
+            _host: bytes | str,
+            _port: int | str | None,
+            *_args: Any,
+            **_kwargs: Any,
+        ) -> list[tuple[int, int, int, str, tuple[str, int]]]:
+            return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (_MOCK_PUBLIC_IP, 0))]
+
         def _response_for_url(url: str, *_args: Any, **_kwargs: Any) -> Any:
             if url not in queued_responses or not queued_responses[url]:  # pragma: no cover
                 pytest.fail(
@@ -998,7 +1032,48 @@ def mock_httpx_get(mocker: Any) -> HttpxGetMockFactory:
             )
             return response
 
-        return cast("HttpxGetMock", mocker.patch("httpx.get", autospec=True, side_effect=_response_for_url))
+        def _response_for_validated_url(
+            _httpx_module: Any,
+            url: str,
+            *,
+            headers: HttpxHeaders | None,
+            verify: bool,
+            follow_redirects: bool,
+            query_parameters: HttpxParams | None,
+            timeout: float,
+            pinned_host: str | None,
+            pinned_ips: object,
+        ) -> Any:
+            if pinned_host is not None:
+                from datamodel_code_generator.http import _normalize_dns_host
+
+                parsed_host = urlparse(url).hostname
+                if parsed_host is None:  # pragma: no cover
+                    pytest.fail(f"Expected pinned fetch URL to include a host: {url!r}", pytrace=False)
+                expected_host = _normalize_dns_host(parsed_host)
+                if expected_host is None:  # pragma: no cover
+                    pytest.fail(f"Expected pinned fetch URL to include a valid host: {url!r}", pytrace=False)
+                if pinned_host != expected_host:  # pragma: no cover
+                    pytest.fail(f"Expected pinned host {expected_host!r}, got {pinned_host!r}", pytrace=False)
+                if not pinned_ips:  # pragma: no cover
+                    pytest.fail(f"Expected pinned IPs for URL: {url!r}", pytrace=False)
+            return httpx_get_mock(
+                url,
+                headers=headers,
+                verify=verify,
+                follow_redirects=follow_redirects,
+                params=query_parameters,
+                timeout=timeout,
+            )
+
+        mocker.patch("socket.getaddrinfo", autospec=True, side_effect=_getaddrinfo_for_public_host)
+        httpx_get_mock = cast("HttpxGetMock", mocker.patch("httpx.get", autospec=True, side_effect=_response_for_url))
+        mocker.patch(
+            "datamodel_code_generator.http._get_http_response",
+            autospec=True,
+            side_effect=_response_for_validated_url,
+        )
+        return httpx_get_mock
 
     return _mock_httpx_get
 
@@ -1053,6 +1128,24 @@ def assert_generated_file_matches_output(result: object, output_file: Path) -> N
         diff = _format_diff(expected, actual, output_file)
         msg = f"Generated output differs from {output_file}\n{diff}"
         raise AssertionError(msg)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_builtin_formatter_config(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Keep marked tests from inheriting the repository Ruff formatter config."""
+    if request.node.get_closest_marker("isolate_builtin_formatter_config") is None:
+        return
+    if os.environ.get(TEST_DEFAULT_FORMATTER_ENV) != BUILTIN_FORMATTER_VALUE:
+        return
+
+    settings_path = tmp_path_factory.mktemp("builtin_formatter_config")
+    (settings_path / "pyproject.toml").write_text(
+        "[tool.datamodel-codegen]\nbuiltin-format-line-length = 88\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(settings_path)
 
 
 @pytest.fixture(autouse=True)

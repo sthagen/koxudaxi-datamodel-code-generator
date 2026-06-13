@@ -20,12 +20,14 @@ from pydantic import ConfigDict, Field
 from typing_extensions import Self
 
 from datamodel_code_generator import cached_path_exists
+from datamodel_code_generator._internal_utils import get_most_of_parent, to_hashable
 from datamodel_code_generator.imports import (
     IMPORT_ANNOTATED,
     IMPORT_OPTIONAL,
     IMPORT_UNION,
     Import,
 )
+from datamodel_code_generator.python_literal import represent_python_value
 from datamodel_code_generator.reference import Reference, _BaseModel
 from datamodel_code_generator.types import (
     ANY,
@@ -173,19 +175,6 @@ def _copy_all_model_data(source: dict[str, Any], target: dict[str, Any]) -> None
         target[key] = deepcopy(value) if isinstance(value, (dict, list, set)) else value
 
 
-def repr_set_sorted(value: set[Any]) -> str:
-    """Return a repr of a set with elements sorted for consistent output.
-
-    Uses (type_name, repr(x)) as sort key to safely handle any type including
-    Enum, custom classes, or types without __lt__ defined.
-    """
-    if not value:
-        return "set()"
-    # Sort by type name first, then by repr for consistent output
-    sorted_elements = sorted(value, key=lambda x: (type(x).__name__, repr(x)))
-    return "{" + ", ".join(repr(e) for e in sorted_elements) + "}"
-
-
 ConstraintsBaseT = TypeVar("ConstraintsBaseT", bound="ConstraintsBase")
 DataModelFieldBaseT = TypeVar("DataModelFieldBaseT", bound="DataModelFieldBase")
 
@@ -194,7 +183,7 @@ class ConstraintsBase(_BaseModel):
     """Base class for field constraints (min/max, patterns, etc.)."""
 
     unique_items: Optional[bool] = Field(None, alias="uniqueItems")  # noqa: UP045
-    _exclude_fields: ClassVar[set[str]] = {"has_constraints"}
+    _exclude_fields: ClassVar[set[str]] = {"has_constraints", "_exclude_unset_dump"}
     model_config = ConfigDict(  # ty: ignore
         arbitrary_types_allowed=True, ignored_types=(cached_property,)
     )
@@ -203,6 +192,11 @@ class ConstraintsBase(_BaseModel):
     def has_constraints(self) -> bool:
         """Check if any constraint values are set."""
         return any(v is not None for v in self.model_dump().values())
+
+    @cached_property
+    def _exclude_unset_dump(self) -> dict[str, Any]:
+        """Cached model_dump(exclude_unset=True); constraints are immutable after creation. Read-only."""
+        return self.model_dump(exclude_unset=True)
 
     @staticmethod
     def merge_constraints(a: ConstraintsBaseT | None, b: ConstraintsBaseT | None) -> ConstraintsBaseT | None:
@@ -373,10 +367,13 @@ class DataModelFieldBase(_BaseModel):
     @property
     def imports(self) -> tuple[Import, ...]:
         """Get all imports required for this field's type hint."""
+        return self._collect_field_imports(needs_annotated=self.use_annotated and self.needs_annotated_import)
+
+    def _collect_field_imports(self, *, needs_annotated: bool) -> tuple[Import, ...]:
+        """Collect type-hint imports; needs_annotated is passed in so subclasses can precompute it."""
         type_hint = self.type_hint
         has_union = not self._use_union_operator and UNION_PREFIX in type_hint
         has_optional = OPTIONAL_PREFIX in type_hint
-        needs_annotated = self.use_annotated and self.needs_annotated_import
 
         # Fast path: no special typing imports needed
         if not has_union and not has_optional and not needs_annotated:
@@ -463,9 +460,7 @@ class DataModelFieldBase(_BaseModel):
     @property
     def represented_default(self) -> str:
         """Get the repr() string of the default value."""
-        if isinstance(self.default, set):
-            return repr_set_sorted(self.default)
-        return repr(self.default)
+        return represent_python_value(self.default)
 
     @property
     def annotated(self) -> str | None:
@@ -519,10 +514,33 @@ class DataModelFieldBase(_BaseModel):
             new_data_type.parent = self
 
 
+def _nested_model_default_factory(field: DataModelFieldBase, model_cls: type[DataModel]) -> str | None:
+    """Return the nested model name usable as a default_factory for optional fields."""
+    for data_type in field.data_type.data_types or (field.data_type,):
+        if data_type.is_dict:
+            continue
+        if data_type.reference and isinstance(data_type.reference.source, model_cls):
+            return data_type.alias or data_type.reference.source.class_name
+    return None
+
+
+def _build_environment(loader: Any) -> Environment:
+    """Build a Jinja environment with built-in filters."""
+    from jinja2 import Environment, select_autoescape  # noqa: PLC0415
+
+    env = Environment(
+        loader=loader,
+        autoescape=select_autoescape(["html", "xml"]),
+    )
+    env.filters["escape_docstring"] = escape_docstring  # For old custom templates
+    env.filters["format_docstring"] = format_docstring
+    return env
+
+
 @lru_cache(maxsize=16)
 def _get_environment(template_subdir: Path, custom_template_dir: Path | None) -> Environment:
     """Get or create a cached Jinja2 Environment for the given directories."""
-    from jinja2 import ChoiceLoader, Environment, FileSystemLoader, select_autoescape  # noqa: PLC0415
+    from jinja2 import ChoiceLoader, FileSystemLoader  # noqa: PLC0415
 
     loaders: list[FileSystemLoader] = []
 
@@ -534,13 +552,7 @@ def _get_environment(template_subdir: Path, custom_template_dir: Path | None) ->
     loaders.append(FileSystemLoader(str(TEMPLATE_DIR / template_subdir)))
 
     loader: ChoiceLoader | FileSystemLoader = ChoiceLoader(loaders) if len(loaders) > 1 else loaders[0]
-    env = Environment(
-        loader=loader,
-        autoescape=select_autoescape(["html", "xml"]),
-    )
-    env.filters["escape_docstring"] = escape_docstring  # For old custom templates
-    env.filters["format_docstring"] = format_docstring
-    return env
+    return _build_environment(loader)
 
 
 @lru_cache
@@ -562,19 +574,13 @@ def _get_template_with_custom_dir(template_file_path: Path, custom_template_dir:
 @lru_cache(maxsize=16)
 def _get_environment_with_absolute_path(absolute_template_dir: Path, builtin_subdir: Path) -> Environment:
     """Get or create a cached Jinja2 Environment for absolute path templates."""
-    from jinja2 import ChoiceLoader, Environment, FileSystemLoader, select_autoescape  # noqa: PLC0415
+    from jinja2 import ChoiceLoader, FileSystemLoader  # noqa: PLC0415
 
     loaders: list[FileSystemLoader] = [
         FileSystemLoader(str(absolute_template_dir)),
         FileSystemLoader(str(TEMPLATE_DIR / builtin_subdir)),
     ]
-    env = Environment(
-        loader=ChoiceLoader(loaders),
-        autoescape=select_autoescape(["html", "xml"]),
-    )
-    env.filters["escape_docstring"] = escape_docstring  # For old custom templates
-    env.filters["format_docstring"] = format_docstring
-    return env
+    return _build_environment(ChoiceLoader(loaders))
 
 
 @lru_cache
@@ -815,8 +821,6 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
         if cached is not None:
             return cached
 
-        from datamodel_code_generator.parser.base import to_hashable  # noqa: PLC0415
-
         render_class_name = class_name if class_name is not None or not use_default else "M"
         result = tuple(to_hashable(v) for v in (self.render(class_name=render_class_name), self.imports))
         self._dedup_key_cache[cache_key] = result
@@ -849,8 +853,6 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
 
     def replace_children_in_models(self, models: list[DataModel], new_ref: Reference) -> None:
         """Replace reference children if their parent model is in models list."""
-        from datamodel_code_generator.parser.base import get_most_of_parent  # noqa: PLC0415
-
         for child in self.reference.children[:]:
             if isinstance(child, DataType) and get_most_of_parent(child) in models:
                 child.replace_reference(new_ref)

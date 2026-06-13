@@ -25,7 +25,6 @@ from datamodel_code_generator import (
     Error,
     OpenAPIScope,
     YamlValue,
-    load_data,
     snooper_to_methods,
 )
 from datamodel_code_generator.deprecations import warn_deprecated
@@ -196,6 +195,9 @@ class ComponentsObject(BaseModel):
     headers: dict[str, Union[ReferenceObject, HeaderObject]] = Field(default_factory=dict)  # noqa: UP007
 
 
+_FIELD_NAME_RESOLVER = FieldNameResolver()
+
+
 @snooper_to_methods()
 class OpenAPIParser(JsonSchemaParser):
     """Parser for OpenAPI 2.0/3.0/3.1/3.2 and Swagger specifications."""
@@ -205,6 +207,8 @@ class OpenAPIParser(JsonSchemaParser):
     @cached_property
     def schema_features(self) -> OpenAPISchemaFeatures:
         """Get schema features based on config or detected OpenAPI version."""
+        # OpenAPI parses a single document context, so caching is intentional.
+        # AsyncAPI overrides this with a live property because it swaps raw_obj while resolving refs.
         from datamodel_code_generator.parser.schema_version import (  # noqa: PLC0415
             OpenAPISchemaFeatures,
             detect_openapi_version,
@@ -554,12 +558,12 @@ class OpenAPIParser(JsonSchemaParser):
             return None
 
         if "schema_" in raw_media_obj.model_fields_set:
-            if raw_media_obj.schema_ is None:  # pragma: no cover
+            if raw_media_obj.schema_ is None:
                 return None
             return RawMediaSchemaSource(raw_media_obj.schema_)
         if "itemSchema" not in raw_media_obj.model_fields_set or not self.schema_features.media_item_schema:
             return None
-        if raw_media_obj.itemSchema is None:  # pragma: no cover
+        if raw_media_obj.itemSchema is None:
             return None
         return RawMediaSchemaSource({"type": "array", "items": raw_media_obj.itemSchema}, from_item_schema=True)
 
@@ -635,6 +639,7 @@ class OpenAPIParser(JsonSchemaParser):
                         else:
                             raw_operation["parameters"] = item_parameters.copy()
                     if security is not None and "security" not in raw_operation:
+                        # fastapi-code-generator depends on inherited global security being materialized here.
                         raw_operation["security"] = security
                     self.parse_operation(raw_operation, [*path, operation_name])
 
@@ -724,7 +729,7 @@ class OpenAPIParser(JsonSchemaParser):
         """Parse operation tags."""
         return tags
 
-    _field_name_resolver: FieldNameResolver = FieldNameResolver()
+    _field_name_resolver: FieldNameResolver = _FIELD_NAME_RESOLVER
 
     @classmethod
     def _get_model_name(cls, path_name: str, method: str, suffix: str) -> str:
@@ -772,15 +777,13 @@ class OpenAPIParser(JsonSchemaParser):
                 param_schema = parameter.schema_
                 if param_schema.has_ref_with_schema_keywords and not param_schema.is_ref_with_nullable_only:
                     param_schema = self._merge_ref_with_schema(param_schema)
-                effective_default, effective_has_default = self.model_resolver.resolve_default_value(
+                effective_required = parameter.required
+                effective_default, effective_has_default, use_default_with_required = self._effective_default_state(
                     parameter_name,
                     param_schema.default,
-                    param_schema.has_default,
+                    has_default=param_schema.has_default,
+                    required=effective_required,
                     class_name=reference.name,
-                )
-                effective_required = parameter.required
-                use_default_with_required = (
-                    effective_required and self.apply_default_values_for_required_fields and effective_has_default
                 )
                 fields.append(
                     self.get_object_field(
@@ -833,23 +836,15 @@ class OpenAPIParser(JsonSchemaParser):
                     object_schema = None
                 original_default = object_schema.default if object_schema else None
                 original_has_default = object_schema.has_default if object_schema else False
-                effective_default, effective_has_default = self.model_resolver.resolve_default_value(
+                effective_required = parameter.required
+                effective_default, effective_has_default, use_default_with_required = self._effective_default_state(
                     parameter_name,
                     original_default,
-                    original_has_default,
+                    has_default=original_has_default,
+                    required=effective_required,
                     class_name=reference.name,
                 )
-                effective_required = parameter.required
-                use_default_with_required = (
-                    effective_required and self.apply_default_values_for_required_fields and effective_has_default
-                )
-                # Handle multiple aliases (Pydantic v2 AliasChoices)
-                single_alias: str | None = None
-                validation_aliases: list[str] | None = None
-                if isinstance(alias, list):
-                    validation_aliases = alias
-                else:
-                    single_alias = alias
+                single_alias, validation_aliases = self._split_alias(alias)
                 fields.append(
                     self.data_model_field_type(
                         name=field_name,
@@ -953,43 +948,44 @@ class OpenAPIParser(JsonSchemaParser):
 
     def parse_raw(self) -> None:
         """Parse OpenAPI specification including schemas, paths, and operations."""
-        for source, path_parts in self._get_context_source_path_parts():
-            if self.validation:
-                warn_deprecated("cli.validation", stacklevel=2)
+        try:
+            for source, path_parts in self._get_context_source_path_parts():
+                if self.validation:
+                    warn_deprecated("cli.validation", stacklevel=2)
 
-                if source.raw_data is not None:
-                    warn(
-                        "Warning: Validation was skipped for dict input. "
-                        "The --validation option only works with file or text input.\n",
-                        stacklevel=2,
-                    )
-                else:
-                    try:
-                        from prance import BaseParser  # noqa: PLC0415
-
-                        BaseParser(
-                            spec_string=source.text,
-                            backend="openapi-spec-validator",
-                            encoding=self.encoding,
-                        )
-                    except ImportError:  # pragma: no cover
+                    if source.raw_data is not None:
                         warn(
-                            "Warning: Validation was skipped for OpenAPI. "
-                            "`prance` or `openapi-spec-validator` are not installed.\n"
-                            "To use --validation option after datamodel-code-generator 0.24.0, "
-                            "Please run `$pip install 'datamodel-code-generator[validation]'`.\n",
+                            "Warning: Validation was skipped for dict input. "
+                            "The --validation option only works with file or text input.\n",
                             stacklevel=2,
                         )
+                    else:
+                        try:
+                            from prance import BaseParser  # noqa: PLC0415
 
-            specification: dict[str, Any] = (
-                dict(source.raw_data) if source.raw_data is not None else load_data(source.text)
-            )
-            self.raw_obj = specification
-            with self.openapi_self_context(specification):
-                self._parse_specification(specification, path_parts)
+                            BaseParser(
+                                spec_string=source.text,
+                                backend="openapi-spec-validator",
+                                encoding=self.encoding,
+                            )
+                        except ImportError:  # pragma: no cover
+                            warn(
+                                "Warning: Validation was skipped for OpenAPI. "
+                                "`prance` or `openapi-spec-validator` are not installed.\n"
+                                "To use --validation option after datamodel-code-generator 0.24.0, "
+                                "Please run `$pip install 'datamodel-code-generator[validation]'`.\n",
+                                stacklevel=2,
+                            )
 
-        self._resolve_unparsed_json_pointer()
-        self._generate_forced_base_models()
+                specification = self._load_source_dict(source)
+                self.raw_obj = specification
+                with self.openapi_self_context(specification):
+                    self._parse_specification(specification, path_parts)
+
+            self._resolve_unparsed_json_pointer()
+            self._generate_forced_base_models()
+        finally:
+            self._reset_local_source_cache()
 
     def _collect_discriminator_schemas(self) -> None:
         """Collect schemas with discriminators but no oneOf/anyOf, and find their subtypes."""
@@ -997,10 +993,7 @@ class OpenAPIParser(JsonSchemaParser):
         potential_subtypes: dict[str, list[str]] = {}
 
         for schema_name, schema in schemas.items():
-            discriminator = schema.get("discriminator")
-            if discriminator and not schema.get("oneOf") and not schema.get("anyOf"):
-                ref = f"#/components/schemas/{schema_name}"
-                self._discriminator_schemas[ref] = discriminator
+            self._register_discriminator_schema(schema_name, schema)
 
             all_of = schema.get("allOf")
             if all_of:
@@ -1013,3 +1006,8 @@ class OpenAPIParser(JsonSchemaParser):
                 if ref_in_allof in self._discriminator_schemas:
                     subtype_ref = f"#/components/schemas/{schema_name}"
                     self._discriminator_subtypes[ref_in_allof].append(subtype_ref)
+
+    def _register_discriminator_schema(self, schema_name: str, schema: dict[str, Any]) -> None:
+        discriminator = schema.get("discriminator")
+        if discriminator and not schema.get("oneOf") and not schema.get("anyOf"):
+            self._discriminator_schemas[f"#/components/schemas/{schema_name}"] = discriminator

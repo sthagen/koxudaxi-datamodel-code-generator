@@ -1170,7 +1170,10 @@ Allow HTTP requests to private network schema endpoints.
 
 The `--allow-private-network` flag permits trusted HTTP(S) schema requests to
 private, loopback, link-local, or otherwise non-public network hosts. Without
-this flag, those targets are blocked by default to reduce SSRF risk.
+this flag, those targets are blocked by default to reduce server-side request
+forgery (SSRF) risk. If a trusted internal schema endpoint is blocked, verify
+the URL and pass `--allow-private-network`; otherwise use a local schema file
+or public endpoint.
 
 !!! tip "Usage"
 
@@ -1297,7 +1300,7 @@ Automatically enabled when using `--url` input.
             None, description='Age in years which must be equal to or greater than zero.'
         )
         friends: list[Any] | None = None
-        comment: None = None
+        comment: None = Field(None)
 
 
     class OriginalPerson(RootModel[Person]):
@@ -1382,7 +1385,7 @@ and generated code stay in sync. Works with both single files and directory outp
             None, description='Age in years which must be equal to or greater than zero.'
         )
         friends: list[Any] | None = None
-        comment: None = None
+        comment: None = Field(None)
     ```
 
 ---
