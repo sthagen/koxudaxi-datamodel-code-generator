@@ -49,6 +49,8 @@ from datamodel_code_generator import (
     ReuseScope,
     YamlValue,
     _internal_utils,
+    _is_parsed_source_cache_enabled,
+    _read_parser_source_data_from_path,
 )
 from datamodel_code_generator.enums import StrictTypes
 from datamodel_code_generator.format import (
@@ -949,14 +951,29 @@ class Source(BaseModel):
 
     path: Path
     text: str = ""
-    raw_data: dict[str, YamlValue] | None = None
+    raw_data: Any | None = None
 
     @classmethod
-    def from_path(cls, path: Path, base_path: Path, encoding: str) -> Source:
+    def from_path(
+        cls,
+        path: Path,
+        base_path: Path,
+        encoding: str,
+    ) -> Source:
         """Create a Source from a file path relative to base_path."""
         return cls(
             path=path.relative_to(base_path),
             text=path.read_text(encoding=encoding),
+        )
+
+    @classmethod
+    def from_cached_path(cls, path: Path, base_path: Path, encoding: str, *, keep_text: bool = False) -> Source:
+        """Create a Source from a cached parsed file path relative to base_path."""
+        data, raw_data = _read_parser_source_data_from_path(path, encoding)
+        return cls(
+            path=path.relative_to(base_path),
+            text=data.decode(encoding) if keep_text else "",
+            raw_data=raw_data,
         )
 
     @classmethod
@@ -1124,6 +1141,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
 
     _config_class_name: ClassVar[str] = "ParserConfig"
     _cache_local_sources_during_parse: ClassVar[bool] = False
+    _cache_parsed_sources_from_path: ClassVar[bool] = False
 
     @classmethod
     def _get_config_class(cls) -> type[ParserConfig]:
@@ -1300,6 +1318,11 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         self.source: str | Path | list[Path] | ParseResult | dict[str, YamlValue] = source
         self._cache_local_sources = False
         self._local_source_cache: tuple[Source, ...] | None = None
+        self._use_parsed_source_cache = (
+            _is_parsed_source_cache_enabled()
+            and self._cache_parsed_sources_from_path
+            and isinstance(source, Path | list)
+        )
         self.custom_template_dir = config.custom_template_dir
         self.extra_template_data: defaultdict[str, Any] = config.extra_template_data or defaultdict(dict)
         self.validators = config.validators
@@ -1519,12 +1542,12 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                 if path.is_dir():
                     for p in sorted(path.rglob("*"), key=lambda p: p.name):
                         if p.is_file():
-                            yield Source.from_path(p, self.base_path, self.encoding)
+                            yield self._source_from_path(p)
                 else:
-                    yield Source.from_path(path, self.base_path, self.encoding)
+                    yield self._source_from_path(path)
             case list() as paths:  # pragma: no cover
                 for path in paths:
-                    yield Source.from_path(path, self.base_path, self.encoding)
+                    yield self._source_from_path(path)
             case _:
                 yield Source(
                     path=Path(self.source.path),
@@ -1532,6 +1555,11 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                         self.source.geturl(), default_factory=self._get_text_from_url
                     ),
                 )
+
+    def _source_from_path(self, path: Path) -> Source:
+        if self._use_parsed_source_cache:
+            return Source.from_cached_path(path, self.base_path, self.encoding, keep_text=self.validation)
+        return Source.from_path(path, self.base_path, self.encoding)
 
     def _append_additional_imports(self, additional_imports: list[str] | None) -> None:
         if additional_imports is None:
@@ -3056,7 +3084,11 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         return export_imports
 
     @classmethod
-    def _collect_used_names_from_models(cls, models: list[DataModel]) -> set[str]:
+    def _collect_used_names_from_models(
+        cls,
+        models: list[DataModel],
+        model_imports: Mapping[DataModel, tuple[Import, ...]] | None = None,
+    ) -> set[str]:
         """Collect identifiers referenced by models before rendering."""
         names: set[str] = set()
 
@@ -3075,7 +3107,8 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             add(model.duplicate_class_name)
             for base in model.base_classes:
                 add(base.type_hint)
-            for import_ in model.imports:
+            imports = model_imports[model] if model_imports is not None else model.imports
+            for import_ in imports:
                 add(import_.alias or import_.import_.split(".")[-1])
             for field in model.fields:
                 if field.extras.get("is_classvar"):
@@ -3554,27 +3587,28 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         all_models = [model for ctx in contexts for model in ctx.models]
         self.__mark_set_item_models_hashable(all_models)
         self.__apply_generic_base_class(contexts)
+        model_imports = {model: model.imports for ctx in contexts for model in ctx.models}
 
         for ctx in contexts:
             for model in ctx.models:
-                ctx.imports.append(model.imports)
+                ctx.imports.append(model_imports[model])
 
         for unused_model in unused_models:
             module, models = model_to_module_models[unused_model]
             if unused_model in models:  # pragma: no branch
                 imports = module_to_import[module]
-                imports.remove(unused_model.imports)
+                imports.remove(model_imports.get(unused_model, unused_model.imports))
                 models.remove(unused_model)
 
         for ctx in contexts:
-            used_names = self._collect_used_names_from_models(ctx.models)
+            used_names = self._collect_used_names_from_models(ctx.models, model_imports)
             ctx.imports.remove_unused(used_names)
 
         for ctx in contexts:
             # If any model in this module needs typing_extensions.TypedDict (e.g. for PEP 728
             # closed/extra_items backport), remove typing.TypedDict to avoid duplicate imports.
             if (
-                any(IMPORT_TYPED_DICT_BACKPORT in model.imports for model in ctx.models)
+                any(IMPORT_TYPED_DICT_BACKPORT in model_imports[model] for model in ctx.models)
                 and IMPORT_TYPED_DICT_BACKPORT.import_ in ctx.imports.get(IMPORT_TYPED_DICT_BACKPORT.from_, set())
                 and IMPORT_TYPED_DICT.import_ in ctx.imports.get(IMPORT_TYPED_DICT.from_, set())
             ):
