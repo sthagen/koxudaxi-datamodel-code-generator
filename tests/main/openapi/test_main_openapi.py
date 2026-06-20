@@ -488,6 +488,22 @@ def test_main_openapi_discriminator_short_mapping_names(output_file: Path) -> No
     )
 
 
+def test_main_openapi_discriminator_external_mapping(output_file: Path) -> None:
+    """Mapping-only discriminator subtypes can be external refs."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "discriminator_external_mapping" / "openapi.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file=EXPECTED_OPENAPI_PATH / "discriminator" / "external_mapping.py",
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--disable-timestamp",
+        ],
+    )
+
+
 def test_main_openapi_discriminator_partial_mapping(output_file: Path) -> None:
     """Missing discriminator mappings fall back to the subtype name."""
     run_main_and_assert(
@@ -851,6 +867,31 @@ def test_main_openapi_schema_extensions(
             input_path=OPEN_API_DATA_PATH / "schema_extensions.yaml",
             output_path=None,
             expected_stdout_path=EXPECTED_OPENAPI_PATH / "schema_extensions.py",
+            capsys=capsys,
+            input_file_type=None,
+            extra_args=[
+                "--custom-template-dir",
+                str(DATA_PATH / "templates_extensions"),
+                "--output-model-type",
+                "pydantic_v2.BaseModel",
+            ],
+            expected_stderr=inferred_message.format("openapi") + "\n",
+        )
+
+
+@pytest.mark.isolate_builtin_formatter_config
+def test_main_openapi_schema_extensions_enum(
+    capsys: pytest.CaptureFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that enum schema extensions (x-* fields) are passed to custom enum templates."""
+    model_base._get_environment.cache_clear()
+    model_base._get_template_with_custom_dir.cache_clear()
+    monkeypatch.chdir(tmp_path)
+    with freeze_time(TIMESTAMP):
+        run_main_and_assert(
+            input_path=OPEN_API_DATA_PATH / "schema_extensions_enum.yaml",
+            output_path=None,
+            expected_stdout_path=EXPECTED_OPENAPI_PATH / "schema_extensions_enum.py",
             capsys=capsys,
             input_file_type=None,
             extra_args=[
@@ -1899,6 +1940,31 @@ def test_main_openapi_pattern_with_lookaround_pydantic_v2(
         assert_func=assert_file_content,
         expected_file=expected_output,
         extra_args=["--target-python-version", "3.10", "--output-model-type", "pydantic_v2.BaseModel", *args],
+    )
+
+
+@pytest.mark.parametrize(
+    ("expected_output", "args"),
+    [
+        ("pattern_with_lookaround_pydantic_v2_dataclass.py", []),
+        (
+            "pattern_with_lookaround_pydantic_v2_dataclass_field_constraints.py",
+            ["--field-constraints"],
+        ),
+    ],
+)
+def test_main_openapi_pattern_with_lookaround_pydantic_v2_dataclass(
+    expected_output: str, args: list[str], output_file: Path
+) -> None:
+    """Test OpenAPI generation with pattern lookaround for Pydantic v2 dataclasses."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "pattern_lookaround.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file=expected_output,
+        extra_args=["--target-python-version", "3.10", "--output-model-type", "pydantic_v2.dataclass", *args],
+        force_exec_validation=True,
     )
 
 

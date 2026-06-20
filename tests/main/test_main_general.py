@@ -29,11 +29,17 @@ from datamodel_code_generator import (
     generate,
     snooper_to_methods,
 )
-from datamodel_code_generator.__main__ import BOOLEAN_OPTIONAL_OPTIONS, Config, Exit, run_generate_from_config
+from datamodel_code_generator.__main__ import (
+    BOOLEAN_OPTIONAL_OPTIONS,
+    Config,
+    Exit,
+    run_generate_from_config,
+)
 from datamodel_code_generator.arguments import _dataclass_arguments, arg_parser
 from datamodel_code_generator.config import GenerateConfig
 from datamodel_code_generator.format import CodeFormatter, Formatter, PythonVersion
 from datamodel_code_generator.model.pydantic_v2 import UnionMode
+from datamodel_code_generator.parser import LiteralType
 from datamodel_code_generator.parser.openapi import OpenAPIParser
 from tests.conftest import (
     HttpxGetMockFactory,
@@ -73,6 +79,9 @@ if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
 assert_file_content = create_assert_file_content(EXPECTED_MAIN_PATH)
+BLACK_VERSION = version.parse(black.__version__)
+BLACK_LT_233 = version.parse("23.3.0") > BLACK_VERSION
+BLACK_LT_24 = version.parse("24.0.0") > BLACK_VERSION
 
 
 class _GenerateParseAbort(BaseException):
@@ -155,6 +164,320 @@ def test_show_help_when_no_input(mocker: MockerFixture) -> None:
     print_help_mock.assert_called()
 
 
+@pytest.mark.cli_doc(
+    options=["--preset"],
+    option_description="""Apply an immutable built-in option preset.
+
+The `standard-py312-20260619` preset enables the recommended modern Python output style for
+new projects. The preset name pins generated Python syntax and backports.""",
+    input_schema="jsonschema/person.json",
+    cli_args=["--preset", "standard-py312-20260619"],
+    golden_output="main/standard_preset_pydantic_v2.py",
+    related_options=["--target-python-version"],
+    primary=True,
+)
+@pytest.mark.skipif(BLACK_LT_233, reason="Installed black doesn't support Python 3.12 target version")
+@freeze_time(TIMESTAMP)
+def test_standard_preset_pydantic_v2(output_file: Path) -> None:
+    """Generate Pydantic v2 output using the standard preset."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=["--preset", "standard-py312-20260619"],
+        assert_func=assert_file_content,
+        expected_file="standard_preset_pydantic_v2.py",
+    )
+
+
+@pytest.mark.skipif(BLACK_LT_233, reason="Installed black doesn't support Python 3.12 target version")
+@freeze_time(TIMESTAMP)
+def test_generate_standard_preset_public_api_kwargs(output_file: Path) -> None:
+    """Generate Pydantic v2 output using preset through public generate() kwargs."""
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        input_file_type=InputFileType.JsonSchema,
+        preset="standard-py312-20260619",
+        assert_func=assert_file_content,
+        expected_file="standard_preset_pydantic_v2.py",
+    )
+
+
+@pytest.mark.skipif(BLACK_LT_233, reason="Installed black doesn't support Python 3.12 target version")
+@freeze_time(TIMESTAMP)
+def test_generate_standard_preset_public_api_config(output_file: Path) -> None:
+    """Generate Pydantic v2 output using preset through GenerateConfig."""
+    config = GenerateConfig(
+        input_file_type=InputFileType.JsonSchema,
+        output=output_file,
+        output_model_type=DataModelType.PydanticV2BaseModel,
+        preset="standard-py312-20260619",
+        formatters=[Formatter.BUILTIN],
+        builtin_format_line_length=88,
+    )
+    generate(input_=JSON_SCHEMA_DATA_PATH / "person.json", config=config)
+    assert_file_content(output_file, "standard_preset_pydantic_v2.py")
+
+
+@freeze_time(TIMESTAMP)
+def test_generate_standard_preset_public_api_explicit_options(output_file: Path) -> None:
+    """Generate output when every preset option is already explicit."""
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        input_file_type=InputFileType.JsonSchema,
+        preset="standard-py310-20260619",
+        target_python_version=PythonVersion.PY_310,
+        use_standard_collections=True,
+        use_union_operator=True,
+        use_annotated=False,
+        enum_field_as_literal=LiteralType.One,
+        use_subclass_enum=True,
+        collapse_root_models=True,
+        strict_nullable=True,
+        set_default_enum_member=True,
+        disable_timestamp=True,
+        snake_case_field=True,
+        allow_population_by_field_name=True,
+        use_frozen_field=True,
+        assert_func=assert_file_content,
+        expected_file="standard_preset_no_use_annotated.py",
+    )
+
+
+def test_generate_standard_preset_public_api_reports_unknown_preset() -> None:
+    """Unknown public API presets raise the same user-facing error type as CLI presets."""
+    with pytest.raises(Error, match="Unknown preset: 'unknown-preset'"):
+        generate(
+            input_=JSON_SCHEMA_DATA_PATH / "person.json",
+            input_file_type=InputFileType.JsonSchema,
+            preset="unknown-preset",
+        )
+
+
+@freeze_time(TIMESTAMP)
+def test_standard_preset_uses_literal_for_single_value_enum(output_file: Path) -> None:
+    """The standard preset renders single-value enum fields as Literal."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "enum_literal_typed_dict.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=["--preset", "standard-py310-20260619"],
+        assert_func=assert_file_content,
+        expected_file="standard_preset_enum_literal_one.py",
+    )
+
+
+@freeze_time(TIMESTAMP)
+def test_standard_preset_no_snake_case_cli_override(output_file: Path) -> None:
+    """CLI --no-* flags override preset-supplied options."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=[
+            "--preset",
+            "standard-py310-20260619",
+            "--no-snake-case-field",
+        ],
+        assert_func=assert_file_content,
+        expected_file=(
+            "standard_preset_no_snake_case_black_lt_24.py" if BLACK_LT_24 else "standard_preset_no_snake_case.py"
+        ),
+    )
+
+
+@freeze_time(TIMESTAMP)
+def test_standard_preset_no_use_annotated_cli_override(output_file: Path) -> None:
+    """CLI --no-use-annotated overrides the preset and keeps field constraints off."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=[
+            "--preset",
+            "standard-py310-20260619",
+            "--no-use-annotated",
+        ],
+        assert_func=assert_file_content,
+        expected_file="standard_preset_no_use_annotated.py",
+    )
+
+
+@freeze_time(TIMESTAMP)
+def test_standard_preset_allows_original_field_name_delimiter_after_merge(output_file: Path) -> None:
+    """Preset-supplied snake-case conversion is visible to final validation."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=[
+            "--preset",
+            "standard-py310-20260619",
+            "--original-field-name-delimiter",
+            "-",
+        ],
+        assert_func=assert_file_content,
+        expected_file="standard_preset_pydantic_v2.py",
+    )
+
+
+@freeze_time(TIMESTAMP)
+def test_standard_preset_cli_overrides_pyproject_option(output_file: Path, tmp_path: Path) -> None:
+    """CLI --preset overrides pyproject values unless the same option is explicit on CLI."""
+    with chdir(tmp_path):
+        run_main_and_assert(
+            input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+            output_path=output_file,
+            input_file_type="jsonschema",
+            extra_args=["--preset", "standard-py310-20260619"],
+            assert_func=assert_file_content,
+            expected_file="standard_preset_pydantic_v2.py",
+            copy_files=[
+                (DATA_PATH / "config" / "pyproject_standard_preset_cli_override.toml", tmp_path / "pyproject.toml")
+            ],
+        )
+
+
+@freeze_time(TIMESTAMP)
+def test_standard_preset_pyproject_uses_final_output_model_type(output_file: Path, tmp_path: Path) -> None:
+    """Pyproject preset adapters resolve after CLI output-model-type overrides."""
+    with chdir(tmp_path):
+        run_main_and_assert(
+            input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+            output_path=output_file,
+            input_file_type="jsonschema",
+            extra_args=["--output-model-type", "dataclasses.dataclass"],
+            assert_func=assert_file_content,
+            expected_file="standard_preset_dataclass.py",
+            copy_files=[(DATA_PATH / "config" / "pyproject_standard_preset.toml", tmp_path / "pyproject.toml")],
+        )
+
+
+@freeze_time(TIMESTAMP)
+@pytest.mark.skipif(BLACK_LT_233, reason="Installed black doesn't support Python 3.12 target version")
+def test_standard_preset_msgspec_struct(output_file: Path) -> None:
+    """Generate msgspec.Struct output using the standard preset."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=[
+            "--preset",
+            "standard-py312-20260619",
+            "--output-model-type",
+            "msgspec.Struct",
+        ],
+        assert_func=assert_file_content,
+        expected_file=(
+            "standard_preset_msgspec_struct_black_lt_24.py" if BLACK_LT_24 else "standard_preset_msgspec_struct.py"
+        ),
+    )
+
+
+@freeze_time(TIMESTAMP)
+@pytest.mark.skipif(BLACK_LT_233, reason="Installed black doesn't support Python 3.12 target version")
+def test_standard_preset_typed_dict(output_file: Path) -> None:
+    """Generate TypedDict output using the standard preset."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=[
+            "--preset",
+            "standard-py312-20260619",
+            "--output-model-type",
+            "typing.TypedDict",
+        ],
+        assert_func=assert_file_content,
+        expected_file="standard_preset_typed_dict.py",
+    )
+
+
+@freeze_time(TIMESTAMP)
+def test_standard_preset_target_py310_does_not_force_specialized_enum(output_file: Path) -> None:
+    """The standard preset does not force StrEnum when target Python is 3.10."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "string_enum.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=["--preset", "standard-py310-20260619"],
+        assert_func=assert_file_content,
+        expected_file="standard_preset_string_enum_py310.py",
+    )
+
+
+@freeze_time(TIMESTAMP)
+def test_standard_preset_accepts_matching_target_python_version(output_file: Path) -> None:
+    """Explicit target Python version is accepted when it matches the preset name."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=["--preset", "standard-py310-20260619", "--target-python-version", "3.10"],
+        assert_func=assert_file_content,
+        expected_file="standard_preset_pydantic_v2.py",
+    )
+
+
+@freeze_time(TIMESTAMP)
+def test_practical_preset_pydantic_v2(output_file: Path) -> None:
+    """Generate Pydantic v2 output using the practical preset."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "practical_preset.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=["--preset", "practical-py310-20260619"],
+        assert_func=assert_file_content,
+        expected_file="practical_preset_pydantic_v2.py",
+    )
+
+
+def test_standard_preset_requires_matching_target_python_version(
+    output_file: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Preset Python target must match the explicit target Python version."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=["--preset", "standard-py312-20260619", "--target-python-version", "3.10"],
+        expected_exit=Exit.ERROR,
+        capsys=capsys,
+        expected_stderr_contains=(
+            "--preset standard-py312-20260619 targets Python 3.12; current --target-python-version is 3.10."
+        ),
+        file_should_not_exist=output_file,
+    )
+
+
+def test_standard_preset_reports_unknown_pyproject_preset(
+    output_file: Path,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """Unknown pyproject presets fail with a CLI error instead of leaking resolver exceptions."""
+    with chdir(tmp_path):
+        run_main_and_assert(
+            input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+            output_path=output_file,
+            input_file_type="jsonschema",
+            expected_exit=Exit.ERROR,
+            capsys=capsys,
+            expected_stderr_contains=(
+                "Unknown preset: 'unknown-preset'. Available presets: "
+                "standard-py310-20260619, standard-py311-20260619, standard-py312-20260619, "
+                "standard-py313-20260619, standard-py314-20260619, practical-py310-20260619, "
+                "practical-py311-20260619, practical-py312-20260619, practical-py313-20260619, "
+                "practical-py314-20260619"
+            ),
+            file_should_not_exist=output_file,
+            copy_files=[(DATA_PATH / "config" / "pyproject_unknown_preset.toml", tmp_path / "pyproject.toml")],
+        )
+
+
 def test_generated_pydantic_v2_model_accepts_runtime_value(output_file: Path) -> None:
     """Generated Pydantic v2 model validates a schema-valid payload at runtime."""
     run_main_and_assert(
@@ -175,53 +498,44 @@ def test_generated_pydantic_v2_model_accepts_runtime_value(output_file: Path) ->
     )
 
 
-@pytest.mark.allow_direct_assert
 def test_list_deprecations(capsys: pytest.CaptureFixture[str]) -> None:
     """List registered deprecations without requiring an input schema."""
-    run_main_with_args(["--list-deprecations"])
-    captured = capsys.readouterr()
+    run_main_with_args(
+        ["--list-deprecations"],
+        capsys=capsys,
+        expected_stdout_path=EXPECTED_MAIN_PATH / "list_deprecations.txt",
+        assert_no_stderr=True,
+    )
 
-    assert "cli.parent-scoped-naming" in captured.out
-    assert "--parent-scoped-naming" in captured.out
-    assert "Removal" in captured.out
-    assert not captured.err
 
-
-@pytest.mark.allow_direct_assert
 def test_list_deprecations_json(capsys: pytest.CaptureFixture[str]) -> None:
     """List registered deprecations as JSON."""
-    run_main_with_args(["--list-deprecations", "json"])
-    captured = capsys.readouterr()
+    run_main_with_args(
+        ["--list-deprecations", "json"],
+        capsys=capsys,
+        expected_stdout_path=EXPECTED_MAIN_PATH / "list_deprecations_json.txt",
+        assert_no_stderr=True,
+    )
 
-    deprecations = json.loads(captured.out)
-    assert any(item["id"] == "cli.parent-scoped-naming" for item in deprecations)
-    assert not captured.err
 
-
-@pytest.mark.allow_direct_assert
 def test_list_experimental(capsys: pytest.CaptureFixture[str]) -> None:
     """List registered experimental features without requiring an input schema."""
-    run_main_with_args(["--list-experimental"])
-    captured = capsys.readouterr()
-
-    assert "input-format.avro" in captured.out
-    assert "--input-file-type avro" in captured.out
-    assert "formatter.builtin" in captured.out
-    assert "--formatters builtin" in captured.out
-    assert "Since" in captured.out
-    assert not captured.err
+    run_main_with_args(
+        ["--list-experimental"],
+        capsys=capsys,
+        expected_stdout_path=EXPECTED_MAIN_PATH / "list_experimental.txt",
+        assert_no_stderr=True,
+    )
 
 
-@pytest.mark.allow_direct_assert
 def test_list_experimental_json(capsys: pytest.CaptureFixture[str]) -> None:
     """List registered experimental features as JSON."""
-    run_main_with_args(["--list-experimental", "json"])
-    captured = capsys.readouterr()
-
-    features = json.loads(captured.out)
-    assert any(item["id"] == "input-format.xmlschema" for item in features)
-    assert any(item["id"] == "formatter.builtin" for item in features)
-    assert not captured.err
+    run_main_with_args(
+        ["--list-experimental", "json"],
+        capsys=capsys,
+        expected_stdout_path=EXPECTED_MAIN_PATH / "list_experimental_json.txt",
+        assert_no_stderr=True,
+    )
 
 
 @pytest.mark.allow_direct_assert
@@ -237,6 +551,18 @@ def test_no_args_has_default(monkeypatch: pytest.MonkeyPatch) -> None:
         assert getattr(namespace, field, None) is None
 
 
+def test_cli_pyproject_ignores_generate_only_options(output_file: Path, tmp_path: Path) -> None:
+    """CLI pyproject config should keep ignoring API-only generate() options."""
+    with chdir(tmp_path):
+        run_main_and_assert(
+            input_path=JSON_SCHEMA_DATA_PATH / "force_optional_required.json",
+            output_path=output_file,
+            assert_func=assert_file_content,
+            expected_file="jsonschema/cli_pyproject_ignores_generate_only_options.py",
+            copy_files=[(DATA_PATH / "config" / "pyproject_generate_only_options.toml", tmp_path / "pyproject.toml")],
+        )
+
+
 @pytest.mark.allow_direct_assert
 def test_boolean_optional_option_sets_are_pinned() -> None:
     """Pin BooleanOptionalAction and the pyproject-generation special subset separately."""
@@ -245,19 +571,29 @@ def test_boolean_optional_option_sets_are_pinned() -> None:
     ]
 
     assert sorted(BOOLEAN_OPTIONAL_OPTIONS) == snapshot([
+        "allow_population_by_field_name",
+        "collapse_root_models",
+        "snake_case_field",
+        "use_frozen_field",
         "use_specialized_enum",
         "use_standard_collections",
+        "use_standard_primitive_types",
         "use_type_checking_imports",
     ])
     assert boolean_optional_dests == snapshot([
         "allow_remote_refs",
         "allow_private_network",
+        "allow_population_by_field_name",
+        "collapse_root_models",
         "treat_dot_as_module",
+        "use_standard_primitive_types",
         "use_annotated",
         "use_standard_collections",
         "use_specialized_enum",
         "use_union_operator",
         "use_closed_typed_dict",
+        "snake_case_field",
+        "use_frozen_field",
         "use_type_checking_imports",
     ])
     assert set(boolean_optional_dests) >= BOOLEAN_OPTIONAL_OPTIONS
@@ -270,16 +606,19 @@ def test_run_generate_from_config_generate_kwargs_are_pinned() -> None:
         ("input_", "input_"),
         ("input_file_type", "config.input_file_type"),
         ("output", "output"),
+        ("emit_model_metadata", "config.emit_model_metadata"),
         ("output_model_type", "config.output_model_type"),
         ("target_python_version", "config.target_python_version"),
         ("target_pydantic_version", "config.target_pydantic_version"),
         ("base_class", "config.base_class"),
         ("base_class_map", "config.base_class_map"),
+        ("model_name_map", "config.model_name_map"),
         ("additional_imports", "config.additional_imports"),
         ("class_decorators", "config.class_decorators"),
         ("custom_template_dir", "config.custom_template_dir"),
         ("validation", "config.validation"),
         ("field_constraints", "config.field_constraints"),
+        ("alias_generator", "config.alias_generator"),
         ("snake_case_field", "config.snake_case_field"),
         ("strip_default_none", "config.strip_default_none"),
         ("extra_template_data", "extra_template_data"),
@@ -342,6 +681,7 @@ def test_run_generate_from_config_generate_kwargs_are_pinned() -> None:
         ("graphql_no_typename", "config.graphql_no_typename"),
         ("wrap_string_literal", "config.wrap_string_literal"),
         ("use_title_as_name", "config.use_title_as_name"),
+        ("infer_union_variant_names", "config.infer_union_variant_names"),
         ("use_operation_id_as_name", "config.use_operation_id_as_name"),
         ("use_unique_items_as_set", "config.use_unique_items_as_set"),
         ("use_tuple_for_fixed_items", "config.use_tuple_for_fixed_items"),
@@ -1064,7 +1404,7 @@ def test_generate_cli_command_with_false_boolean(tmp_path: Path, capsys: pytest.
     pyproject_toml = """
 [tool.datamodel-codegen]
 input = "schema.yaml"
-snake-case-field = false
+reuse-model = false
 """
     (tmp_path / "pyproject.toml").write_text(pyproject_toml)
 
@@ -1072,7 +1412,7 @@ snake-case-field = false
         run_main_with_args(
             ["--generate-cli-command"],
             capsys=capsys,
-            expected_stdout_path=EXPECTED_MAIN_PATH / "generate_cli_command" / "false_boolean.txt",
+            expected_stdout_path=EXPECTED_MAIN_PATH / "generate_cli_command" / "regular_false_boolean.txt",
         )
 
 

@@ -5,12 +5,13 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path  # noqa: TC003 - used at runtime by Pydantic
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from datamodel_code_generator.enums import (
     DEFAULT_SHARED_MODULE_NAME,
+    AliasGenerator,
     AllExportsCollisionStrategy,
     AllExportsScope,
     AllOfClassHierarchy,
@@ -58,46 +59,45 @@ CallableSchema = Callable[[str], str]
 DumpResolveReferenceAction = Callable[[Iterable[str]], str]
 DefaultPutDictSchema = DefaultPutDict[str, str]
 if TYPE_CHECKING:
+    from datamodel_code_generator.preset_names import PresetName as PresetNameValue
+
     ExtraTemplateDataType = defaultdict[str, dict[str, Any]]
 else:
+    PresetNameValue: TypeAlias = str
     ExtraTemplateDataType = defaultdict[str, Annotated[dict[str, Any], Field(default_factory=dict)]]
 
 
-class GenerateConfig(BaseModel):
-    """Configuration model for generate()."""
+class BaseGenerateConfig(BaseModel):
+    """Shared generation configuration fields."""
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True, protected_namespaces=())
 
-    input_filename: str | None = None
     input_file_type: InputFileType = InputFileType.Auto
     output: Path | None = None
+    emit_model_metadata: Path | None = None
     output_model_type: DataModelType = DataModelType.PydanticV2BaseModel
+    preset: PresetNameValue | None = None
     target_python_version: PythonVersion = PythonVersionMin
     target_pydantic_version: TargetPydanticVersion | None = None
     base_class: str = ""
     base_class_map: dict[str, str | list[str]] | None = None
+    model_name_map: dict[str, str] | None = None
     additional_imports: list[str] | None = None
     class_decorators: list[str] | None = None
     custom_template_dir: Path | None = None
-    extra_template_data: ExtraTemplateDataType | None = None
-    validators: Mapping[str, ModelValidators] | None = None
     validation: bool = False
     field_constraints: bool = False
+    alias_generator: AliasGenerator | None = None
     snake_case_field: bool = False
     strip_default_none: bool = False
-    aliases: Mapping[str, str | list[str]] | None = None
-    serialization_aliases: Mapping[str, str] | None = None
     disable_timestamp: bool = False
     enable_version_header: bool = False
     enable_command_header: bool = False
     enable_generated_header_marker: bool = False
-    command_line: str | None = None
     allow_population_by_field_name: bool = False
     allow_extra_fields: bool = False
     extra_fields: str | None = None
     use_generic_base_class: bool = False
-    apply_default_values_for_required_fields: bool = False
-    force_optional_for_required_fields: bool = False
     class_name: str | None = None
     allow_leading_underscore_class_name: bool = False
     class_name_prefix: str | None = None
@@ -127,22 +127,19 @@ class GenerateConfig(BaseModel):
     use_generic_container_types: bool = False
     enable_faux_immutability: bool = False
     disable_appending_item_suffix: bool = False
-    strict_types: Sequence[StrictTypes] | None = None
     empty_enum_field_name: str | None = None
-    custom_class_name_generator: CallableSchema | None = None
     field_extra_keys: set[str] | None = None
     field_include_all_keys: bool = False
     field_extra_keys_without_x_prefix: set[str] | None = None
     model_extra_keys: set[str] | None = None
     model_extra_keys_without_x_prefix: set[str] | None = None
-    openapi_scopes: list[OpenAPIScope] | None = None
     include_path_parameters: bool = False
     openapi_include_paths: list[str] | None = None
     openapi_include_info_version: bool = False
-    graphql_scopes: list[GraphQLScope] | None = None
     graphql_no_typename: bool = False
     wrap_string_literal: bool | None = None
     use_title_as_name: bool = False
+    infer_union_variant_names: bool = False
     use_operation_id_as_name: bool = False
     use_unique_items_as_set: bool = False
     use_tuple_for_fixed_items: bool = False
@@ -175,7 +172,6 @@ class GenerateConfig(BaseModel):
     custom_file_header: str | None = None
     custom_file_header_path: Path | None = None
     custom_formatters: list[str] | None = None
-    custom_formatters_kwargs: dict[str, Any] | None = None
     use_pendulum: bool = False
     use_standard_primitive_types: bool = False
     use_object_type: bool = False
@@ -194,7 +190,6 @@ class GenerateConfig(BaseModel):
     use_default_factory_for_optional_nested_models: bool = False
     formatters: list[Formatter] | None = None
     builtin_format_line_length: int | None = None
-    settings_path: Path | None = None
     parent_scoped_naming: bool = False
     naming_strategy: NamingStrategy | None = None
     duplicate_name_suffix: dict[str, str] | None = None
@@ -208,10 +203,29 @@ class GenerateConfig(BaseModel):
     all_exports_collision_strategy: AllExportsCollisionStrategy | None = None
     field_type_collision_strategy: FieldTypeCollisionStrategy | None = None
     module_split_mode: ModuleSplitMode | None = None
-    default_value_overrides: Mapping[str, Any] | None = None
     schema_version: str | None = None
     schema_version_mode: VersionMode | None = None
     external_ref_mapping: dict[str, str] | None = None
+
+
+class GenerateConfig(BaseGenerateConfig):
+    """Configuration model for generate()."""
+
+    input_filename: str | None = None
+    extra_template_data: ExtraTemplateDataType | None = None
+    validators: Mapping[str, ModelValidators] | None = None
+    aliases: Mapping[str, str | list[str]] | None = None
+    serialization_aliases: Mapping[str, str] | None = None
+    command_line: str | None = None
+    apply_default_values_for_required_fields: bool = False
+    force_optional_for_required_fields: bool = False
+    strict_types: Sequence[StrictTypes] | None = None
+    custom_class_name_generator: CallableSchema | None = None
+    openapi_scopes: list[OpenAPIScope] | None = None
+    graphql_scopes: list[GraphQLScope] | None = None
+    custom_formatters_kwargs: dict[str, Any] | None = None
+    settings_path: Path | None = None
+    default_value_overrides: Mapping[str, Any] | None = None
 
 
 def _rebuild_generate_config() -> None:
@@ -229,6 +243,7 @@ class ParserConfig(BaseModel):
     data_model_field_type: type[DataModelFieldBase] = pydantic_v2.DataModelField
     base_class: str | None = None
     base_class_map: dict[str, str | list[str]] | None = None
+    model_name_map: dict[str, str] | None = None
     additional_imports: list[str] | None = None
     class_decorators: list[str] | None = None
     custom_template_dir: Path | None = None
@@ -238,6 +253,7 @@ class ParserConfig(BaseModel):
     dump_resolve_reference_action: DumpResolveReferenceAction | None = None
     validation: bool = False
     field_constraints: bool = False
+    alias_generator: AliasGenerator | None = None
     snake_case_field: bool = False
     strip_default_none: bool = False
     aliases: Mapping[str, str | list[str]] | None = None
@@ -287,6 +303,7 @@ class ParserConfig(BaseModel):
     model_extra_keys_without_x_prefix: set[str] | None = None
     wrap_string_literal: bool | None = None
     use_title_as_name: bool = False
+    infer_union_variant_names: bool = False
     use_operation_id_as_name: bool = False
     use_unique_items_as_set: bool = False
     use_tuple_for_fixed_items: bool = False
@@ -419,3 +436,4 @@ class ParseConfig(BaseModel):
     all_exports_scope: AllExportsScope | None = None
     all_exports_collision_strategy: AllExportsCollisionStrategy | None = None
     module_split_mode: ModuleSplitMode | None = None
+    collect_model_metadata: bool = False

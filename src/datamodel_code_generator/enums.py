@@ -117,6 +117,14 @@ class FieldTypeCollisionStrategy(Enum):
     RenameType = "rename-type"
 
 
+class ExtraFields(str, Enum):
+    """Generated model behavior for unknown input fields."""
+
+    Allow = "allow"
+    Ignore = "ignore"
+    Forbid = "forbid"
+
+
 class NamingStrategy(Enum):
     """Strategy for generating unique model names when duplicates occur.
 
@@ -211,6 +219,14 @@ class TargetPydanticVersion(Enum):
 
     V2 = "2"
     V2_11 = "2.11"
+
+
+class AliasGenerator(Enum):
+    """Supported Pydantic v2 alias generator helpers."""
+
+    ToCamel = "to_camel"
+    ToPascal = "to_pascal"
+    ToSnake = "to_snake"
 
 
 class UnionMode(Enum):
@@ -319,6 +335,7 @@ __all__ = [
     "DEFAULT_SHARED_MODULE_NAME",
     "MAX_VERSION",
     "MIN_VERSION",
+    "AliasGenerator",
     "AllExportsCollisionStrategy",
     "AllExportsScope",
     "AllOfClassHierarchy",

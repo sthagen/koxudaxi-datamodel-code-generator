@@ -95,6 +95,7 @@ CLI_OPTION_META: dict[str, CLIOptionMeta] = {
     # ==========================================================================
     "--input": CLIOptionMeta(name="--input", category=OptionCategory.BASE),
     "--output": CLIOptionMeta(name="--output", category=OptionCategory.BASE),
+    "--emit-model-metadata": CLIOptionMeta(name="--emit-model-metadata", category=OptionCategory.BASE),
     "--url": CLIOptionMeta(name="--url", category=OptionCategory.BASE),
     "--input-model": CLIOptionMeta(name="--input-model", category=OptionCategory.BASE),
     "--input-model-ref-strategy": CLIOptionMeta(name="--input-model-ref-strategy", category=OptionCategory.BASE),
@@ -103,6 +104,7 @@ CLI_OPTION_META: dict[str, CLIOptionMeta] = {
     "--schema-version": CLIOptionMeta(name="--schema-version", category=OptionCategory.BASE),
     "--schema-version-mode": CLIOptionMeta(name="--schema-version-mode", category=OptionCategory.BASE),
     "--external-ref-mapping": CLIOptionMeta(name="--external-ref-mapping", category=OptionCategory.BASE),
+    "--preset": CLIOptionMeta(name="--preset", category=OptionCategory.BASE),
     # ==========================================================================
     # Model Customization
     # ==========================================================================
@@ -122,6 +124,7 @@ CLI_OPTION_META: dict[str, CLIOptionMeta] = {
     "--base-class": CLIOptionMeta(name="--base-class", category=OptionCategory.MODEL),
     "--base-class-map": CLIOptionMeta(name="--base-class-map", category=OptionCategory.MODEL),
     "--class-name": CLIOptionMeta(name="--class-name", category=OptionCategory.MODEL),
+    "--model-name-map": CLIOptionMeta(name="--model-name-map", category=OptionCategory.MODEL),
     "--allow-leading-underscore-class-name": CLIOptionMeta(
         name="--allow-leading-underscore-class-name", category=OptionCategory.MODEL
     ),
@@ -157,6 +160,7 @@ CLI_OPTION_META: dict[str, CLIOptionMeta] = {
         ),
     ),
     "--collapse-root-models": CLIOptionMeta(name="--collapse-root-models", category=OptionCategory.MODEL),
+    "--no-collapse-root-models": CLIOptionMeta(name="--no-collapse-root-models", category=OptionCategory.MODEL),
     "--collapse-root-models-name-strategy": CLIOptionMeta(
         name="--collapse-root-models-name-strategy",
         category=OptionCategory.MODEL,
@@ -180,6 +184,9 @@ CLI_OPTION_META: dict[str, CLIOptionMeta] = {
     "--allow-population-by-field-name": CLIOptionMeta(
         name="--allow-population-by-field-name", category=OptionCategory.MODEL
     ),
+    "--no-allow-population-by-field-name": CLIOptionMeta(
+        name="--no-allow-population-by-field-name", category=OptionCategory.MODEL
+    ),
     "--enable-faux-immutability": CLIOptionMeta(name="--enable-faux-immutability", category=OptionCategory.MODEL),
     "--use-subclass-enum": CLIOptionMeta(name="--use-subclass-enum", category=OptionCategory.MODEL),
     "--force-optional": CLIOptionMeta(name="--force-optional", category=OptionCategory.MODEL),
@@ -189,6 +196,7 @@ CLI_OPTION_META: dict[str, CLIOptionMeta] = {
     "--strip-default-none": CLIOptionMeta(name="--strip-default-none", category=OptionCategory.MODEL),
     "--dataclass-arguments": CLIOptionMeta(name="--dataclass-arguments", category=OptionCategory.MODEL),
     "--use-frozen-field": CLIOptionMeta(name="--use-frozen-field", category=OptionCategory.MODEL),
+    "--no-use-frozen-field": CLIOptionMeta(name="--no-use-frozen-field", category=OptionCategory.MODEL),
     "--use-default-factory-for-optional-nested-models": CLIOptionMeta(
         name="--use-default-factory-for-optional-nested-models", category=OptionCategory.MODEL
     ),
@@ -224,6 +232,7 @@ CLI_OPTION_META: dict[str, CLIOptionMeta] = {
     # Field Customization
     # ==========================================================================
     "--snake-case-field": CLIOptionMeta(name="--snake-case-field", category=OptionCategory.FIELD),
+    "--no-snake-case-field": CLIOptionMeta(name="--no-snake-case-field", category=OptionCategory.FIELD),
     "--original-field-name-delimiter": CLIOptionMeta(
         name="--original-field-name-delimiter",
         category=OptionCategory.FIELD,
@@ -245,9 +254,11 @@ CLI_OPTION_META: dict[str, CLIOptionMeta] = {
     "--aliases": CLIOptionMeta(name="--aliases", category=OptionCategory.FIELD),
     "--serialization-aliases": CLIOptionMeta(name="--serialization-aliases", category=OptionCategory.FIELD),
     "--default-values": CLIOptionMeta(name="--default-values", category=OptionCategory.FIELD),
+    "--alias-generator": CLIOptionMeta(name="--alias-generator", category=OptionCategory.MODEL),
     "--no-alias": CLIOptionMeta(name="--no-alias", category=OptionCategory.FIELD),
     "--use-serialization-alias": CLIOptionMeta(name="--use-serialization-alias", category=OptionCategory.FIELD),
     "--use-title-as-name": CLIOptionMeta(name="--use-title-as-name", category=OptionCategory.FIELD),
+    "--infer-union-variant-names": CLIOptionMeta(name="--infer-union-variant-names", category=OptionCategory.FIELD),
     "--use-schema-description": CLIOptionMeta(name="--use-schema-description", category=OptionCategory.FIELD),
     "--use-field-description": CLIOptionMeta(name="--use-field-description", category=OptionCategory.FIELD),
     "--use-field-description-example": CLIOptionMeta(
@@ -299,6 +310,9 @@ CLI_OPTION_META: dict[str, CLIOptionMeta] = {
     "--use-pendulum": CLIOptionMeta(name="--use-pendulum", category=OptionCategory.TYPING),
     "--use-standard-primitive-types": CLIOptionMeta(
         name="--use-standard-primitive-types", category=OptionCategory.TYPING
+    ),
+    "--no-use-standard-primitive-types": CLIOptionMeta(
+        name="--no-use-standard-primitive-types", category=OptionCategory.TYPING
     ),
     "--use-object-type": CLIOptionMeta(name="--use-object-type", category=OptionCategory.TYPING),
     "--use-type-checking-imports": CLIOptionMeta(name="--use-type-checking-imports", category=OptionCategory.TEMPLATE),

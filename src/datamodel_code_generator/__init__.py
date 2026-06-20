@@ -32,6 +32,7 @@ from datamodel_code_generator.enums import (
     DEFAULT_SHARED_MODULE_NAME,
     MAX_VERSION,
     MIN_VERSION,
+    AliasGenerator,
     AllExportsCollisionStrategy,
     AllExportsScope,
     AllOfClassHierarchy,
@@ -79,6 +80,7 @@ if TYPE_CHECKING:
         PythonVersion,
         PythonVersionMin,
     )
+    from datamodel_code_generator.model_metadata import ModelMetadata
 
 T = TypeVar("T")
 _ConfigT = TypeVar("_ConfigT", bound="ParserConfig")
@@ -93,6 +95,48 @@ GeneratedModules: TypeAlias = dict[tuple[str, ...], str]
 Maps module path tuples (e.g., ("models", "user.py")) to generated code strings.
 Returned by generate() when output=None and multiple modules are generated.
 """
+
+
+def _apply_generate_config_preset(config: GenerateConfig) -> GenerateConfig:
+    """Return a generate config with preset defaults applied."""
+    preset_name = config.preset
+    if preset_name is None:
+        return config
+
+    from datamodel_code_generator.preset import (  # noqa: PLC0415
+        PresetConfigValue,
+        PresetContext,
+        PresetError,
+        resolve_preset_config_updates,
+    )
+
+    try:
+        preset_config = resolve_preset_config_updates(
+            preset_name,
+            context=PresetContext(
+                input_file_type=config.input_file_type,
+                output_model_type=config.output_model_type,
+                target_python_version=config.target_python_version,
+            ),
+            use_annotated=config.use_annotated,
+            explicit_fields=config.model_fields_set,
+        )
+    except PresetError as e:
+        raise Error(str(e)) from e
+
+    if preset_config.target_python_version is not None:
+        config = config.model_copy(update={"target_python_version": preset_config.target_python_version})
+
+    updates: dict[str, PresetConfigValue] = {}
+    for item in preset_config.items:
+        updates[item.field_name] = item.applied_value
+
+    if updates:
+        config = config.model_copy(update=updates)
+    if preset_config.force_field_constraints:
+        return config.model_copy(update={"field_constraints": True})
+    return config
+
 
 DEFAULT_BASE_CLASS: str = "pydantic.BaseModel"
 _IGNORED_TEXT_PREFIX_CHARS: frozenset[str] = frozenset({"\ufeff", " ", "\t", "\r", "\n"})
@@ -489,6 +533,15 @@ def _validate_output_datetime_class(
     if output_model_type in {DataModelType.DataclassesDataclass, DataModelType.TypingTypedDict}:
         msg = f'`--output-datetime-class` only allows "datetime" for `--output-model-type` {output_model_type.value}'
         raise Error(msg)
+
+
+def _validate_alias_generator(output_model_type: DataModelType, alias_generator: AliasGenerator | None) -> None:
+    if alias_generator is None:
+        return
+    if output_model_type is DataModelType.PydanticV2BaseModel:
+        return
+    msg = "`--alias-generator` is only supported for `--output-model-type pydantic_v2.BaseModel`"
+    raise Error(msg)
 
 
 class InvalidFileFormatError(Error):
@@ -895,6 +948,7 @@ def _prepare_parser_common_options(  # noqa: PLR0913, PLR0917
         "dump_resolve_reference_action": data_model_types.dump_resolve_reference_action,
         "extra_template_data": extra_template_data,
         "serialization_aliases": config.serialization_aliases,
+        "model_name_map": config.model_name_map,
         "base_path": input_.parent if isinstance(input_, Path) and input_.is_file() else None,
         "remote_text_cache": remote_text_cache,
         "known_third_party": data_model_types.known_third_party,
@@ -1142,6 +1196,13 @@ def _emit_results(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     return None
 
 
+def _write_model_metadata(metadata_path: Path, metadata: ModelMetadata | None, encoding: str) -> None:
+    from datamodel_code_generator.model_metadata import dump_model_metadata  # noqa: PLC0415
+
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(f"{dump_model_metadata(metadata)}\n", encoding=encoding)
+
+
 def generate(  # noqa: PLR0912, PLR0914, PLR0915
     input_: Path | str | ParseResult | Mapping[str, Any] | list[Any],
     *,
@@ -1181,8 +1242,10 @@ def generate(  # noqa: PLR0912, PLR0914, PLR0915
 
         _rebuild_generate_config()
         config = GenerateConfig.model_validate(options)
+    config = _apply_generate_config_preset(config)
 
     _validate_output_datetime_class(config.output_model_type, config.output_datetime_class)
+    _validate_alias_generator(config.output_model_type, config.alias_generator)
 
     # Variables that may be modified during processing
     input_filename = config.input_filename
@@ -1342,13 +1405,15 @@ def generate(  # noqa: PLR0912, PLR0914, PLR0915
                 all_exports_scope=config.all_exports_scope,
                 all_exports_collision_strategy=config.all_exports_collision_strategy,
                 module_split_mode=config.module_split_mode,
+                collect_model_metadata=config.emit_model_metadata is not None,
             )
         except BaseException:
             with contextlib.suppress(BaseException):
                 parser._dispose()  # noqa: SLF001
             raise
+    model_metadata = parser.model_metadata
     parser._dispose()  # noqa: SLF001
-    return _emit_results(
+    generated = _emit_results(
         results,
         input_,
         input_filename,
@@ -1357,6 +1422,9 @@ def generate(  # noqa: PLR0912, PLR0914, PLR0915
         defer_formatting=defer_formatting,
         data_model_types=data_model_types,
     )
+    if config.emit_model_metadata is not None:
+        _write_model_metadata(config.emit_model_metadata, model_metadata, config.encoding)
+    return generated
 
 
 def infer_input_type(text: str) -> InputFileType:  # noqa: PLR0911, PLR0912
@@ -1454,6 +1522,7 @@ __all__ = [
     "DEFAULT_SHARED_MODULE_NAME",
     "MAX_VERSION",
     "MIN_VERSION",
+    "AliasGenerator",
     "AllExportsCollisionStrategy",
     "AllExportsScope",
     "AllOfClassHierarchy",

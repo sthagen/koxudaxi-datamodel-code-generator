@@ -21,12 +21,13 @@ if len(sys.argv) == 2 and sys.argv[1] in {"--help", "-h"}:  # pragma: no cover  
 match sys.argv:
     case [_, "--output-format-json-schema", schema_output_name] if schema_output_name in {
         "generation",
+        "model-metadata",
         "structured-output",
     }:
         pass
     case [_, schema_output_option] if schema_output_option.startswith("--output-format-json-schema=") and (
         schema_output_name := schema_output_option.partition("=")[2]
-    ) in {"generation", "structured-output"}:
+    ) in {"generation", "model-metadata", "structured-output"}:
         pass
     case _:
         schema_output_name = None
@@ -36,6 +37,11 @@ match schema_output_name:
         from datamodel_code_generator._structured_output import generation_output_json_schema
 
         sys.stdout.write(f"{generation_output_json_schema()}\n")
+        sys.exit(0)
+    case "model-metadata":  # pragma: no cover
+        from datamodel_code_generator.model_metadata import model_metadata_json_schema
+
+        sys.stdout.write(f"{model_metadata_json_schema()}\n")
         sys.exit(0)
     case "structured-output":  # pragma: no cover
         from datamodel_code_generator._structured_output import structured_output_json_schema
@@ -63,6 +69,11 @@ if any(
 
         sys.stdout.write(f"{generation_output_json_schema()}\n")
         sys.exit(0)
+    if namespace.output_format_json_schema == "model-metadata":
+        from datamodel_code_generator.model_metadata import model_metadata_json_schema
+
+        sys.stdout.write(f"{model_metadata_json_schema()}\n")
+        sys.exit(0)
     if namespace.output_format_json_schema == "structured-output":
         from datamodel_code_generator._structured_output import structured_output_json_schema
 
@@ -85,56 +96,42 @@ import signal
 import tempfile
 import warnings
 from collections import defaultdict
-from collections.abc import Callable, Mapping, Sequence  # noqa: TC003  # pydantic needs it
+from collections.abc import Callable, Mapping, Sequence
 from enum import Enum, IntEnum
-from io import TextIOBase  # noqa: TC003 # needed for pydantic
+from io import TextIOBase
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NamedTuple, Optional, TypeAlias, Union, cast
 from urllib.parse import ParseResult, urlparse
 
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
+from pydantic import ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from datamodel_code_generator import (
-    DEFAULT_SHARED_MODULE_NAME,
-    AllExportsCollisionStrategy,
     AllExportsScope,
-    AllOfClassHierarchy,
-    AllOfMergeMode,
     ClassNameAffixScope,
-    CollapseRootModelsNameStrategy,
-    DataclassArguments,
     DataModelType,
     Error,
-    FieldTypeCollisionStrategy,
     InputFileType,
     InputModelRefStrategy,
     InvalidClassNameError,
-    ModuleSplitMode,
     NamingStrategy,
     OpenAPIScope,
-    ReadOnlyWriteOnlyModelType,
     ReuseScope,
-    TargetPydanticVersion,
-    VersionMode,
+    _validate_alias_generator,
     _validate_output_datetime_class,
     enable_debug_message,
     generate,
 )
-from datamodel_code_generator.arguments import DEFAULT_ENCODING, arg_parser, namespace
+from datamodel_code_generator.arguments import arg_parser, namespace
+from datamodel_code_generator.config import BaseGenerateConfig
 from datamodel_code_generator.deprecations import render_deprecations, warn_deprecated
-from datamodel_code_generator.enums import UnionMode  # noqa: TC001 # needed for pydantic
 from datamodel_code_generator.format import (
-    DateClassType,
-    DatetimeClassType,
     Formatter,
     PythonVersion,
-    PythonVersionMin,
     _get_black,
     is_supported_in_black,
 )
-from datamodel_code_generator.parser import LiteralType  # noqa: TC001 # needed for pydantic
 from datamodel_code_generator.reference import is_url
-from datamodel_code_generator.types import StrictTypes  # noqa: TC001 # needed for pydantic
+from datamodel_code_generator.types import StrictTypes
 from datamodel_code_generator.util import load_toml
 from datamodel_code_generator.validators import ValidatorsConfig
 
@@ -173,10 +170,17 @@ EXCLUDED_CONFIG_OPTIONS: frozenset[str] = frozenset({
 })
 
 BOOLEAN_OPTIONAL_OPTIONS: frozenset[str] = frozenset({
+    "allow_population_by_field_name",
+    "collapse_root_models",
+    "snake_case_field",
+    "use_frozen_field",
     "use_type_checking_imports",
     "use_specialized_enum",
     "use_standard_collections",
+    "use_standard_primitive_types",
 })
+
+ORIGINAL_FIELD_NAME_DELIMITER_ERROR = "`--original-field-name-delimiter` can not be used without `--snake-case-field`."
 
 
 class Exit(IntEnum):
@@ -201,6 +205,22 @@ _HttpKeyValueInput: TypeAlias = str | _HttpKeyValuePair
 _HttpSeparator: TypeAlias = Literal[":", "="]
 _HttpItemErrorName: TypeAlias = Literal["http header", "http query parameter"]
 _HttpValueErrorName: TypeAlias = Literal["http_headers", "http_query_parameters"]
+_RawConfigValue: TypeAlias = (
+    str
+    | bool
+    | int
+    | float
+    | Path
+    | ParseResult
+    | TextIOBase
+    | Enum
+    | Sequence[str]
+    | Sequence[StrictTypes]
+    | Sequence[OpenAPIScope]
+    | Sequence[tuple[str, str]]
+    | Mapping[str, str]
+    | Mapping[str, str | list[str]]
+)
 
 
 def _validate_http_key_value_options(
@@ -229,10 +249,10 @@ def _validate_http_key_value_options(
     raise Error(msg)  # pragma: no cover
 
 
-class Config(BaseModel):  # noqa: PLR0904
+class Config(BaseGenerateConfig):  # noqa: PLR0904
     """Configuration model for code generation."""
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, protected_namespaces=())  # ty: ignore
+    model_config = ConfigDict(extra="ignore", arbitrary_types_allowed=True, protected_namespaces=())  # ty: ignore
 
     def get(self, item: str) -> Any:  # pragma: no cover
         """Get attribute value by name."""
@@ -400,10 +420,6 @@ class Config(BaseModel):  # noqa: PLR0904
             values["external_ref_mapping"] = mapping
         return values
 
-    __validate_original_field_name_delimiter_err: ClassVar[str] = (
-        "`--original-field-name-delimiter` can not be used without `--snake-case-field`."
-    )
-
     __validate_custom_file_header_err: ClassVar[str] = (
         "`--custom_file_header_path` can not be used with `--custom_file_header`."
     )
@@ -421,12 +437,18 @@ class Config(BaseModel):  # noqa: PLR0904
         _validate_output_datetime_class(self.output_model_type, self.output_datetime_class)
         return self
 
+    __validate_original_field_name_delimiter_err: ClassVar[str] = ORIGINAL_FIELD_NAME_DELIMITER_ERROR
+
     @model_validator(mode="after")  # ty: ignore
-    def validate_original_field_name_delimiter(self: Self) -> Self:  # ty: ignore
-        """Validate original field name delimiter requires snake case."""
+    def validate_alias_generator(self: Self) -> Self:  # ty: ignore
+        """Validate alias generator compatibility."""
+        _validate_alias_generator(self.output_model_type, self.alias_generator)
+        return self
+
+    def validate_original_field_name_delimiter(self) -> None:
+        """Validate original field name delimiter requires snake case after preset merging."""
         if self.original_field_name_delimiter is not None and not self.snake_case_field:
             raise Error(self.__validate_original_field_name_delimiter_err)
-        return self
 
     @model_validator(mode="after")  # ty: ignore
     def validate_custom_file_header(self: Self) -> Self:  # ty: ignore
@@ -489,151 +511,25 @@ class Config(BaseModel):  # noqa: PLR0904
     check: bool = False
     debug: bool = False
     disable_warnings: bool = False
-    target_python_version: PythonVersion = PythonVersionMin
-    target_pydantic_version: Optional[TargetPydanticVersion] = None  # noqa: UP045
-    base_class: str = ""
-    base_class_map: Optional[dict[str, str | list[str]]] = None  # noqa: UP045
-    additional_imports: Optional[list[str]] = None  # noqa: UP045
-    class_decorators: Optional[list[str]] = None  # noqa: UP045
-    custom_template_dir: Optional[Path] = None  # noqa: UP045
     extra_template_data: Optional[TextIOBase] = None  # noqa: UP045
     validators: Optional[TextIOBase] = None  # noqa: UP045
-    validation: bool = False
-    field_constraints: bool = False
-    snake_case_field: bool = False
-    strip_default_none: bool = False
     aliases: Optional[TextIOBase] = None  # noqa: UP045
     serialization_aliases: Optional[TextIOBase] = None  # noqa: UP045
     default_values: Optional[TextIOBase] = None  # noqa: UP045
-    disable_timestamp: bool = False
-    enable_version_header: bool = False
-    enable_command_header: bool = False
-    enable_generated_header_marker: bool = False
-    allow_population_by_field_name: bool = False
-    allow_extra_fields: bool = False
-    extra_fields: Optional[str] = None  # noqa: UP045
-    use_generic_base_class: bool = False
     use_default: bool = False
     force_optional: bool = False
-    class_name: Optional[str] = None  # noqa: UP045
-    allow_leading_underscore_class_name: bool = False
-    class_name_prefix: Optional[str] = None  # noqa: UP045
-    class_name_suffix: Optional[str] = None  # noqa: UP045
-    class_name_affix_scope: ClassNameAffixScope = ClassNameAffixScope.All
-    use_standard_collections: bool = True
-    use_schema_description: bool = False
-    use_field_description: bool = False
-    use_field_description_example: bool = False
-    use_attribute_docstrings: bool = False
-    use_inline_field_description: bool = False
-    use_single_line_docstring: bool = False
-    use_default_kwarg: bool = False
-    reuse_model: bool = False
-    reuse_scope: ReuseScope = ReuseScope.Module
-    shared_module_name: str = DEFAULT_SHARED_MODULE_NAME
-    encoding: str = DEFAULT_ENCODING
-    enum_field_as_literal: Optional[LiteralType] = None  # noqa: UP045
-    enum_field_as_literal_map: Optional[dict[str, str]] = None  # noqa: UP045
-    ignore_enum_constraints: bool = False
-    use_one_literal_as_default: bool = False
-    use_enum_values_in_discriminator: bool = False
-    set_default_enum_member: bool = False
-    use_subclass_enum: bool = False
-    use_specialized_enum: bool = True
-    strict_nullable: bool = False
-    use_generic_container_types: bool = False
-    use_union_operator: bool = True
-    enable_faux_immutability: bool = False
     url: Optional[ParseResult] = None  # noqa: UP045
-    disable_appending_item_suffix: bool = False
-    strict_types: list[StrictTypes] = []
-    empty_enum_field_name: Optional[str] = None  # noqa: UP045
-    field_extra_keys: Optional[set[str]] = None  # noqa: UP045
-    field_include_all_keys: bool = False
-    field_extra_keys_without_x_prefix: Optional[set[str]] = None  # noqa: UP045
-    model_extra_keys: Optional[set[str]] = None  # noqa: UP045
-    model_extra_keys_without_x_prefix: Optional[set[str]] = None  # noqa: UP045
-    openapi_scopes: Optional[list[OpenAPIScope]] = [OpenAPIScope.Schemas]  # noqa: UP045
-    include_path_parameters: bool = False
-    openapi_include_paths: Optional[list[str]] = None  # noqa: UP045
-    openapi_include_info_version: bool = False
-    graphql_no_typename: bool = False
-    wrap_string_literal: Optional[bool] = None  # noqa: UP045
-    use_title_as_name: bool = False
-    use_operation_id_as_name: bool = False
-    use_unique_items_as_set: bool = False
-    use_tuple_for_fixed_items: bool = False
-    use_closed_typed_dict: bool = True
-    allof_merge_mode: AllOfMergeMode = AllOfMergeMode.Constraints
-    allof_class_hierarchy: AllOfClassHierarchy = AllOfClassHierarchy.IfNoConflict
-    allow_remote_refs: Optional[bool] = None  # noqa: UP045
-    allow_private_network: bool = False
-    http_headers: Optional[Sequence[tuple[str, str]]] = None  # noqa: UP045
-    http_local_ref_path: Optional[Path] = None  # noqa: UP045
-    http_ignore_tls: bool = False
-    http_timeout: Optional[float] = None  # noqa: UP045
-    use_annotated: bool = False
-    use_serialize_as_any: bool = False
-    use_non_positive_negative_number_constrained_types: bool = False
-    use_decimal_for_multiple_of: bool = False
-    original_field_name_delimiter: Optional[str] = None  # noqa: UP045
-    use_double_quotes: bool = False
-    collapse_root_models: bool = False
-    collapse_root_models_name_strategy: Optional[CollapseRootModelsNameStrategy] = None  # noqa: UP045
-    collapse_reuse_models: bool = False
-    skip_root_model: bool = False
-    use_type_alias: bool = False
-    use_root_model_type_alias: bool = False
-    special_field_name_prefix: Optional[str] = None  # noqa: UP045
-    remove_special_field_name_prefix: bool = False
-    capitalise_enum_members: bool = False
-    keep_model_order: bool = False
-    custom_file_header: Optional[str] = None  # noqa: UP045
-    custom_file_header_path: Optional[Path] = None  # noqa: UP045
-    custom_formatters: Optional[list[str]] = None  # noqa: UP045
+    strict_types: list[StrictTypes] = Field(default_factory=list)
+    openapi_scopes: Optional[list[OpenAPIScope]] = Field(default_factory=lambda: [OpenAPIScope.Schemas])  # noqa: UP045
     custom_formatters_kwargs: Optional[TextIOBase] = None  # noqa: UP045
-    use_pendulum: bool = False
-    use_standard_primitive_types: bool = False
-    use_object_type: bool = False
-    http_query_parameters: Optional[Sequence[tuple[str, str]]] = None  # noqa: UP045
-    treat_dot_as_module: Optional[bool] = None  # noqa: UP045
-    use_exact_imports: bool = False
-    use_type_checking_imports: Optional[bool] = None  # noqa: UP045
-    union_mode: Optional[UnionMode] = None  # noqa: UP045
-    output_datetime_class: Optional[DatetimeClassType] = None  # noqa: UP045
-    output_date_class: Optional[DateClassType] = None  # noqa: UP045
-    keyword_only: bool = False
-    frozen_dataclasses: bool = False
-    dataclass_arguments: Optional[DataclassArguments] = None  # noqa: UP045
-    no_alias: bool = False
-    use_serialization_alias: bool = False
-    use_frozen_field: bool = False
-    use_default_factory_for_optional_nested_models: bool = False
-    formatters: list[Formatter] | None = None
-    builtin_format_line_length: Optional[int] = None  # noqa: UP045
-    parent_scoped_naming: bool = False
-    naming_strategy: Optional[NamingStrategy] = None  # noqa: UP045
-    duplicate_name_suffix: Optional[dict[str, str]] = None  # noqa: UP045
-    disable_future_imports: bool = False
-    type_mappings: Optional[list[str]] = None  # noqa: UP045
-    type_overrides: Optional[dict[str, str]] = None  # noqa: UP045
-    read_only_write_only_model_type: Optional[ReadOnlyWriteOnlyModelType] = None  # noqa: UP045
-    use_status_code_in_response_name: bool = False
-    all_exports_scope: Optional[AllExportsScope] = None  # noqa: UP045
-    all_exports_collision_strategy: Optional[AllExportsCollisionStrategy] = None  # noqa: UP045
-    field_type_collision_strategy: Optional[FieldTypeCollisionStrategy] = None  # noqa: UP045
-    module_split_mode: Optional[ModuleSplitMode] = None  # noqa: UP045
     watch: bool = False
     watch_delay: float = 0.5
     list_deprecations: Optional[str] = None  # noqa: UP045
     list_experimental: Optional[str] = None  # noqa: UP045
-    schema_version: Optional[str] = None  # noqa: UP045
-    schema_version_mode: Optional[VersionMode] = None  # noqa: UP045
-    external_ref_mapping: Optional[dict[str, str]] = None  # noqa: UP045
 
     def merge_args(self, args: Namespace) -> None:
         """Merge command-line arguments into config."""
-        set_args = {f: value for f in self.get_fields() if (value := getattr(args, f, None)) is not None}
+        set_args = _explicit_config_args(args)
         explicit_input_sources = {
             field_name for field_name in ("input", "url", "input_model") if field_name in set_args
         }
@@ -651,6 +547,67 @@ class Config(BaseModel):  # noqa: PLR0904
         parsed_args = Config.model_validate(set_args)
         for field_name in set_args:
             setattr(self, field_name, getattr(parsed_args, field_name))
+
+
+def _explicit_config_args(args: Namespace) -> dict[str, _RawConfigValue]:
+    """Return command-line values that explicitly target Config fields."""
+    return {field: value for field in Config.get_fields() if (value := getattr(args, field, None)) is not None}
+
+
+def _apply_preset(
+    config: Config,
+    pyproject_config: Mapping[str, _RawConfigValue],
+    cli_config_args: Mapping[str, _RawConfigValue],
+) -> None:
+    """Apply the selected preset to the final CLI/pyproject config."""
+    preset_from_cli = "preset" in cli_config_args
+    if preset_from_cli:
+        preset_value = cli_config_args["preset"]
+        if not isinstance(preset_value, str):  # pragma: no cover
+            msg = f"--preset must be a string, got {preset_value!r}"
+            raise Error(msg)
+        preset_name = preset_value
+    else:
+        preset_name = config.preset
+    if preset_name is None:
+        return
+
+    explicit_fields = set(cli_config_args) if preset_from_cli else set(pyproject_config) | set(cli_config_args)
+    explicit_fields.discard("preset")
+
+    from datamodel_code_generator.preset import (  # noqa: PLC0415
+        PresetContext,
+        PresetError,
+        resolve_preset_config_updates,
+    )
+
+    try:
+        preset_config = resolve_preset_config_updates(
+            preset_name,
+            context=PresetContext(
+                input_file_type=config.input_file_type,
+                output_model_type=config.output_model_type,
+                target_python_version=config.target_python_version,
+            ),
+            use_annotated=config.use_annotated,
+            explicit_fields=explicit_fields,
+        )
+    except PresetError as e:
+        raise Error(str(e)) from e
+
+    if preset_config.target_python_version is not None:
+        config.target_python_version = preset_config.target_python_version
+
+    for item in preset_config.items:
+        setattr(config, item.field_name, item.applied_value)
+
+    if preset_config.force_field_constraints:
+        config.field_constraints = True
+
+
+def _validate_final_config(config: Config) -> None:
+    """Validate invariants that depend on CLI, pyproject, and preset merging."""
+    config.validate_original_field_name_delimiter()
 
 
 def _extract_additional_imports(extra_template_data: defaultdict[str, dict[str, Any]]) -> list[str]:
@@ -766,7 +723,7 @@ def _format_toml_value(value: TomlValue) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, str):
-        return f'"{value}"'
+        return json.dumps(value, ensure_ascii=False)
     formatted_items = [_format_toml_value(item) for item in value]
     return f"[{', '.join(formatted_items)}]"
 
@@ -910,7 +867,7 @@ def generate_cli_command(config: dict[str, TomlValue]) -> str:
         else:
             parts.extend((f"--{cli_key}", _format_cli_value(str(value))))
 
-    return " ".join(parts) + "\n"
+    return " ".join(parts)
 
 
 def _hyphenated_config_data(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -1049,6 +1006,12 @@ def _generation_output_json_schema() -> str:
     return generation_output_json_schema()
 
 
+def _model_metadata_json_schema() -> str:
+    from datamodel_code_generator.model_metadata import model_metadata_json_schema  # noqa: PLC0415
+
+    return model_metadata_json_schema()
+
+
 def _structured_output_json_schema() -> str:
     from datamodel_code_generator._structured_output import structured_output_json_schema  # noqa: PLC0415
 
@@ -1097,16 +1060,19 @@ def run_generate_from_config(  # noqa: PLR0913, PLR0917
         input_=input_,
         input_file_type=config.input_file_type,
         output=output,
+        emit_model_metadata=config.emit_model_metadata,
         output_model_type=config.output_model_type,
         target_python_version=config.target_python_version,
         target_pydantic_version=config.target_pydantic_version,
         base_class=config.base_class,
         base_class_map=config.base_class_map,
+        model_name_map=config.model_name_map,
         additional_imports=config.additional_imports,
         class_decorators=config.class_decorators,
         custom_template_dir=config.custom_template_dir,
         validation=config.validation,
         field_constraints=config.field_constraints,
+        alias_generator=config.alias_generator,
         snake_case_field=config.snake_case_field,
         strip_default_none=config.strip_default_none,
         extra_template_data=extra_template_data,  # ty: ignore
@@ -1166,6 +1132,7 @@ def run_generate_from_config(  # noqa: PLR0913, PLR0917
         graphql_no_typename=config.graphql_no_typename,
         wrap_string_literal=config.wrap_string_literal,
         use_title_as_name=config.use_title_as_name,
+        infer_union_variant_names=config.infer_union_variant_names,
         use_operation_id_as_name=config.use_operation_id_as_name,
         use_unique_items_as_set=config.use_unique_items_as_set,
         use_tuple_for_fixed_items=config.use_tuple_for_fixed_items,
@@ -1268,6 +1235,9 @@ def main(args: Sequence[str] | None = None) -> Exit:  # noqa: PLR0911, PLR0912, 
     if namespace.output_format_json_schema == "generation":
         print(_generation_output_json_schema())  # noqa: T201
         return Exit.OK
+    if namespace.output_format_json_schema == "model-metadata":
+        print(_model_metadata_json_schema())  # noqa: T201
+        return Exit.OK
     if namespace.output_format_json_schema == "structured-output":
         print(_structured_output_json_schema())  # noqa: T201
         return Exit.OK
@@ -1327,10 +1297,13 @@ def main(args: Sequence[str] | None = None) -> Exit:  # noqa: PLR0911, PLR0912, 
         return Exit.OK
 
     try:
+        cli_config_args = _explicit_config_args(namespace)
         config = Config.model_validate(pyproject_config)
         config.merge_args(namespace)
+        _apply_preset(config, pyproject_config, cli_config_args)
+        _validate_final_config(config)
     except Error as e:
-        print(e.message, file=sys.stderr)  # noqa: T201
+        print(str(e), file=sys.stderr)  # noqa: T201
         return Exit.ERROR
 
     if config.list_deprecations:
@@ -1384,6 +1357,12 @@ def main(args: Sequence[str] | None = None) -> Exit:  # noqa: PLR0911, PLR0912, 
     if config.check and config.output is None:
         print(  # noqa: T201
             "Error: --check cannot be used with stdout output (no --output specified)",
+            file=sys.stderr,
+        )
+        return Exit.ERROR
+    if config.check and config.emit_model_metadata is not None:
+        print(  # noqa: T201
+            "Error: --check cannot be used with --emit-model-metadata",
             file=sys.stderr,
         )
         return Exit.ERROR

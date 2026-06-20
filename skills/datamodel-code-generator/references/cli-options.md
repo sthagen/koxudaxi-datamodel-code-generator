@@ -17,6 +17,8 @@ Input sources, output paths, and schema version handling.
 - `--input-file-type`: Input file type (default: auto). Use 'jsonschema', 'openapi', 'asyncapi', 'graphql', 'mcp-tools', 'xmlschema', 'protobuf', or 'avro' for schema definitions. Use 'json', 'yaml', or 'csv' for raw sample data to infer a schema automatically. Choices: `auto`, `openapi`, `asyncapi`, `jsonschema`, `mcp-tools`, `xmlschema`, `protobuf`, `avro`, `json`, `yaml`, `dict`, `csv`, `graphql`.
 - `--external-ref-mapping`: Map external $ref file paths to Python import packages instead of generating duplicate classes. Accepts one or more mappings after a single flag. Format: "path/to/schema.yaml=mypackage.models". When a $ref points to a mapped file, an import statement is generated instead of a class definition.
 - `--output`: Output file (default: stdout)
+- `--emit-model-metadata`: Write a separate JSON map from source schema references to generated models and fields.
+- `--preset`: Apply an immutable built-in option preset. Preset names include the target Python version so generated syntax is pinned. Choices: `standard-py310-20260619`, `standard-py311-20260619`, `standard-py312-20260619`, `standard-py313-20260619`, `standard-py314-20260619`, `practical-py310-20260619`, `practical-py311-20260619`, `practical-py312-20260619`, `practical-py313-20260619`, `practical-py314-20260619`.
 - `--url`: Input file URL. `--input` is ignored when `--url` is used
 - `--input-model`: Python import path to a Pydantic v2 model or schema dict (e.g., 'mypackage.module:ClassName' or 'mypackage.schemas:SCHEMA_DICT'). Can be specified multiple times for related models with inheritance. For dict input, --input-file-type is required. Cannot be used with --input or --url.
 - `--input-model-ref-strategy`: Strategy for referenced types in --input-model. 'regenerate-all': Regenerate all types. 'reuse-foreign': Reuse types from different families (Enum, etc.), regenerate same-family. 'reuse-all': Reuse all referenced types via import. If not specified, defaults to regenerate-all behavior. Choices: `regenerate-all`, `reuse-foreign`, `reuse-all`.
@@ -30,6 +32,7 @@ Type annotation, import, and primitive type behavior.
 
 - `--use-pendulum`: use pendulum instead of datetime
 - `--use-standard-primitive-types`: Use Python standard library types for string formats (UUID, IPv4Address, etc.) instead of str. Affects dataclass, msgspec, TypedDict output. Pydantic already uses these types by default.
+- `--no-use-standard-primitive-types`: Use Python standard library types for string formats (UUID, IPv4Address, etc.) instead of str. Affects dataclass, msgspec, TypedDict output. Pydantic already uses these types by default.
 - `--output-datetime-class`: Choose Datetime class between AwareDatetime, NaiveDatetime, PastDatetime, FutureDatetime or datetime. Each output model has its default mapping (for example pydantic: datetime, dataclass: str, ...) Choices: `datetime`, `AwareDatetime`, `NaiveDatetime`, `PastDatetime`, `FutureDatetime`.
 - `--output-date-class`: Choose Date class between PastDate, FutureDate or date. (Pydantic v2 only) Each output model has its default mapping. Choices: `date`, `PastDate`, `FutureDate`.
 - `--enum-field-as-literal`: Parse enum field as literal. all: all enum field type are Literal. one: field type is Literal when an enum has only one possible value. none: always use Enum class (never convert to Literal) Choices: `all`, `one`, `none`.
@@ -67,6 +70,7 @@ Field naming, aliases, defaults, and constraints.
 - `--extra-fields`: Set the generated models to allow, forbid, or ignore extra fields. Choices: `allow`, `ignore`, `forbid`.
 - `--use-schema-description`: Use schema description to populate class docstring
 - `--use-title-as-name`: use titles as class names of models
+- `--infer-union-variant-names`: Infer inline oneOf/anyOf branch model names from literal discriminator-style fields
 - `--field-constraints`: Use field constraints and not con* annotations
 - `--set-default-enum-member`: Set enum members as default values for enum field
 - `--use-enum-values-in-discriminator`: Use enum member literals in discriminator fields instead of string literals
@@ -79,6 +83,7 @@ Field naming, aliases, defaults, and constraints.
 - `--original-field-name-delimiter`: Set delimiter to convert to snake case. This option only can be used with --snake-case-field (default: `_` )
 - `--remove-special-field-name-prefix`: Remove field name prefix if it has a special meaning e.g. underscores
 - `--snake-case-field`: Change camel-case field name to snake-case
+- `--no-snake-case-field`: Change camel-case field name to snake-case
 - `--special-field-name-prefix`: Set field name prefix when first character can't be used as Python field name (default: `field`)
 - `--use-field-description`: Use schema description to populate field docstring
 - `--use-field-description-example`: Use schema example to populate field docstring
@@ -99,12 +104,15 @@ Generated model class and package behavior.
 - `--output-model-type`: Output model type (default: pydantic_v2.BaseModel) Choices: `pydantic_v2.BaseModel`, `pydantic_v2.dataclass`, `dataclasses.dataclass`, `typing.TypedDict`, `msgspec.Struct`.
 - `--allow-extra-fields` (deprecated): Deprecated: --allow-extra-fields is deprecated. Use --extra-fields=allow instead.
 - `--allow-population-by-field-name`: Allow population by field name
+- `--no-allow-population-by-field-name`: Allow population by field name
 - `--class-name`: Set class name of root model
+- `--model-name-map`: Rename generated model classes by schema ref or current generated class name using a JSON object or JSON file.
 - `--allow-leading-underscore-class-name`: Allow an explicitly specified root class name to start with an underscore
 - `--class-name-prefix`: Prefix to add to generated class names (e.g., 'Api' produces 'ApiUser'). Does not apply to root model when --class-name is specified.
 - `--class-name-suffix`: Suffix to add to generated class names (e.g., 'Schema' produces 'UserSchema'). Does not apply to root model when --class-name is specified.
 - `--class-name-affix-scope`: Scope for applying --class-name-prefix/--class-name-suffix. 'all': Apply to all classes including enums (default). 'models': Apply only to model classes. 'enums': Apply only to enum classes. Choices: `all`, `models`, `enums`.
 - `--collapse-root-models`: Models generated with a root-type field will be merged into the models using that root-type model
+- `--no-collapse-root-models`: Models generated with a root-type field will be merged into the models using that root-type model
 - `--collapse-root-models-name-strategy`: Strategy for naming when collapsing root models that reference other models. 'child': Keep inner model's name (default). 'parent': Use wrapper's name for inner model. Requires --collapse-root-models to be set. Choices: `child`, `parent`.
 - `--collapse-reuse-models`: When used with --reuse-model, collapse duplicate models by replacing references instead of creating empty inheritance subclasses. This eliminates 'class Foo(Bar): pass' patterns
 - `--skip-root-model`: Skip generating the model for the root schema element
@@ -117,6 +125,7 @@ Generated model class and package behavior.
 - `--reuse-scope`: Scope for model reuse deduplication: module (per-file, default) or tree (cross-file with shared module). Only effective when --reuse-model is set. Choices: `module`, `tree`.
 - `--target-python-version`: target python version Choices: `3.10`, `3.11`, `3.12`, `3.13`, `3.14`.
 - `--target-pydantic-version`: Target Pydantic version for generated code. '2': Pydantic 2.0+ compatible (default, uses populate_by_name). '2.11': Pydantic 2.11+ (uses validate_by_name). Choices: `2`, `2.11`.
+- `--alias-generator`: Pydantic v2 BaseModel alias generator to use in ConfigDict. Matching generated aliases are omitted from individual Field() calls. Choices: `to_camel`, `to_pascal`, `to_snake`.
 - `--use-generic-base-class`: Generate a shared base class with model configuration (e.g., extra='forbid') instead of repeating the configuration in each model. Keeps code DRY.
 - `--parent-scoped-naming` (deprecated): Deprecated: --parent-scoped-naming is deprecated. Use --naming-strategy parent-prefixed instead.
 - `--naming-strategy`: Strategy for generating unique model names when duplicates occur. 'numbered' (default): Append numeric suffix (Address, Address1, Address2). Simple but names don't indicate context. 'parent-prefixed': Prefix with parent model name using underscore (Company_Address, Company_Employee_Address for nested). Names show hierarchy. 'full-path': Similar to parent-prefixed but joins with CamelCase (CompanyAddress, CompanyEmployeeAddress). More readable for deep nesting. 'primary-first': Keep clean names for primary definitions (in /definitions/ or /components/schemas/), only add suffix to inline/nested duplicates. Choices: `numbered`, `parent-prefixed`, `full-path`, `primary-first`.
@@ -135,6 +144,7 @@ Generated model class and package behavior.
 - `--use-default-kwarg`: Use `default=` instead of a positional argument for Fields that have default values.
 - `--union-mode`: Union mode for only pydantic v2 field Choices: `smart`, `left_to_right`.
 - `--use-frozen-field`: Use Field(frozen=True) for readOnly fields (Pydantic v2).
+- `--no-use-frozen-field`: Use Field(frozen=True) for readOnly fields (Pydantic v2).
 - `--use-default-factory-for-optional-nested-models`: Use default_factory for optional nested model fields instead of None default. E.g., `field: Model | None = Field(default_factory=Model)` instead of `field: Model | None = None`
 
 ## Template Customization
@@ -208,7 +218,7 @@ General utility, HTTP, checking, and project integration options.
 - `--help` (alias: `-h`): show this help message and exit
 - `--no-color`: disable colorized output
 - `--output-format`: Format for command output (default: text). Use json for structured output when supported. Choices: `text`, `json`.
-- `--output-format-json-schema`: Output JSON Schema for the selected structured output format and exit. Choices: `generate-prompt`, `generation`, `structured-output`.
+- `--output-format-json-schema`: Output JSON Schema for the selected JSON output format and exit. Choices: `generate-prompt`, `generation`, `model-metadata`, `structured-output`.
 - `--generate-pyproject-config`: Generate pyproject.toml configuration from the provided CLI arguments and exit
 - `--generate-cli-command`: Generate CLI command from pyproject.toml configuration and exit
 - `--generate-prompt`: Generate a prompt for consulting LLMs about CLI options. Optionally provide your question as an argument. Pipe to CLI tools (e.g., `| claude -p`, `| codex exec`) or copy to clipboard (e.g., `| pbcopy`, `| xclip`) for web LLM chats.

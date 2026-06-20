@@ -13,6 +13,7 @@ from typing_extensions import NotRequired
 
 from datamodel_code_generator import DEFAULT_SHARED_MODULE_NAME, generate
 from datamodel_code_generator.enums import (
+    AliasGenerator,
     AllExportsCollisionStrategy,
     AllExportsScope,
     AllOfClassHierarchy,
@@ -47,6 +48,7 @@ if TYPE_CHECKING:
     from datamodel_code_generator.model.dataclass import DataclassArguments
     from datamodel_code_generator.model.pydantic_v2 import UnionMode
     from datamodel_code_generator.parser import DefaultPutDict, LiteralType
+    from datamodel_code_generator.preset_names import PresetName
     from datamodel_code_generator.types import StrictTypes
     from datamodel_code_generator.validators import ModelValidators
 
@@ -61,6 +63,7 @@ _PUBLIC_MODULE_EXPORTS: dict[str, frozenset[str]] = {
         "AllExportsScope",
         "AllOfClassHierarchy",
         "AllOfMergeMode",
+        "AliasGenerator",
         "AsyncAPIVersion",
         "ClassNameAffixScope",
         "CollapseRootModelsNameStrategy",
@@ -121,6 +124,7 @@ _PUBLIC_MODULE_EXPORTS: dict[str, frozenset[str]] = {
         "AllExportsScope",
         "AllOfClassHierarchy",
         "AllOfMergeMode",
+        "AliasGenerator",
         "AsyncAPIVersion",
         "ClassNameAffixScope",
         "CollapseRootModelsNameStrategy",
@@ -197,11 +201,14 @@ def _baseline_generate(
     input_filename: str | None = None,
     input_file_type: InputFileType = InputFileType.Auto,
     output: Path | None = None,
+    emit_model_metadata: Path | None = None,
     output_model_type: DataModelType = DataModelType.PydanticV2BaseModel,
+    preset: PresetName | None = None,
     target_python_version: PythonVersion = PythonVersionMin,
     target_pydantic_version: TargetPydanticVersion | None = None,
     base_class: str = "",
     base_class_map: dict[str, str | list[str]] | None = None,
+    model_name_map: dict[str, str] | None = None,
     additional_imports: list[str] | None = None,
     class_decorators: list[str] | None = None,
     custom_template_dir: Path | None = None,
@@ -209,6 +216,7 @@ def _baseline_generate(
     validators: Mapping[str, ModelValidators] | None = None,
     validation: bool = False,
     field_constraints: bool = False,
+    alias_generator: AliasGenerator | None = None,
     snake_case_field: bool = False,
     strip_default_none: bool = False,
     aliases: Mapping[str, str | list[str]] | None = None,
@@ -270,6 +278,7 @@ def _baseline_generate(
     graphql_no_typename: bool = False,
     wrap_string_literal: bool | None = None,
     use_title_as_name: bool = False,
+    infer_union_variant_names: bool = False,
     use_operation_id_as_name: bool = False,
     use_unique_items_as_set: bool = False,
     use_tuple_for_fixed_items: bool = False,
@@ -353,6 +362,7 @@ class _BaselineParser:
         data_model_field_type: type[DataModelFieldBase] = DataModelField,
         base_class: str | None = None,
         base_class_map: dict[str, str | list[str]] | None = None,
+        model_name_map: dict[str, str] | None = None,
         additional_imports: list[str] | None = None,
         class_decorators: list[str] | None = None,
         custom_template_dir: Path | None = None,
@@ -362,6 +372,7 @@ class _BaselineParser:
         dump_resolve_reference_action: Callable[[Iterable[str]], str] | None = None,
         validation: bool = False,
         field_constraints: bool = False,
+        alias_generator: AliasGenerator | None = None,
         snake_case_field: bool = False,
         strip_default_none: bool = False,
         aliases: Mapping[str, str | list[str]] | None = None,
@@ -412,6 +423,7 @@ class _BaselineParser:
         model_extra_keys_without_x_prefix: set[str] | None = None,
         wrap_string_literal: bool | None = None,
         use_title_as_name: bool = False,
+        infer_union_variant_names: bool = False,
         use_operation_id_as_name: bool = False,
         use_unique_items_as_set: bool = False,
         use_tuple_for_fixed_items: bool = False,
@@ -487,6 +499,7 @@ class _BaselineParser:
         all_exports_scope: AllExportsScope | None = None,
         all_exports_collision_strategy: AllExportsCollisionStrategy | None = None,
         module_split_mode: ModuleSplitMode | None = None,
+        collect_model_metadata: bool = False,
     ) -> str | dict[tuple[str, ...], Any]:
         raise NotImplementedError
 
@@ -783,6 +796,10 @@ def test_generate_config_dict_types_match_generate_config() -> None:
     for field_name, field_info in GenerateConfig.model_fields.items():
         config_type = field_info.annotation
         dict_type = GenerateConfigDict.__annotations__[field_name]
+        if field_name == "preset":
+            assert _normalize_type(config_type) == "None | str"
+            assert _normalize_type(dict_type) == "None | PresetName"
+            continue
         assert _types_match(config_type, dict_type), (
             f"Type mismatch for {field_name}: Config={_normalize_type(config_type)}, Dict={_normalize_type(dict_type)}"
         )

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, cast
 from datamodel_code_generator.deprecations import deprecation_message
 from datamodel_code_generator.enums import (
     DEFAULT_SHARED_MODULE_NAME,
+    AliasGenerator,
     AllExportsCollisionStrategy,
     AllExportsScope,
     AllOfClassHierarchy,
@@ -39,6 +40,7 @@ from datamodel_code_generator.enums import (
 )
 from datamodel_code_generator.format import DateClassType, DatetimeClassType, Formatter, PythonVersion
 from datamodel_code_generator.parser import LiteralType
+from datamodel_code_generator.preset_names import PRESET_NAMES
 
 if TYPE_CHECKING:
     from argparse import Action
@@ -242,9 +244,22 @@ base_options.add_argument(
     help="Output file (default: stdout)",
 )
 base_options.add_argument(
+    "--emit-model-metadata",
+    type=Path,
+    help="Write a separate JSON map from source schema references to generated models and fields.",
+)
+base_options.add_argument(
     "--output-model-type",
     help="Output model type (default: pydantic_v2.BaseModel)",
     choices=[i.value for i in DataModelType],
+)
+base_options.add_argument(
+    "--preset",
+    help=(
+        "Apply an immutable built-in option preset. "
+        "Preset names include the target Python version so generated syntax is pinned."
+    ),
+    choices=PRESET_NAMES,
 )
 base_options.add_argument(
     "--url",
@@ -283,12 +298,19 @@ extra_fields_model_options.add_argument(
 model_options.add_argument(
     "--allow-population-by-field-name",
     help="Allow population by field name",
-    action="store_true",
+    action=BooleanOptionalAction,
     default=None,
 )
 model_options.add_argument(
     "--class-name",
     help="Set class name of root model",
+    default=None,
+)
+model_options.add_argument(
+    "--model-name-map",
+    help="Rename generated model classes by schema ref or current generated class name "
+    "using a JSON object or JSON file.",
+    type=_json_value_or_file,
     default=None,
 )
 model_options.add_argument(
@@ -322,7 +344,7 @@ model_options.add_argument(
 )
 model_options.add_argument(
     "--collapse-root-models",
-    action="store_true",
+    action=BooleanOptionalAction,
     default=None,
     help="Models generated with a root-type field will be merged into the models using that root-type model",
 )
@@ -450,6 +472,13 @@ model_options.add_argument(
     default=None,
 )
 model_options.add_argument(
+    "--alias-generator",
+    help="Pydantic v2 BaseModel alias generator to use in ConfigDict. "
+    "Matching generated aliases are omitted from individual Field() calls.",
+    choices=[a.value for a in AliasGenerator],
+    default=None,
+)
+model_options.add_argument(
     "--treat-dot-as-module",
     help="Treat dotted schema names as module paths, creating nested directory structures (e.g., 'foo.bar.Model' "
     "becomes 'foo/bar.py'). Use --no-treat-dot-as-module to keep dots in names as underscores for single-file output.",
@@ -476,6 +505,12 @@ model_options.add_argument(
     default=None,
 )
 model_options.add_argument(
+    "--infer-union-variant-names",
+    help="Infer inline oneOf/anyOf branch model names from literal discriminator-style fields",
+    action="store_true",
+    default=None,
+)
+model_options.add_argument(
     "--use-pendulum",
     help="use pendulum instead of datetime",
     action="store_true",
@@ -486,7 +521,7 @@ model_options.add_argument(
     help="Use Python standard library types for string formats (UUID, IPv4Address, etc.) "
     "instead of str. Affects dataclass, msgspec, TypedDict output. "
     "Pydantic already uses these types by default.",
-    action="store_true",
+    action=BooleanOptionalAction,
     default=None,
 )
 model_options.add_argument(
@@ -837,7 +872,7 @@ field_options.add_argument(
 field_options.add_argument(
     "--snake-case-field",
     help="Change camel-case field name to snake-case",
-    action="store_true",
+    action=BooleanOptionalAction,
     default=None,
 )
 field_options.add_argument(
@@ -931,7 +966,7 @@ field_options.add_argument(
 field_options.add_argument(
     "--use-frozen-field",
     help="Use Field(frozen=True) for readOnly fields (Pydantic v2).",
-    action="store_true",
+    action=BooleanOptionalAction,
     default=None,
 )
 field_options.add_argument(
@@ -1226,10 +1261,10 @@ general_options.add_argument(
 )
 general_options.add_argument(
     "--output-format-json-schema",
-    choices=["generate-prompt", "generation", "structured-output"],
+    choices=["generate-prompt", "generation", "model-metadata", "structured-output"],
     default=None,
-    metavar="{generate-prompt,generation,structured-output}",
-    help="Output JSON Schema for the selected structured output format and exit.",
+    metavar="{generate-prompt,generation,model-metadata,structured-output}",
+    help="Output JSON Schema for the selected JSON output format and exit.",
 )
 general_options.add_argument(
     "--generate-pyproject-config",
