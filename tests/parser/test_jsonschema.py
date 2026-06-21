@@ -20,12 +20,13 @@ from datamodel_code_generator.imports import Import
 from datamodel_code_generator.model import DataModelFieldBase
 from datamodel_code_generator.model.dataclass import DataClass
 from datamodel_code_generator.model.pydantic_v2.base_model import BaseModel
+from datamodel_code_generator.model.pydantic_v2.root_model import RootModel
+from datamodel_code_generator.model.type_alias import TypeAlias
 from datamodel_code_generator.parser.base import Parser, Source, dump_templates
 from datamodel_code_generator.parser.jsonschema import (
     JsonSchemaObject,
     JsonSchemaParser,
     Types,
-    _get_discriminator_property_name,
     _get_union_variant_name,
     _validate_schema_python_import_path,
     get_model_by_path,
@@ -40,30 +41,15 @@ if TYPE_CHECKING:
 
 DATA_PATH: Path = Path(__file__).parents[1] / "data" / "jsonschema"
 
-EXPECTED_JSONSCHEMA_PATH = Path(__file__).parents[1] / "data" / "expected" / "parser" / "jsonschema"
+
+def _json_schema_object(data: dict[str, Any]) -> JsonSchemaObject:
+    return JsonSchemaObject.model_validate(data)
 
 
 @pytest.fixture(autouse=True)
 def block_dns_by_default(mocker: MockerFixture) -> None:
     """Keep tests that mock httpx.get independent from external DNS."""
     mocker.patch("socket.getaddrinfo", side_effect=OSError)
-
-
-def _json_schema_object(data: dict[str, Any]) -> JsonSchemaObject:
-    return JsonSchemaObject.model_validate(data)
-
-
-@pytest.mark.parametrize(
-    ("schema", "expected"),
-    [
-        ({"discriminator": {"propertyName": "kind"}}, "kind"),
-        ({"discriminator": "kind"}, "kind"),
-        ({}, None),
-    ],
-)
-def test_get_discriminator_property_name(schema: dict[str, Any], expected: str | None) -> None:
-    """Return discriminator property names from supported schema shapes."""
-    assert _get_discriminator_property_name(_json_schema_object(schema)) == expected
 
 
 @pytest.mark.parametrize(
@@ -643,6 +629,165 @@ def test_parse_any_root_object(source_obj: dict[str, Any], generated_classes: st
     assert dump_templates(list(parser.results)) == generated_classes
 
 
+def _root_model_sequence_field(
+    data_type: DataType,
+    *,
+    required: bool = True,
+    nullable: bool | None = None,
+) -> DataModelFieldBase:
+    return DataModelFieldBase(name="root", data_type=data_type, required=required, nullable=nullable)
+
+
+def _root_model_sequence_type(item_type: DataType | None = None) -> DataType:
+    return DataType(is_list=True, data_types=[] if item_type is None else [item_type])
+
+
+def _root_model(fields: list[DataModelFieldBase] | None = None) -> RootModel:
+    return RootModel(fields=fields or [], reference=Reference(name="Pets", path="pets"))
+
+
+@pytest.mark.parametrize(
+    ("parser", "data_model_root", "fields"),
+    [
+        (
+            JsonSchemaParser("", use_root_model_sequence_interface=False),
+            _root_model([_root_model_sequence_field(_root_model_sequence_type(DataType(type="str")))]),
+            [_root_model_sequence_field(_root_model_sequence_type(DataType(type="str")))],
+        ),
+        (
+            JsonSchemaParser("", use_root_model_sequence_interface=True),
+            TypeAlias(
+                fields=[_root_model_sequence_field(_root_model_sequence_type(DataType(type="str")))],
+                reference=Reference(name="Pets", path="pets"),
+            ),
+            [_root_model_sequence_field(_root_model_sequence_type(DataType(type="str")))],
+        ),
+        (
+            JsonSchemaParser("", use_root_model_sequence_interface=True),
+            _root_model(),
+            [],
+        ),
+    ],
+)
+def test_apply_root_model_sequence_interface_skips_disabled_alias_and_empty_fields(
+    parser: JsonSchemaParser,
+    data_model_root: RootModel | TypeAlias,
+    fields: list[DataModelFieldBase],
+) -> None:
+    """Sequence interface helpers are skipped unless the opt-in target is a concrete RootModel with a field."""
+    parser._apply_root_model_sequence_interface(data_model_root, fields)
+
+    assert data_model_root.methods == []
+
+
+def test_apply_root_model_sequence_interface_skips_non_sequence_root() -> None:
+    """Sequence interface helpers are skipped for scalar RootModel classes."""
+    parser = JsonSchemaParser("", use_root_model_sequence_interface=True)
+    root_model = _root_model([_root_model_sequence_field(DataType(type="str"))])
+
+    parser._apply_root_model_sequence_interface(root_model, root_model.fields)
+
+    assert root_model.methods == []
+
+
+@pytest.mark.parametrize(
+    ("required", "nullable"),
+    [
+        (False, None),
+        (True, True),
+    ],
+)
+def test_apply_root_model_sequence_interface_skips_optional_root_field(
+    required: bool,
+    nullable: bool | None,
+) -> None:
+    """Sequence interface helpers are skipped when the root field can be None."""
+    parser = JsonSchemaParser("", use_root_model_sequence_interface=True)
+    root_model = _root_model([
+        _root_model_sequence_field(
+            _root_model_sequence_type(DataType(type="str")),
+            required=required,
+            nullable=nullable,
+        )
+    ])
+
+    parser._apply_root_model_sequence_interface(root_model, root_model.fields)
+
+    assert root_model.methods == []
+
+
+def test_apply_root_model_sequence_interface_skips_models_without_sequence_method() -> None:
+    """The parser only applies helpers to RootModel implementations that expose the method."""
+    parser = JsonSchemaParser("", use_root_model_sequence_interface=True)
+    base_model = BaseModel(
+        fields=[_root_model_sequence_field(_root_model_sequence_type(DataType(type="str")))],
+        reference=Reference(name="Pets", path="pets"),
+    )
+
+    parser._apply_root_model_sequence_interface(base_model, base_model.fields)
+
+    assert base_model.methods == []
+
+
+@pytest.mark.parametrize(
+    ("data_type", "expected_item_hint", "expected_slice_hint"),
+    [
+        (_root_model_sequence_type(DataType(type="str")), "str", "List[str]"),
+        (_root_model_sequence_type(), "Any", "List[Any]"),
+        (_root_model_sequence_type(DataType()), "Any", "List[Any]"),
+        (
+            DataType(is_list=True, data_types=[DataType(type="str"), DataType(type="int")]),
+            "Union[str, int]",
+            "List[Union[str, int]]",
+        ),
+        (DataType(is_sequence=True, data_types=[DataType(type="str")]), "str", "Sequence[str]"),
+    ],
+)
+def test_apply_root_model_sequence_interface_adds_sequence_helpers(
+    data_type: DataType,
+    expected_item_hint: str,
+    expected_slice_hint: str,
+) -> None:
+    """Sequence interface helpers use the wrapped item hint, falling back to Any when needed."""
+    parser = JsonSchemaParser("", use_root_model_sequence_interface=True)
+    root_model = _root_model([_root_model_sequence_field(data_type)])
+
+    parser._apply_root_model_sequence_interface(root_model, root_model.fields)
+
+    rendered = root_model.render()
+    assert root_model.methods == []
+    assert root_model.extra_template_data["sequence_base_class"] == f"Sequence[{expected_item_hint}]"
+    assert root_model.extra_template_data["sequence_item_type"] == expected_item_hint
+    assert root_model.extra_template_data["sequence_slice_type"] == expected_slice_hint
+    assert f", Sequence[{expected_item_hint}]):" in rendered.splitlines()[0]
+    assert f"def __iter__(self) -> Iterator[{expected_item_hint}]" in rendered
+    assert f"def __getitem__(self, index: SupportsIndex) -> {expected_item_hint}" in rendered
+    assert f"def __getitem__(self, index: slice) -> {expected_slice_hint}" in rendered
+    assert "def __getitem__(self, index: SupportsIndex | slice)" in rendered
+    assert "def __len__(self) -> int" in rendered
+
+
+@pytest.mark.parametrize(
+    ("data_type", "expected_type"),
+    [
+        (DataType(is_optional=True), None),
+        (DataType(type="str"), None),
+        (DataType(data_types=[DataType(type="str", is_optional=True)]), None),
+        (DataType(data_types=[DataType(type="str")]), None),
+        (_root_model_sequence_type(DataType(type="str")), "List[str]"),
+        (DataType(is_sequence=True, data_types=[DataType(type="str")]), "Sequence[str]"),
+        (DataType(data_types=[_root_model_sequence_type(DataType(type="str"))]), "List[str]"),
+    ],
+)
+def test_get_root_model_sequence_type(data_type: DataType, expected_type: str | None) -> None:
+    """The parser recognizes only non-optional list and sequence RootModel types."""
+    parser = JsonSchemaParser("")
+
+    result = parser._get_root_model_sequence_type(data_type)
+
+    assert (result.type_hint if result is not None else None) == expected_type
+
+
 def test_infer_union_variant_names_uses_discriminator_literals() -> None:
     """Infer variant names from discriminator literals without mutating schemas."""
     parser = JsonSchemaParser("", infer_union_variant_names=True)
@@ -671,7 +816,6 @@ def test_infer_union_variant_names_distinguishes_literal_types() -> None:
         "Event_bool_true",
     ]
     assert _get_union_variant_name("Event", "") is None
-    assert _get_union_variant_name("Event", object()) is None
 
 
 def test_infer_union_variant_names_skips_generated_name_collisions() -> None:
@@ -782,7 +926,7 @@ def test_infer_union_variant_names_disabled() -> None:
         _json_schema_object({"properties": {"kind": {"const": "deleted"}}}),
     ]
 
-    assert parser._infer_union_variant_names("Event", _json_schema_object({}), variants) is None
+    assert parser._get_inferred_union_variant_names("Event", _json_schema_object({}), variants) is None
 
 
 @pytest.mark.parametrize(
@@ -1860,27 +2004,6 @@ def test_jsonschema_parser_edge_case_helpers() -> None:
         JsonSchemaObject.model_validate({"contains": True, "minContains": 1, "minItems": 2})
     ) == {"minItems": 2}
     assert parser._get_data_type_from_json_value(object()).type_hint == "Any"
-
-
-@pytest.mark.parametrize(
-    ("current_root", "path", "expected"),
-    [
-        ([], [], True),
-        ([], ["#"], True),
-        (["schema.json"], ["schema.json"], True),
-        (["schema.json"], ["schema.json", "#"], True),
-        (["schema.json"], ["schema.json#"], True),
-        (["schema.json"], ["other.json#"], False),
-    ],
-)
-def test_is_current_root_schema_path_normalizes_root_spellings(
-    current_root: list[str], path: list[str], *, expected: bool
-) -> None:
-    """Treat equivalent root path spellings as the current schema root."""
-    parser = JsonSchemaParser("")
-    parser.model_resolver.set_current_root(current_root)
-
-    assert parser._is_current_root_schema_path(path) is expected
 
 
 def test_anchor_ref_path_escapes_json_pointer_segments() -> None:

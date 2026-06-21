@@ -17,9 +17,9 @@ from enum import Enum
 from functools import lru_cache
 from typing import Any
 
+from datamodel_code_generator._format_types import PythonVersion
 from datamodel_code_generator.deprecations import deprecation_message
 from datamodel_code_generator.enums import AllExportsScope, DataModelType, NamingStrategy, ReuseScope
-from datamodel_code_generator.format import PythonVersion
 
 
 class OptionCategory(str, Enum):
@@ -223,6 +223,9 @@ CLI_OPTION_META: dict[str, CLIOptionMeta] = {
     "--use-one-literal-as-default": CLIOptionMeta(name="--use-one-literal-as-default", category=OptionCategory.MODEL),
     "--use-serialize-as-any": CLIOptionMeta(name="--use-serialize-as-any", category=OptionCategory.MODEL),
     "--skip-root-model": CLIOptionMeta(name="--skip-root-model", category=OptionCategory.MODEL),
+    "--use-root-model-sequence-interface": CLIOptionMeta(
+        name="--use-root-model-sequence-interface", category=OptionCategory.MODEL
+    ),
     "--use-generic-base-class": CLIOptionMeta(name="--use-generic-base-class", category=OptionCategory.MODEL),
     "--model-extra-keys": CLIOptionMeta(name="--model-extra-keys", category=OptionCategory.MODEL),
     "--model-extra-keys-without-x-prefix": CLIOptionMeta(

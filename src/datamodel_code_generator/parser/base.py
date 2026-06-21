@@ -52,13 +52,8 @@ from datamodel_code_generator import (
     _is_parsed_source_cache_enabled,
     _read_parser_source_data_from_path,
 )
+from datamodel_code_generator._format_types import Formatter, PythonVersion
 from datamodel_code_generator.enums import StrictTypes
-from datamodel_code_generator.format import (
-    CodeFormatter,
-    Formatter,
-    PythonVersion,
-    resolve_use_type_checking_imports,
-)
 from datamodel_code_generator.imports import (
     IMPORT_ANNOTATIONS,
     IMPORT_LITERAL,
@@ -94,6 +89,7 @@ if TYPE_CHECKING:
 
     from datamodel_code_generator._types import ParserConfigDict
     from datamodel_code_generator.config import ParserConfig
+    from datamodel_code_generator.format import CodeFormatter
     from datamodel_code_generator.model_metadata import GeneratedModelMetadata, ModelFieldMetadata, ModelMetadata
 ParserConfigT = TypeVar("ParserConfigT", bound="ParserConfig")
 
@@ -268,13 +264,13 @@ def _decode_json_pointer_part(value: str) -> str:
 
 def _source_path_from_reference_path(reference_path: str) -> list[str] | None:
     _, separator, fragment = reference_path.partition("#")
-    if not separator:
-        return None
-    if not fragment:
-        return []
-    if not fragment.startswith("/"):
-        return None
-    return [_decode_json_pointer_part(part) for part in fragment[1:].split("/")]
+    return (
+        None
+        if not separator or (fragment and not fragment.startswith("/"))
+        else []
+        if not fragment
+        else [_decode_json_pointer_part(part) for part in fragment[1:].split("/")]
+    )
 
 
 def _module_name_from_module_path(module: ModulePath) -> str:
@@ -282,11 +278,9 @@ def _module_name_from_module_path(module: ModulePath) -> str:
         return ""
 
     parts = [*module]
-    if parts and parts[-1].endswith(".py"):
+    if parts and parts[-1].endswith(".py"):  # pragma: no branch - Module paths are Python files.
         parts[-1] = parts[-1][:-3]
-    if parts and parts[-1] == "__init__":
-        parts.pop()
-    return ".".join(parts)
+    return ".".join(parts[:-1] if parts[-1:] == ["__init__"] else parts)
 
 
 class _KeepModelOrderDeps(NamedTuple):
@@ -1466,6 +1460,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         self.collapse_root_models_name_strategy = config.collapse_root_models_name_strategy
         self.collapse_reuse_models = config.collapse_reuse_models
         self.skip_root_model = config.skip_root_model
+        self.use_root_model_sequence_interface = config.use_root_model_sequence_interface
         self.use_type_alias = config.use_type_alias
         self.capitalise_enum_members = config.capitalise_enum_members
         self.keep_model_order = config.keep_model_order
@@ -3497,6 +3492,8 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         *,
         is_multi_module_output: bool,
     ) -> CodeFormatter:
+        from datamodel_code_generator.format import CodeFormatter, resolve_use_type_checking_imports  # noqa: PLC0415
+
         effective_use_type_checking_imports = resolve_use_type_checking_imports(
             self.use_type_checking_imports,
             is_multi_module_output=is_multi_module_output,

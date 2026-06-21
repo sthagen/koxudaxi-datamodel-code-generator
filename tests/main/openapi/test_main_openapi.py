@@ -6,6 +6,7 @@ import contextlib
 import json
 import platform
 import re
+import sys
 import warnings
 from collections import defaultdict
 from pathlib import Path
@@ -28,10 +29,12 @@ from datamodel_code_generator import (
     inferred_message,
     load_data_from_path,
 )
+from datamodel_code_generator import reference as reference_module
 from datamodel_code_generator.__main__ import Exit
 from datamodel_code_generator.config import GenerateConfig
 from datamodel_code_generator.model import base as model_base
 from datamodel_code_generator.model.pydantic_v2.version import PYDANTIC_V2_FIELD_DEPRECATED_NEEDS_JSON_SCHEMA_EXTRA
+from datamodel_code_generator.reference import get_singular_name
 from tests.conftest import (
     HttpxGetMockFactory,
     MockHttpxResponse,
@@ -67,6 +70,22 @@ EXTERNAL_REF_MAPPING_DATA_PATH = OPEN_API_DATA_PATH / "external_ref_mapping"
 @pytest.mark.benchmark
 def test_main(output_file: Path) -> None:
     """Test OpenAPI file code generation."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "api.yaml",
+        output_path=output_file,
+        input_file_type=None,
+        assert_func=assert_file_content,
+        expected_file="general.py",
+    )
+
+
+def test_main_inflect_import_without_typeguard_leak(output_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """OpenAPI generation should keep expected output when inflect starts cold."""
+    monkeypatch.delitem(sys.modules, "inflect", raising=False)
+    monkeypatch.delitem(sys.modules, "typeguard", raising=False)
+    monkeypatch.setattr(reference_module, "_inflect_engine", None)
+    get_singular_name.cache_clear()
+
     run_main_and_assert(
         input_path=OPEN_API_DATA_PATH / "api.yaml",
         output_path=output_file,
@@ -723,10 +742,10 @@ def test_main_openapi_no_file(
 @pytest.mark.isolate_builtin_formatter_config
 @pytest.mark.cli_doc(
     options=["--extra-template-data"],
-    option_description="""Pass custom template variables from JSON file for code generation.
+    option_description="""Pass custom template variables via inline JSON or a JSON file path.
 
 The `--extra-template-data` flag allows you to provide additional variables
-(from a JSON file) that can be used in custom templates to configure generated
+from an inline JSON object or JSON file that can be used in custom templates to configure generated
 model settings like Config classes, enabling customization beyond standard options.""",
     input_schema="openapi/api.yaml",
     cli_args=["--extra-template-data", "openapi/extra_data.json"],
@@ -739,10 +758,10 @@ def test_main_openapi_extra_template_data_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pass custom template variables from JSON file for code generation.
+    """Pass custom template variables via inline JSON or a JSON file path.
 
     The `--extra-template-data` flag allows you to provide additional variables
-    (from a JSON file) that can be used in custom templates to configure generated
+    from an inline JSON object or JSON file that can be used in custom templates to configure generated
     model settings like Config classes, enabling customization beyond standard options.
     """
     monkeypatch.chdir(tmp_path)
@@ -1123,9 +1142,9 @@ def test_main_without_field_constraints(output_file: Path) -> None:
 )
 @pytest.mark.cli_doc(
     options=["--aliases"],
-    option_description="""Apply custom field and class name aliases from JSON file.
+    option_description="""Apply custom field and class name aliases via inline JSON or a JSON file path.
 
-The `--aliases` option allows renaming fields and classes via a JSON mapping file,
+The `--aliases` option allows renaming fields and classes via an inline JSON object or JSON mapping file,
 providing fine-grained control over generated names independent of schema definitions.""",
     input_schema="openapi/api.yaml",
     cli_args=["--aliases", "openapi/aliases.json", "--target-python-version", "3.10"],
@@ -1135,9 +1154,9 @@ providing fine-grained control over generated names independent of schema defini
     primary=True,
 )
 def test_main_with_aliases(output_model: str, expected_output: str, output_file: Path) -> None:
-    """Apply custom field and class name aliases from JSON file.
+    """Apply custom field and class name aliases via inline JSON or a JSON file path.
 
-    The `--aliases` option allows renaming fields and classes via a JSON mapping file,
+    The `--aliases` option allows renaming fields and classes via an inline JSON object or JSON mapping file,
     providing fine-grained control over generated names independent of schema definitions.
     """
     run_main_and_assert(
