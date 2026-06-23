@@ -9,7 +9,7 @@ from functools import lru_cache, wraps
 from math import isfinite
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypeVar
 
-from datamodel_code_generator.imports import IMPORT_UNION, Import
+from datamodel_code_generator.imports import IMPORT_OPTIONAL, IMPORT_UNION, Import
 from datamodel_code_generator.model import DataModel, DataModelFieldBase, _rebuild_model_with_datamodel_namespace
 from datamodel_code_generator.model.base import UNDEFINED, BaseClassDataType, _nested_model_default_factory
 from datamodel_code_generator.model.imports import (
@@ -60,9 +60,7 @@ if TYPE_CHECKING:
 
 def has_field_assignment(field: DataModelFieldBase) -> bool:
     """Return whether a msgspec field renders with a default assignment."""
-    return field.use_default_with_required or not (
-        field.required or (field.represented_default == "None" and field.strip_default_none)
-    )
+    return field.use_default_with_required or not (field.required or field.should_strip_default_none())
 
 
 DataModelFieldBaseT = TypeVar("DataModelFieldBaseT", bound=DataModelFieldBase)
@@ -91,7 +89,16 @@ def import_extender(cls: type[DataModelFieldBaseT]) -> type[DataModelFieldBaseT]
                 extra_imports.append(IMPORT_UNION)
             if self.default is None or self.default is UNDEFINED:
                 extra_imports.append(IMPORT_MSGSPEC_UNSET)
-        return chain_as_tuple(original_imports.fget(self), extra_imports)  # ty: ignore
+        imports = original_imports.fget(self)  # ty: ignore
+        if (
+            isinstance(self, DataModelField)
+            and self._not_required
+            and not self.nullable
+            and self.data_type.is_optional
+            and not self._uses_optional_inside_annotated_unset
+        ):
+            imports = tuple(import_ for import_ in imports if import_ != IMPORT_OPTIONAL)
+        return chain_as_tuple(imports, extra_imports)
 
     cls.imports = property(new_imports)  # ty: ignore
     return cls
@@ -457,6 +464,10 @@ class DataModelField(DataModelFieldBase):
     def needs_meta_import(self) -> bool:
         """Check if this field requires the Meta import."""
         return self.use_annotated and self._get_meta_string() is not None
+
+    @property
+    def _uses_optional_inside_annotated_unset(self) -> bool:
+        return self.needs_meta_import and not self.data_type.use_union_operator
 
     def _get_default_as_struct_model(self) -> str | None:
         """Convert default value to Struct model using msgspec convert."""

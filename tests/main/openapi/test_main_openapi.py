@@ -1307,6 +1307,57 @@ def test_main_with_strip_default_none(output_file: Path) -> None:
     )
 
 
+def test_main_openapi_pydantic_v2_strip_default_none_field_metadata(output_file: Path) -> None:
+    """Test strip-default-none removes implicit None defaults from Field metadata."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "strip_default_none_pydantic_v2.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file="strip_default_none_pydantic_v2.py",
+        extra_args=["--strip-default-none", "--output-model-type", "pydantic_v2.BaseModel"],
+    )
+
+
+@pytest.mark.parametrize(
+    ("output_model_type", "target_python_version", "expected_file"),
+    [
+        (
+            "dataclasses.dataclass",
+            "3.10",
+            "strip_default_none_semantic_dataclass.py",
+        ),
+        (
+            "msgspec.Struct",
+            "3.10",
+            "strip_default_none_semantic_msgspec.py",
+        ),
+    ],
+    ids=["dataclass", "msgspec"],
+)
+def test_main_openapi_strip_default_none_semantic_default(
+    output_model_type: str,
+    target_python_version: str,
+    expected_file: str,
+    output_file: Path,
+) -> None:
+    """Test strip-default-none treats only actual None defaults as None."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "strip_default_none_semantic.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file=expected_file,
+        extra_args=[
+            "--strip-default-none",
+            "--output-model-type",
+            output_model_type,
+            "--target-python-version",
+            target_python_version,
+        ],
+    )
+
+
 def test_disable_timestamp(output_file: Path) -> None:
     """Test OpenAPI generation with timestamp disabled."""
     run_main_and_assert(

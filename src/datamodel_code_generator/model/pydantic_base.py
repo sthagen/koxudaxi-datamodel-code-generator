@@ -306,8 +306,11 @@ class DataModelField(DataModelFieldBase):
             and not self.extras.get("validate_default")
         ):
             field_arguments = ["...", *field_arguments]
-        elif not default_factory:
-            default_repr = represent_python_value(self.default)
+        elif (
+            not default_factory
+            and (default_repr := represent_python_value(self.default))
+            and not self.should_strip_default_none(keep_optional=True)
+        ):
             field_arguments = [default_repr, *field_arguments]
 
         if self.is_class_var:

@@ -6,11 +6,13 @@ representation, and DataModel as the abstract base for all model types.
 
 from __future__ import annotations
 
+import ast
 import re
 import sys
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from copy import deepcopy
+from dataclasses import dataclass, replace
 from functools import cached_property, lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypeVar
@@ -23,6 +25,7 @@ from datamodel_code_generator import cached_path_exists
 from datamodel_code_generator._internal_utils import get_most_of_parent, to_hashable
 from datamodel_code_generator.imports import (
     IMPORT_ANNOTATED,
+    IMPORT_ANY,
     IMPORT_OPTIONAL,
     IMPORT_UNION,
     Import,
@@ -32,8 +35,6 @@ from datamodel_code_generator.reference import Reference, _BaseModel
 from datamodel_code_generator.types import (
     ANY,
     NONE,
-    OPTIONAL_PREFIX,
-    UNION_PREFIX,
     DataType,
     Nullable,
     chain_as_tuple,
@@ -48,6 +49,77 @@ if TYPE_CHECKING:
     from datamodel_code_generator import DataclassArguments
 
 TEMPLATE_DIR: Path = Path(__file__).parents[0] / "template"
+_TYPING_IMPORT_NAMES: frozenset[str] = frozenset({
+    IMPORT_ANNOTATED.import_,
+    IMPORT_OPTIONAL.import_,
+    IMPORT_UNION.import_,
+})
+
+
+@dataclass(frozen=True, slots=True)
+class _TypingImportRequirements:
+    union: bool = False
+    optional: bool = False
+    annotated: bool = False
+    any_: bool = False
+
+    def merge(self, other: _TypingImportRequirements) -> _TypingImportRequirements:
+        return _TypingImportRequirements(
+            union=self.union or other.union,
+            optional=self.optional or other.optional,
+            annotated=self.annotated or other.annotated,
+            any_=self.any_ or other.any_,
+        )
+
+    def with_import_name(self, name: str) -> _TypingImportRequirements:
+        match name:
+            case IMPORT_UNION.import_:
+                return replace(self, union=True)
+            case IMPORT_OPTIONAL.import_:
+                return replace(self, optional=True)
+            case IMPORT_ANNOTATED.import_:
+                return replace(self, annotated=True)
+        return self
+
+    def allows(self, import_: Import) -> bool:
+        match import_:
+            case _ if import_ == IMPORT_UNION:
+                return self.union
+            case _ if import_ == IMPORT_OPTIONAL:
+                return self.optional
+        return True
+
+    @property
+    def leading_imports(self) -> tuple[Import, ...]:
+        return (IMPORT_ANY,) if self.any_ else ()
+
+    @property
+    def trailing_imports(self) -> tuple[Import, ...]:
+        imports = []
+        if self.union:
+            imports.append(IMPORT_UNION)
+        if self.optional:
+            imports.append(IMPORT_OPTIONAL)
+        if self.annotated:
+            imports.append(IMPORT_ANNOTATED)
+        return tuple(imports)
+
+
+@lru_cache(maxsize=1024)
+def _annotation_typing_import_names(annotation: str) -> frozenset[str]:
+    if annotation in _TYPING_IMPORT_NAMES:
+        return frozenset((annotation,))
+    if annotation.isidentifier():
+        return frozenset()
+
+    try:
+        tree = ast.parse(annotation, mode="eval")
+    except SyntaxError:
+        return frozenset()
+
+    return frozenset(
+        node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and node.id in _TYPING_IMPORT_NAMES
+    )
 
 
 def escape_docstring(value: str | None) -> str | None:
@@ -192,7 +264,9 @@ class ConstraintsBase(_BaseModel):
     unique_items: Optional[bool] = Field(None, alias="uniqueItems")  # noqa: UP045
     _exclude_fields: ClassVar[set[str]] = {"has_constraints", "_exclude_unset_dump"}
     model_config = ConfigDict(  # ty: ignore
-        arbitrary_types_allowed=True, ignored_types=(cached_property,)
+        arbitrary_types_allowed=True,
+        ignored_types=(cached_property,),
+        defer_build=True,
     )
 
     @cached_property
@@ -313,6 +387,14 @@ class DataModelFieldBase(_BaseModel):
         if self.default is None and not self.has_default:
             self.default = const
 
+    def should_strip_default_none(self, *, keep_optional: bool = False) -> bool:
+        """Return whether an actual None default should be omitted."""
+        match (self.strip_default_none, keep_optional and self.data_type.is_optional):
+            case (False, _) | (_, True):
+                return False
+
+        return self.default is None
+
     def self_reference(self) -> bool:
         """Check if field references its parent model.
 
@@ -391,37 +473,25 @@ class DataModelFieldBase(_BaseModel):
     def _collect_field_imports(self, *, needs_annotated: bool) -> tuple[Import, ...]:
         """Collect type-hint imports; needs_annotated is passed in so subclasses can precompute it."""
         if self._can_collect_imports_without_type_hint(needs_annotated=needs_annotated):
+            needs_optional = self._needs_optional_import_without_type_hint()
             if self._can_skip_data_type_imports():
-                return (IMPORT_OPTIONAL,) if self._needs_optional_import_without_type_hint() else ()
+                return (IMPORT_OPTIONAL,) if needs_optional else ()
 
             imports = tuple(self.data_type.all_imports)
-            if self._needs_optional_import_without_type_hint() and IMPORT_OPTIONAL not in imports:
+            if needs_optional and IMPORT_OPTIONAL not in imports:
                 return chain_as_tuple(imports, (IMPORT_OPTIONAL,))
             return imports
 
-        type_hint = self.type_hint
-        has_union = not self._use_union_operator and UNION_PREFIX in type_hint
-        has_optional = OPTIONAL_PREFIX in type_hint
+        requirements = self._typing_import_requirements(needs_annotated=needs_annotated)
+        imports = tuple(self.data_type.all_imports)
+        if requirements.any_ and IMPORT_ANY not in imports:
+            imports = chain_as_tuple(requirements.leading_imports, imports)
 
-        # Fast path: no special typing imports needed
-        if not has_union and not has_optional and not needs_annotated:
-            return tuple(self.data_type.all_imports)
-
-        imports: list[tuple[Import] | Iterator[Import]] = [
-            iter(
-                i
-                for i in self.data_type.all_imports
-                if not ((not has_union and i == IMPORT_UNION) or (not has_optional and i == IMPORT_OPTIONAL))
-            )
-        ]
-
-        if has_union:
-            imports.append((IMPORT_UNION,))
-        if has_optional:
-            imports.append((IMPORT_OPTIONAL,))
-        if needs_annotated:
-            imports.append((IMPORT_ANNOTATED,))
-        return chain_as_tuple(*imports)
+        filtered_imports = tuple(import_ for import_ in imports if requirements.allows(import_))
+        missing_imports = tuple(import_ for import_ in requirements.trailing_imports if import_ not in filtered_imports)
+        if not missing_imports:
+            return filtered_imports
+        return chain_as_tuple(filtered_imports, missing_imports)
 
     def _can_collect_imports_without_type_hint(self, *, needs_annotated: bool) -> bool:
         """Return whether imports can be collected without rendering the type hint."""
@@ -431,17 +501,178 @@ class DataModelFieldBase(_BaseModel):
             return False
 
         data_type = self.data_type
-        type_name = data_type.alias or data_type.type
-        if type_name and (UNION_PREFIX in type_name or OPTIONAL_PREFIX in type_name):
+        if data_type.use_serialize_as_any:
+            return False
+
+        if self._has_explicit_typing_import_requirements(data_type):
             return False
 
         return not (
-            data_type.reference
-            or data_type.data_types
+            data_type.data_types
             or data_type.dict_key
             or data_type.literals
             or data_type.enum_member_literals
             or (data_type.is_optional and data_type.type == ANY)
+        )
+
+    @staticmethod
+    def _has_explicit_typing_import_requirements(data_type: DataType) -> bool:
+        for annotation in (data_type.alias, data_type.type):
+            if annotation and (names := _annotation_typing_import_names(annotation)):
+                return bool(names)
+        return False
+
+    def _typing_import_requirements(self, *, needs_annotated: bool) -> _TypingImportRequirements:
+        requirements = self._data_type_typing_import_requirements(self.data_type)
+        if needs_annotated:
+            requirements = requirements.with_import_name(IMPORT_ANNOTATED.import_)
+        if not requirements.optional and self._needs_field_optional_import_from_structure():
+            requirements = requirements.with_import_name(IMPORT_OPTIONAL.import_)
+        return requirements
+
+    def _data_type_typing_import_requirements(self, data_type: DataType) -> _TypingImportRequirements:
+        requirements = self._explicit_typing_import_requirements(data_type)
+        if data_type.reference:
+            data_type._apply_nullable_from_reference()  # noqa: SLF001
+
+        if data_type.is_union:
+            requirements = requirements.merge(self._union_typing_import_requirements(data_type))
+        elif len(data_type.data_types) == 1:
+            requirements = requirements.merge(self._data_type_typing_import_requirements(data_type.data_types[0]))
+
+        if data_type.dict_key:
+            requirements = requirements.merge(self._data_type_typing_import_requirements(data_type.dict_key))
+
+        if data_type.discriminator:
+            requirements = requirements.with_import_name(IMPORT_ANNOTATED.import_)
+        if self._data_type_needs_optional_import(data_type):
+            requirements = requirements.with_import_name(IMPORT_OPTIONAL.import_)
+        return requirements
+
+    def _union_typing_import_requirements(self, data_type: DataType) -> _TypingImportRequirements:
+        requirements = _TypingImportRequirements()
+        branch_keys: set[tuple[Any, ...]] = set()
+        has_none = False
+        for child in data_type.data_types:
+            requirements = requirements.merge(self._data_type_typing_import_requirements(child))
+            if self._data_type_renders_none(child):
+                has_none = True
+                continue
+            branch_keys.add(self._data_type_import_key(child))
+
+        if has_none:
+            data_type.is_optional = True
+            if not data_type.use_union_operator:
+                requirements = requirements.with_import_name(IMPORT_OPTIONAL.import_)
+        if not branch_keys and data_type.data_types:
+            requirements = replace(requirements, any_=True)
+        if len(branch_keys) > 1 and not data_type.use_union_operator:
+            requirements = requirements.with_import_name(IMPORT_UNION.import_)
+        return requirements
+
+    @staticmethod
+    def _explicit_typing_import_requirements(data_type: DataType) -> _TypingImportRequirements:
+        requirements = _TypingImportRequirements()
+        for annotation in (data_type.alias, data_type.type):
+            if not annotation:
+                continue
+            for name in _annotation_typing_import_names(annotation):
+                requirements = requirements.with_import_name(name)
+        return requirements
+
+    def _data_type_needs_optional_import(self, data_type: DataType) -> bool:
+        if data_type.use_union_operator or data_type.type == ANY:
+            return False
+        return data_type.is_optional and self._data_type_renders_importable_hint(data_type)
+
+    def _needs_field_optional_import_from_structure(self) -> bool:
+        data_type = self.data_type
+        if (
+            self._use_union_operator
+            or self.has_default_factory
+            or not self._data_type_renders_importable_hint(data_type)
+        ):
+            return False
+        if data_type.is_optional and data_type.type != ANY:
+            return False
+
+        match self.nullable:
+            case True:
+                result = True
+            case False:
+                result = False
+            case None if self.required:
+                result = bool(self.type_has_null)
+            case None:
+                result = bool(self.fall_back_to_nullable)
+            case _:
+                result = False  # pragma: no cover
+        return result
+
+    def _data_type_renders_importable_hint(self, data_type: DataType) -> bool:
+        if self._data_type_renders_none(data_type):
+            return False
+        return self._data_type_has_renderable_structure(data_type)
+
+    @staticmethod
+    def _data_type_has_renderable_structure(data_type: DataType) -> bool:
+        if data_type.alias or data_type.type or data_type.reference:
+            return True
+        return bool(
+            data_type.data_types
+            or data_type.dict_key
+            or data_type.literals
+            or data_type.enum_member_literals
+            or data_type.is_dict
+            or data_type.is_list
+            or data_type.is_set
+            or data_type.is_frozen_set
+            or data_type.is_mapping
+            or data_type.is_sequence
+            or data_type.is_tuple
+        )
+
+    def _data_type_renders_none(self, data_type: DataType) -> bool:
+        if any((
+            data_type.is_dict,
+            data_type.is_list,
+            data_type.is_set,
+            data_type.is_frozen_set,
+            data_type.is_mapping,
+            data_type.is_sequence,
+            data_type.is_tuple,
+        )):
+            return False
+        if data_type.alias or data_type.reference or data_type.literals or data_type.enum_member_literals:
+            return False
+        if data_type.type == NONE:
+            return not data_type.data_types
+        return len(data_type.data_types) == 1 and self._data_type_renders_none(data_type.data_types[0])
+
+    def _data_type_import_key(self, data_type: DataType) -> tuple[Any, ...]:
+        return (
+            data_type.alias,
+            data_type.type,
+            data_type.reference.path if data_type.reference else None,
+            tuple(self._data_type_import_key(child) for child in data_type.data_types),
+            self._data_type_import_key(data_type.dict_key) if data_type.dict_key else None,
+            tuple(data_type.literals),
+            tuple(data_type.enum_member_literals),
+            to_hashable(data_type.kwargs),
+            data_type.is_optional,
+            data_type.is_func,
+            data_type.is_dict,
+            data_type.is_list,
+            data_type.is_set,
+            data_type.is_frozen_set,
+            data_type.is_mapping,
+            data_type.is_sequence,
+            data_type.is_tuple,
+            data_type.use_standard_collections,
+            data_type.use_generic_container,
+            data_type.use_union_operator,
+            data_type.use_serialize_as_any,
+            data_type.discriminator,
         )
 
     def _can_skip_data_type_imports(self) -> bool:
@@ -472,16 +703,25 @@ class DataModelFieldBase(_BaseModel):
         ):
             return False
 
+        if self._reference_source_nullable_without_type_hint():
+            return True
+
         match self.nullable:
             case True:
                 return True
             case False:
                 return False
-            case None if self.required:
-                return bool(self.type_has_null)
             case None:
-                return bool(self.fall_back_to_nullable)
+                return bool(self.type_has_null) if self.required else bool(self.fall_back_to_nullable)
         return False  # pragma: no cover
+
+    def _reference_source_nullable_without_type_hint(self) -> bool:
+        """Return whether a referenced non-alias model should make this type optional."""
+        reference = self.data_type.reference
+        if reference is None:
+            return False
+        source = reference.source
+        return not getattr(source, "is_alias", False) and bool(getattr(source, "nullable", False))
 
     def _has_renderable_data_type_without_type_hint(self) -> bool:
         """Return whether this simple DataType renders to something other than None."""
@@ -489,6 +729,7 @@ class DataModelFieldBase(_BaseModel):
         return bool(
             data_type.alias
             or data_type.type
+            or data_type.reference
             or data_type.is_dict
             or data_type.is_list
             or data_type.is_set
@@ -615,6 +856,8 @@ class DataModelFieldBase(_BaseModel):
         else:
             self.data_type = new_data_type
             new_data_type.parent = self
+        if self.parent is not None:
+            self.parent.clear_imports_cache()
 
 
 def _nested_model_default_factory(field: DataModelFieldBase, model_cls: type[DataModel]) -> str | None:
@@ -798,6 +1041,7 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
     DOCSTRING_INDENT: ClassVar[int] = 4
     FIELD_DOCSTRING_INDENT: ClassVar[int] = 4
     FORMAT_DESCRIPTION_AS_DOCSTRING: ClassVar[bool] = True
+    _IMPORTS_CACHE_KEY: ClassVar[str] = "_cached_imports"
     has_forward_reference: bool = False
 
     @classmethod
@@ -953,6 +1197,7 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
             message = f"{self.class_name} is deprecated."
             self.decorators = [*self.decorators, f"@deprecated({message!r})"]
         self._additional_imports.append(Import.from_full_path("typing_extensions.deprecated"))
+        self.clear_imports_cache()
 
     def replace_children_in_models(self, models: list[DataModel], new_ref: Reference) -> None:
         """Replace reference children if their parent model is in models list."""
@@ -971,6 +1216,7 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
 
         if not base_class_list:
             self.base_classes = []
+            self.clear_imports_cache()
             return
 
         result = []
@@ -979,6 +1225,7 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
             self._additional_imports.append(base_class_import)
             result.append(BaseClassDataType.from_import(base_class_import))
         self.base_classes = result
+        self.clear_imports_cache()
 
     @cached_property
     def template_file_path(self) -> Path:
@@ -1001,10 +1248,21 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
     @property
     def imports(self) -> tuple[Import, ...]:
         """Get all imports required by this model and its fields."""
-        return chain_as_tuple(
+        # DataModel is intentionally mutable during parser post-processing. Keep
+        # this cache coarse-grained: import-affecting mutations must clear it.
+        if self._IMPORTS_CACHE_KEY in self.__dict__:
+            return self.__dict__[self._IMPORTS_CACHE_KEY]
+
+        imports = chain_as_tuple(
             (i for f in self.fields for i in f.imports),
             self._additional_imports,
         )
+        self.__dict__[self._IMPORTS_CACHE_KEY] = imports
+        return imports
+
+    def clear_imports_cache(self) -> None:
+        """Clear cached imports after import-affecting model, field, or data type mutations."""
+        self.__dict__.pop(self._IMPORTS_CACHE_KEY, None)
 
     @property
     def reference_classes(self) -> frozenset[str]:
@@ -1046,6 +1304,7 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
             self.reference.name = f"{self.reference.name.rsplit('.', 1)[0]}.{class_name}"
         else:
             self.reference.name = class_name
+        self.clear_imports_cache()
 
     @property
     def duplicate_class_name(self) -> str:
@@ -1105,6 +1364,7 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
         self.reference.path = new_path
         if "path" in self.__dict__:  # pragma: no branch
             del self.__dict__["path"]
+        self.clear_imports_cache()
 
     def render(self, *, class_name: str | None = None) -> str:
         """Render the model to a string using the template."""
