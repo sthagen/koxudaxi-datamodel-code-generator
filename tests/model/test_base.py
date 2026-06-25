@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
@@ -320,6 +321,9 @@ def test_msgspec_unset_type_hint_handles_empty_and_simple_types() -> None:
     assert _msgspec_field(DataType()).type_hint == "UnsetType"
     assert _msgspec_field(DataType(type="str")).type_hint == "Union[str, UnsetType]"
     assert _msgspec_field(DataType(type="str", is_optional=True)).type_hint == "Union[str, None, UnsetType]"
+    assert _msgspec_field(DataType(data_types=[DataType(type="str"), DataType(type="int")])).type_hint == (
+        "Union[str, int, UnsetType]"
+    )
     none_field = _msgspec_field(DataType(is_optional=True))
     assert none_field.type_hint == "Union[None, UnsetType]"
     assert none_field.imports == (IMPORT_MSGSPEC_UNSETTYPE, IMPORT_UNION, IMPORT_MSGSPEC_UNSET)
@@ -328,8 +332,16 @@ def test_msgspec_unset_type_hint_handles_empty_and_simple_types() -> None:
 def test_msgspec_unset_import_is_limited_to_struct_fields() -> None:
     """Test msgspec UNSET value imports match Struct-only field emission."""
     field = MsgspecDataModelField(name="value", data_type=DataType(type="str"), required=False)
+    annotated_field = MsgspecDataModelField(
+        name="value",
+        data_type=DataType(type="str"),
+        required=False,
+        extras={"max_length": 5},
+        use_annotated=True,
+    )
 
     assert IMPORT_MSGSPEC_UNSET not in field.imports
+    assert IMPORT_MSGSPEC_UNSET not in annotated_field.imports
 
 
 def test_msgspec_data_type_copy_preserves_structural_children() -> None:
@@ -352,23 +364,41 @@ def test_msgspec_data_type_copy_preserves_structural_children() -> None:
     assert copied.kwargs == {"strict": True}
 
 
-def test_msgspec_annotated_unset_keeps_optional_inside_annotated() -> None:
-    """Test msgspec Annotated fields keep Optional inside the Annotated branch."""
+def test_msgspec_annotated_unset_keeps_none_outside_annotated() -> None:
+    """Test msgspec Annotated fields keep None outside the Annotated branch."""
     field = _msgspec_field(
         DataType(type="str", is_optional=True),
         extras={"max_length": 5},
         use_annotated=True,
     )
 
-    assert field.annotated == "Union[Annotated[Optional[str], Meta(max_length=5)], UnsetType]"
+    assert field.annotated == "Union[Annotated[str, Meta(max_length=5)], None, UnsetType]"
     assert field.needs_annotated_import is True
     assert field.imports == (
-        IMPORT_OPTIONAL,
         IMPORT_MSGSPEC_UNSETTYPE,
         IMPORT_UNION,
         IMPORT_ANNOTATED,
         IMPORT_MSGSPEC_META,
         IMPORT_MSGSPEC_UNSET,
+    )
+
+
+def test_msgspec_required_annotated_nullable_keeps_none_outside_annotated() -> None:
+    """Test required msgspec Annotated nullable fields keep None outside Annotated."""
+    field = MsgspecDataModelField(
+        name="value",
+        data_type=DataType(type="str", is_optional=True),
+        required=True,
+        extras={"max_length": 5},
+        use_annotated=True,
+    )
+    MsgspecStruct(fields=[field], reference=Reference(path="Model", original_name="Model", name="Model"))
+
+    assert field.annotated == "Union[Annotated[str, Meta(max_length=5)], None]"
+    assert field.imports == (
+        IMPORT_UNION,
+        IMPORT_ANNOTATED,
+        IMPORT_MSGSPEC_META,
     )
 
 
@@ -707,6 +737,7 @@ def test_field_import_fast_path_collects_nullable_reference_import() -> None:
     field = DataModelFieldBase(name="user", data_type=DataType(reference=reference), required=True)
 
     assert field.imports == (IMPORT_OPTIONAL,)
+    assert field.data_type.is_optional is False
 
 
 def test_field_import_fast_path_ignores_nullable_alias_reference() -> None:
@@ -811,6 +842,88 @@ def test_field_import_fallback_collects_nullable_reference_in_union() -> None:
     )
 
     assert field.imports == (IMPORT_OPTIONAL, IMPORT_UNION)
+
+
+def test_field_import_cache_normalizes_union_on_cache_hit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test cached import lookup still applies union Optional side effects."""
+    DataModelFieldBase._field_imports_cache.clear()
+    try:
+        primed_field = DataModelFieldBase(
+            name="a",
+            data_type=DataType(data_types=[DataType(type="str"), DataType(type=NONE)]),
+            required=True,
+        )
+
+        assert primed_field.imports == (IMPORT_OPTIONAL,)
+        assert primed_field.data_type.is_optional is True
+
+        uncached = Mock(side_effect=AssertionError("unexpected uncached import collection"))
+        monkeypatch.setattr(DataModelFieldBase, "_collect_field_imports_uncached", uncached)
+        cached_field = DataModelFieldBase(
+            name="a",
+            data_type=DataType(data_types=[DataType(type="str"), DataType(type=NONE)]),
+            required=True,
+        )
+
+        assert cached_field.data_type.is_optional is False
+        assert cached_field.imports == (IMPORT_OPTIONAL,)
+        assert cached_field.data_type.is_optional is True
+        uncached.assert_not_called()
+    finally:
+        DataModelFieldBase._field_imports_cache.clear()
+
+
+def test_field_import_cache_normalizes_nullable_reference_on_cache_hit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test cached import lookup still applies reference nullable side effects."""
+    DataModelFieldBase._field_imports_cache.clear()
+    try:
+        primed_reference = Reference(path="#/definitions/User", name="User")
+        primed_reference.source = ReferenceSource(nullable=True)
+        primed_field = DataModelFieldBase(
+            name="user",
+            data_type=DataType(data_types=[DataType(reference=primed_reference), DataType(type="int")]),
+            required=True,
+        )
+
+        assert primed_field.imports == (IMPORT_OPTIONAL, IMPORT_UNION)
+        assert primed_field.data_type.data_types[0].is_optional is True
+
+        uncached = Mock(side_effect=AssertionError("unexpected uncached import collection"))
+        monkeypatch.setattr(DataModelFieldBase, "_collect_field_imports_uncached", uncached)
+        cached_reference = Reference(path="#/definitions/User", name="User")
+        cached_reference.source = ReferenceSource(nullable=True)
+        cached_field = DataModelFieldBase(
+            name="user",
+            data_type=DataType(data_types=[DataType(reference=cached_reference), DataType(type="int")]),
+            required=True,
+        )
+
+        assert cached_field.data_type.data_types[0].is_optional is False
+        assert cached_field.imports == (IMPORT_OPTIONAL, IMPORT_UNION)
+        assert cached_field.data_type.data_types[0].is_optional is True
+        uncached.assert_not_called()
+    finally:
+        DataModelFieldBase._field_imports_cache.clear()
+
+
+def test_field_import_cache_evicts_oldest_entry() -> None:
+    """Test the bounded field imports cache evicts the oldest entry."""
+    DataModelFieldBase._field_imports_cache.clear()
+    original_max_size = DataModelFieldBase._FIELD_IMPORTS_CACHE_MAX_SIZE
+    try:
+        DataModelFieldBase._FIELD_IMPORTS_CACHE_MAX_SIZE = 1
+        field = DataModelFieldBase(name="a", data_type=DataType(type="str"), required=True)
+        first_key: tuple[Any, ...] = ("first",)
+        second_key: tuple[Any, ...] = ("second",)
+
+        field._set_cached_field_imports(first_key, ())
+        field._set_cached_field_imports(second_key, (IMPORT_OPTIONAL,))
+
+        assert first_key not in DataModelFieldBase._field_imports_cache
+        assert DataModelFieldBase._field_imports_cache[second_key] == (IMPORT_OPTIONAL,)
+    finally:
+        DataModelFieldBase._FIELD_IMPORTS_CACHE_MAX_SIZE = original_max_size
+        DataModelFieldBase._field_imports_cache.clear()
 
 
 @pytest.mark.parametrize(
