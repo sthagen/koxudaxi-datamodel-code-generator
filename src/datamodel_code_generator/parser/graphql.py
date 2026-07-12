@@ -48,9 +48,9 @@ if TYPE_CHECKING:
 # graphql-core >=3.2.7 removed TypeResolvers in favor of TypeFields.kind.
 # Normalize to a single callable for resolving type kinds.
 try:  # graphql-core < 3.2.7
-    graphql_resolver_kind = graphql.type.introspection.TypeResolvers().kind  # ty: ignore
+    graphql_resolver_kind = graphql.type.introspection.TypeResolvers().kind  # ty: ignore[unresolved-attribute]
 except AttributeError:
-    graphql_resolver_kind = graphql.type.introspection.TypeFields.kind  # ty: ignore
+    graphql_resolver_kind = graphql.type.introspection.TypeFields.kind
 
 
 def build_graphql_schema(schema_str: str) -> graphql.GraphQLSchema:
@@ -156,6 +156,7 @@ class GraphQLParser(Parser["GraphQLParserConfig", "JsonSchemaFeatures"]):
             use_default_kwarg=self.use_default_kwarg,
             has_default=True,
             use_serialization_alias=self.use_serialization_alias,
+            **self._data_model_field_common_kwargs(),
         )
 
     def _get_default(  # noqa: PLR6301
@@ -178,7 +179,7 @@ class GraphQLParser(Parser["GraphQLParserConfig", "JsonSchemaFeatures"]):
         """Return whether a GraphQL input field defines a schema default."""
         return isinstance(field, graphql.GraphQLInputField) and field.default_value != graphql.pyutils.Undefined
 
-    def parse_scalar(self, scalar_graphql_object: graphql.GraphQLScalarType) -> None:  # ty: ignore
+    def parse_scalar(self, scalar_graphql_object: graphql.GraphQLScalarType) -> None:
         """Parse a GraphQL scalar type and add it to results."""
         self.generation_store.register_model(
             self.data_model_scalar_type(
@@ -198,7 +199,7 @@ class GraphQLParser(Parser["GraphQLParserConfig", "JsonSchemaFeatures"]):
             return len(obj.values) == 1
         return False
 
-    def parse_enum(self, enum_object: graphql.GraphQLEnumType) -> None:  # ty: ignore
+    def parse_enum(self, enum_object: graphql.GraphQLEnumType) -> None:
         """Parse a GraphQL enum type and add it to results."""
         if self.ignore_enum_constraints:
             return self.parse_enum_as_str_type(enum_object)
@@ -216,6 +217,7 @@ class GraphQLParser(Parser["GraphQLParserConfig", "JsonSchemaFeatures"]):
                 self.data_model_field_type(
                     required=True,
                     data_type=data_type,
+                    **self._data_model_field_common_kwargs(),
                 )
             ],
             custom_base_class=self._resolve_base_class(enum_object.name),
@@ -236,6 +238,7 @@ class GraphQLParser(Parser["GraphQLParserConfig", "JsonSchemaFeatures"]):
                 self.data_model_field_type(
                     required=True,
                     data_type=data_type,
+                    **self._data_model_field_common_kwargs(),
                 )
             ],
             custom_base_class=self._resolve_base_class(enum_object.name),
@@ -271,6 +274,7 @@ class GraphQLParser(Parser["GraphQLParserConfig", "JsonSchemaFeatures"]):
                     has_default=True,
                     use_field_description=value.description is not None,
                     original_name=None,
+                    **self._data_model_field_common_kwargs(),
                 )
             )
 
@@ -388,6 +392,7 @@ class GraphQLParser(Parser["GraphQLParserConfig", "JsonSchemaFeatures"]):
             has_default=effective_has_default,
             use_serialization_alias=self.use_serialization_alias,
             use_default_with_required=use_default_with_required,
+            **self._data_model_field_common_kwargs(),
         )
 
     def parse_object_like(
@@ -417,7 +422,7 @@ class GraphQLParser(Parser["GraphQLParserConfig", "JsonSchemaFeatures"]):
 
         base_classes = []
         if hasattr(obj, "interfaces"):
-            base_classes = [self.references[i.name] for i in obj.interfaces]  # ty: ignore
+            base_classes = [self.references[i.name] for i in obj.interfaces]  # ty: ignore[not-iterable]
 
         data_model_type = self._create_data_model(
             reference=self.references[obj.name],
@@ -434,22 +439,26 @@ class GraphQLParser(Parser["GraphQLParserConfig", "JsonSchemaFeatures"]):
         )
         self.generation_store.register_model(data_model_type)
 
-    def parse_interface(self, interface_graphql_object: graphql.GraphQLInterfaceType) -> None:  # ty: ignore
+    def parse_interface(self, interface_graphql_object: graphql.GraphQLInterfaceType) -> None:
         """Parse a GraphQL interface type and add it to results."""
         self.parse_object_like(interface_graphql_object)
 
-    def parse_object(self, graphql_object: graphql.GraphQLObjectType) -> None:  # ty: ignore
+    def parse_object(self, graphql_object: graphql.GraphQLObjectType) -> None:
         """Parse a GraphQL object type and add it to results."""
         self.parse_object_like(graphql_object)
 
-    def parse_input_object(self, input_graphql_object: graphql.GraphQLInputObjectType) -> None:  # ty: ignore
+    def parse_input_object(self, input_graphql_object: graphql.GraphQLInputObjectType) -> None:
         """Parse a GraphQL input object type and add it to results."""
         self.parse_object_like(input_graphql_object)
 
-    def parse_union(self, union_object: graphql.GraphQLUnionType) -> None:  # ty: ignore
+    def parse_union(self, union_object: graphql.GraphQLUnionType) -> None:
         """Parse a GraphQL union type and add it to results."""
         fields = [
-            self.data_model_field_type(name=self.references[type_.name].name, data_type=DataType())
+            self.data_model_field_type(
+                name=self.references[type_.name].name,
+                data_type=DataType(),
+                **self._data_model_field_common_kwargs(),
+            )
             for type_ in union_object.types
         ]
         data_model_type = self.data_model_union_type(
@@ -496,4 +505,4 @@ class GraphQLParser(Parser["GraphQLParserConfig", "JsonSchemaFeatures"]):
         for next_type in self.parse_order:
             for obj in self.support_graphql_types[next_type]:
                 parser_ = mapper_from_graphql_type_to_parser_method[next_type]
-                parser_(obj)  # ty: ignore
+                parser_(obj)  # ty: ignore[invalid-argument-type]

@@ -34,6 +34,7 @@ from datamodel_code_generator.enums import (
     OpenAPIScope,
     ReadOnlyWriteOnlyModelType,
     ReuseScope,
+    SchemaValidatorType,
     StrictTypes,
     TargetPydanticVersion,
     UnionMode,
@@ -245,12 +246,12 @@ base_options.add_argument(
 base_options.add_argument(
     "--input-model",
     action="append",
-    help="Python import path to a Pydantic v2 model or schema dict "
-    "(e.g., 'mypackage.module:ClassName' or 'mypackage.schemas:SCHEMA_DICT'). "
+    help="Python import path or file path to a Pydantic v2 model or schema dict "
+    "(e.g., 'mypackage.module:ClassName', './models.py:ClassName', or 'mypackage.schemas:SCHEMA_DICT'). "
     "Can be specified multiple times for related models with inheritance. "
     "For dict input, --input-file-type is required. "
     "Cannot be used with --input or --url.",
-    metavar="MODULE:NAME",
+    metavar="MODULE_OR_PATH:NAME",
 )
 base_options.add_argument(
     "--input-model-ref-strategy",
@@ -451,7 +452,8 @@ model_options.add_argument(
     "--target-pydantic-version",
     help="Target Pydantic version for generated code. "
     "'2': Pydantic 2.0+ compatible (default, uses populate_by_name). "
-    "'2.11': Pydantic 2.11+ (uses validate_by_name).",
+    "'2.11': Pydantic 2.11+ (uses validate_by_name). "
+    "'2.12': Pydantic 2.12+ (supports MISSING sentinel).",
     choices=[v.value for v in TargetPydanticVersion],
     default=None,
 )
@@ -889,6 +891,12 @@ field_options.add_argument(
     default=None,
 )
 field_options.add_argument(
+    "--use-missing-sentinel",
+    help="Use pydantic.experimental.missing_sentinel.MISSING for optional fields without defaults (Pydantic v2.12+).",
+    action="store_true",
+    default=None,
+)
+field_options.add_argument(
     "--use-field-description",
     help="Use schema description to populate field docstring",
     action="store_true",
@@ -1033,6 +1041,26 @@ template_options.add_argument(
     "Defines field validators for Pydantic v2 models. "
     "Keys are model names, values contain validator definitions with field, function, and mode.",
     type=str,
+)
+template_options.add_argument(
+    "--generate-schema-validators",
+    help="Generate Pydantic v2 model validators for JSON Schema rules that cannot be represented as type hints "
+    "(experimental).",
+    action="store_true",
+    default=None,
+)
+template_options.add_argument(
+    "--schema-validator-type",
+    help="Select the schema-derived runtime validator backend. "
+    "'pydantic-v2' generates Pydantic v2 model validators (experimental).",
+    choices=[i.value for i in SchemaValidatorType],
+    default=None,
+)
+template_options.add_argument(
+    "--schema-validator-base-class-name",
+    help="Set the generated shared Pydantic v2 schema runtime validator base class name.",
+    type=str,
+    default=None,
 )
 template_options.add_argument(
     "--use-type-checking-imports",

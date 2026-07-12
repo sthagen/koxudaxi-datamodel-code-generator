@@ -26,6 +26,8 @@ from .payload_validation import (
     PYDANTIC_V2_FULL_PAYLOAD_RUNTIME_MIN_VERSION,
     PYDANTIC_V2_LEGACY_RUNTIME_EXCLUDED_CASES,
     PYDANTIC_V2_LEGACY_RUNTIME_ROUND_TRIP_EXCLUDED_CASES,
+    PYDANTIC_V2_MISSING_SENTINEL_RUNTIME_EXCLUDED_CASES,
+    PYDANTIC_V2_MISSING_SENTINEL_RUNTIME_MIN_VERSION,
     ROUND_TRIP_EXCLUDED_CASES,
     SCHEMA_CASES,
     GeneratedModelCache,
@@ -43,6 +45,7 @@ from .payload_validation import (
     source_schema_validator,
     validate_with_source_schema,
 )
+from .payload_validation import codegen as payload_codegen
 
 
 def _max_examples_from_env(raw_examples: str | None = None) -> int:
@@ -82,15 +85,18 @@ BACKEND_CASE_MODE = _backend_case_mode_from_env()
 PYDANTIC_RUNTIME_VERSION = Version(PYDANTIC_VERSION)
 PYDANTIC_V2_FULL_PAYLOAD_RUNTIME_MIN = Version(PYDANTIC_V2_FULL_PAYLOAD_RUNTIME_MIN_VERSION)
 PYDANTIC_V2_0_RUNTIME_MAX = Version(PYDANTIC_V2_0_RUNTIME_MAX_VERSION)
+PYDANTIC_V2_MISSING_SENTINEL_RUNTIME_MIN = Version(PYDANTIC_V2_MISSING_SENTINEL_RUNTIME_MIN_VERSION)
 PydanticV2LegacyRuntimeExclusions: TypeAlias = Mapping[PayloadBackend, Mapping[str, str]]
 PydanticV2LegacyRuntimeExclusionGroups: TypeAlias = Sequence[tuple[Version, PydanticV2LegacyRuntimeExclusions]]
 PYDANTIC_V2_LEGACY_RUNTIME_EXCLUSION_GROUPS: PydanticV2LegacyRuntimeExclusionGroups = (
     (PYDANTIC_V2_FULL_PAYLOAD_RUNTIME_MIN, PYDANTIC_V2_LEGACY_RUNTIME_EXCLUDED_CASES),
+    (PYDANTIC_V2_MISSING_SENTINEL_RUNTIME_MIN, PYDANTIC_V2_MISSING_SENTINEL_RUNTIME_EXCLUDED_CASES),
 )
 PYDANTIC_V2_LEGACY_RUNTIME_ROUND_TRIP_EXCLUSION_GROUPS: PydanticV2LegacyRuntimeExclusionGroups = (
     (PYDANTIC_V2_FULL_PAYLOAD_RUNTIME_MIN, PYDANTIC_V2_LEGACY_RUNTIME_EXCLUDED_CASES),
     (PYDANTIC_V2_0_RUNTIME_MAX, PYDANTIC_V2_0_RUNTIME_ROUND_TRIP_EXCLUDED_CASES),
     (PYDANTIC_V2_FULL_PAYLOAD_RUNTIME_MIN, PYDANTIC_V2_LEGACY_RUNTIME_ROUND_TRIP_EXCLUDED_CASES),
+    (PYDANTIC_V2_MISSING_SENTINEL_RUNTIME_MIN, PYDANTIC_V2_MISSING_SENTINEL_RUNTIME_EXCLUDED_CASES),
 )
 REJECTION_ORACLE_CASES = [case for case in SCHEMA_CASES if has_rejection_oracle_constraints(case)]
 SCHEMA_CASE_BY_ID = {case.id: case for case in SCHEMA_CASES}
@@ -424,6 +430,29 @@ def test_msgspec_schema_runtime_exclusions_detect_untyped_fractional_multiple_of
 
     assert backend_acceptance_exclusion_reason(case, PayloadBackend.MSGSPEC)
     assert backend_rejection_exclusion_reason(case, PayloadBackend.MSGSPEC)
+
+
+@pytest.mark.allow_direct_assert
+def test_payload_codegen_restores_parsed_source_cache_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Payload codegen restores the parsed-source cache hook after generation failures."""
+    events: list[str] = []
+
+    def enable_cache() -> Any:
+        events.append("enable")
+        return lambda: events.append("restore")
+
+    def fail_codegen(_args: list[str]) -> payload_codegen.Exit:
+        events.append("main")
+        msg = "generation failed"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(payload_codegen, "enable_parsed_source_cache", enable_cache)
+    monkeypatch.setattr(payload_codegen, "main", fail_codegen)
+
+    with pytest.raises(RuntimeError, match="generation failed"):
+        payload_codegen._run_payload_codegen([])
+
+    assert events == ["enable", "main", "restore"]
 
 
 def test_payload_round_trip_exclusions_are_classified() -> None:

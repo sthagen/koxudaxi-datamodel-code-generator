@@ -1,5 +1,7 @@
 # 📘 OpenAPI-only Options
 
+This generated reference lists every OpenAPI-only CLI flag and its tested examples. For a workflow-oriented guide, see [OpenAPI Options](../openapi-options.md). For input format basics, see [Generate from OpenAPI](../openapi.md).
+
 ## 📋 Options
 
 | Option | Description |
@@ -15,6 +17,22 @@
 
 ---
 
+## 🍳 Recipes
+
+### Generate operation-focused models
+
+Limit OpenAPI output to operation shapes and name models from operation IDs and status codes.
+
+**Options:** [`--openapi-scopes`](#openapi-scopes), [`--use-operation-id-as-name`](#use-operation-id-as-name), [`--use-status-code-in-response-name`](#use-status-code-in-response-name)
+
+### Trim an OpenAPI build
+
+Restrict generation to selected paths while preserving parameter and info-version context.
+
+**Options:** [`--openapi-include-paths`](#openapi-include-paths), [`--include-path-parameters`](#include-path-parameters), [`--openapi-include-info-version`](#openapi-include-info-version)
+
+---
+
 ## `--include-path-parameters` {#include-path-parameters}
 
 Include OpenAPI path parameters in generated parameter models.
@@ -24,7 +42,7 @@ to the generated request parameter models. By default, only query parameters
 are included. Use this with `--openapi-scopes parameters` to generate parameter
 models that include both path and query parameters.
 
-**See also:** [OpenAPI-Specific Options](../openapi-options.md)
+**See also:** [OpenAPI Options](../openapi-options.md)
 
 !!! tip "Usage"
 
@@ -813,7 +831,7 @@ Specify OpenAPI scopes to generate (schemas, paths, parameters).
 
 The `--openapi-scopes` flag configures the code generation behavior.
 
-**See also:** [OpenAPI-Specific Options](../openapi-options.md)
+**See also:** [OpenAPI Options](../openapi-options.md)
 
 !!! tip "Usage"
 
@@ -1273,7 +1291,7 @@ properties are generated. The 'request-response' mode creates separate Request a
 variants for each schema that contains readOnly or writeOnly fields, allowing proper type
 validation for API requests and responses without a shared base model.
 
-**See also:** [OpenAPI-Specific Options](../openapi-options.md)
+**See also:** [OpenAPI Options](../openapi-options.md)
 
 !!! tip "Usage"
 
@@ -1351,7 +1369,7 @@ Use OpenAPI operationId as the generated function/class name.
 
 The `--use-operation-id-as-name` flag configures the code generation behavior.
 
-**See also:** [OpenAPI-Specific Options](../openapi-options.md)
+**See also:** [OpenAPI Options](../openapi-options.md)
 
 !!! tip "Usage"
 
@@ -1725,7 +1743,7 @@ The `--validation` flag configures the code generation behavior.
 
 **Deprecated:** The `--validation` option is deprecated and will be removed in a future release. Use --field-constraints instead.
 
-**See also:** [Field Constraints](../field-constraints.md), [OpenAPI-Specific Options](../openapi-options.md)
+**See also:** [OpenAPI Options](../openapi-options.md)
 
 !!! tip "Usage"
 

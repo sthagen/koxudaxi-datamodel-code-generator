@@ -23,6 +23,7 @@ from datamodel_code_generator import (
     InputFileType,
     OpenAPIScope,
     PythonVersionMin,
+    ReadOnlyWriteOnlyModelType,
     chdir,
     generate,
     get_version,
@@ -41,6 +42,7 @@ from tests.conftest import (
     assert_directory_content,
     assert_error_message,
     assert_httpx_get_kwargs,
+    assert_output,
     assert_warnings_contain,
     freeze_time,
 )
@@ -53,6 +55,7 @@ from tests.main.conftest import (
     MSGSPEC_LEGACY_BLACK_SKIP,
     OPEN_API_DATA_PATH,
     TIMESTAMP,
+    assert_generated_model_json_validation,
     run_generate_file_and_assert,
     run_main_and_assert,
     run_main_url_and_assert,
@@ -942,7 +945,8 @@ def test_pyproject(tmp_path: Path) -> None:
     output_file: Path = tmp_path / "output.py"
     pyproject_toml_path = Path(DATA_PATH) / "project" / "pyproject.toml"
     pyproject_toml = (
-        pyproject_toml_path.read_text()
+        pyproject_toml_path
+        .read_text()
         .replace("INPUT_PATH", get_path(OPEN_API_DATA_PATH / "api.yaml"))
         .replace("OUTPUT_PATH", get_path(output_file))
         .replace("ALIASES_PATH", get_path(OPEN_API_DATA_PATH / "empty_aliases.json"))
@@ -1426,6 +1430,47 @@ def test_enable_command_header(output_file: Path) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("header_args", "expected_visible"),
+    [
+        (["--http-headers", "Authorization: Bearer secret-token"], None),
+        (["--http-headers=Authorization: Bearer secret-token"], None),
+        (["--http-headers", "Authorization: Bearer secret-token", "--encoding", "utf-8"], "utf-8"),
+        (["--http-query-parameters", "api_key=secret-token"], None),
+        (["--http-query-parameters=api_key=secret-token"], None),
+    ],
+)
+def test_enable_command_header_redacts_http_headers(
+    output_file: Path, header_args: list[str], expected_visible: str | None
+) -> None:
+    """Redact sensitive HTTP headers from reproducibility command headers."""
+
+    def normalize_command(s: str) -> str:
+        return re.sub(r"#   command:   datamodel-codegen .*", "#   command:   datamodel-codegen [COMMAND]", s)
+
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "api.yaml",
+        output_path=output_file,
+        input_file_type=None,
+        assert_func=assert_file_content,
+        expected_file="enable_command_header.py",
+        extra_args=["--enable-command-header", *header_args],
+        transform=normalize_command,
+    )
+    content = output_file.read_text(encoding="utf-8")
+    command_line = next(line for line in content.splitlines() if line.startswith("#   command:"))
+    following_option_preserved = expected_visible is None or expected_visible in command_line
+    assert_output(
+        "\n".join([
+            f"redacted={'yes' if '<redacted>' in command_line else 'no'}",
+            f"secret_absent={'yes' if 'secret-token' not in command_line else 'no'}",
+            f"following_option_preserved={'yes' if following_option_preserved else 'no'}",
+        ])
+        + "\n",
+        EXPECTED_OPENAPI_PATH / "enable_command_header_redacts_http_headers.txt",
+    )
+
+
 @pytest.mark.skipif(
     black.__version__.split(".")[0] == "19",
     reason="Installed black doesn't support the old style",
@@ -1906,6 +1951,27 @@ def test_main_openapi_nullable(output_file: Path) -> None:
         input_file_type="openapi",
         assert_func=assert_file_content,
         expected_file="nullable.py",
+    )
+
+
+def test_main_openapi_use_missing_sentinel_nullable_keyword(output_file: Path) -> None:
+    """Test --use-missing-sentinel preserves OpenAPI nullable keyword fields."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "missing_sentinel_nullable.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file="missing_sentinel_nullable.py",
+        extra_args=["--output-model-type", "pydantic_v2.BaseModel", "--use-missing-sentinel"],
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="missing_sentinel_nullable",
+        model_name="MissingSentinelNullable",
+        valid_json='{"requiredNullable": null, "nullableUnrequired": null}',
+        invalid_json='{"requiredNullable": {}}',
+        expected_error_type="int_type",
+        expected_attribute_path=("nullableUnrequired",),
     )
 
 
@@ -4805,6 +4871,52 @@ def test_main_openapi_read_only_write_only_ref(output_file: Path) -> None:
             "--read-only-write-only-model-type",
             "all",
         ],
+    )
+
+
+def test_main_openapi_read_only_write_only_allof_property_ref_runtime(output_file: Path) -> None:
+    """Validate allOf readOnly/writeOnly generation when object properties contain refs."""
+    generate(
+        input_={
+            "openapi": "3.0.0",
+            "info": {"title": "Read Only Write Only AllOf Ref Runtime API", "version": "1.0"},
+            "paths": {},
+            "components": {
+                "schemas": {
+                    "Base": {
+                        "type": "object",
+                        "properties": {"base": {"type": "string"}},
+                    },
+                    "Child": {
+                        "type": "object",
+                        "properties": {"value": {"type": "string"}},
+                    },
+                    "Parent": {
+                        "type": "object",
+                        "allOf": [{"$ref": "#/components/schemas/Base"}],
+                        "properties": {
+                            "child": {"$ref": "#/components/schemas/Child"},
+                            "extra": {"type": "string", "writeOnly": True},
+                        },
+                    },
+                }
+            },
+        },
+        input_file_type=InputFileType.OpenAPI,
+        output=output_file,
+        output_model_type=DataModelType.PydanticV2BaseModel,
+        read_only_write_only_model_type=ReadOnlyWriteOnlyModelType.All,
+        disable_timestamp=True,
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="output_read_only_write_only_allof_property_ref_runtime",
+        model_name="Parent",
+        valid_json='{"base":"b","child":{"value":"x"},"extra":"secret"}',
+        invalid_json='{"base":"b","child":{"value":1}}',
+        expected_error_type="string_type",
+        expected_attribute_path=("child", "value"),
+        expected_attribute_value="x",
     )
 
 

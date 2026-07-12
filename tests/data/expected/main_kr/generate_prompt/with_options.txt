@@ -20,7 +20,7 @@ What other options should I use?
 - `--external-ref-mapping`: Map external `$ref` files to Python packages.
 - `--input`: Specify the input schema file path.
 - `--input-file-type`: Specify the input file type for code generation.
-- `--input-model`: Import a Python type or dict schema from a module.
+- `--input-model`: Import a Python type or dict schema from a module or Python file.
 - `--input-model-ref-strategy`: Strategy for referenced types when using --input-model.
 - `--output`: Specify the destination path for generated Python code.
 - `--preset`: Apply an immutable built-in option preset.
@@ -135,6 +135,7 @@ What other options should I use?
 - `--use-default-kwarg`: Use default= keyword argument instead of positional argument for fields with defaults.
 - `--use-frozen-field`: Generate frozen (immutable) field definitions for readOnly properties.
 - `--use-generic-base-class`: Generate a shared base class with model configuration to avoid repetition (DRY).
+- `--use-missing-sentinel`: Use Pydantic's MISSING sentinel for optional fields without defaults.
 - `--use-one-literal-as-default`: Use single literal value as default when enum has only one option.
 - `--use-root-model-sequence-interface`: Make non-null sequence-like Pydantic v2 RootModel classes implement col...
 - `--use-serialize-as-any`: Wrap fields with subtypes in Pydantic's SerializeAsAny.
@@ -155,8 +156,11 @@ What other options should I use?
 - `--enable-version-header`: Include tool version information in file header.
 - `--extra-template-data`: Pass custom template variables via inline JSON or a JSON file path.
 - `--formatters`: Specify code formatters to apply to generated output.
+- `--generate-schema-validators`: Generate experimental Pydantic v2 model validators for JSON Schema runtime rules.
 - `--no-treat-dot-as-module`: Keep dots in schema names as underscores for flat output.
 - `--no-use-type-checking-imports`: Keep generated model imports available at runtime when using Ruff fixes.
+- `--schema-validator-base-class-name`: Set the generated shared Pydantic v2 schema runtime validator base class...
+- `--schema-validator-type`: Select the schema-derived runtime validator backend.
 - `--use-double-quotes`: Use double quotes for string literals in generated code.
 - `--use-exact-imports`: Import exact types instead of modules.
 - `--use-type-checking-imports`: Allow Ruff to move typing-only imports into TYPE_CHECKING blocks.
@@ -274,9 +278,10 @@ For detailed usage, see: https://datamodel-code-generator.koxudaxi.dev
                         'xmlschema', 'protobuf', or 'avro' for schema
                         definitions. Use 'json', 'yaml', or 'csv' for raw
                         sample data to infer a schema automatically.
-  --input-model MODULE:NAME
-                        Python import path to a Pydantic v2 model or schema
-                        dict (e.g., 'mypackage.module:ClassName' or
+  --input-model MODULE_OR_PATH:NAME
+                        Python import path or file path to a Pydantic v2 model
+                        or schema dict (e.g., 'mypackage.module:ClassName',
+                        './models.py:ClassName', or
                         'mypackage.schemas:SCHEMA_DICT'). Can be specified
                         multiple times for related models with inheritance.
                         For dict input, --input-file-type is required. Cannot
@@ -493,6 +498,9 @@ For detailed usage, see: https://datamodel-code-generator.koxudaxi.dev
   --use-inline-field-description
                         Use schema description to populate field docstring as
                         inline docstring
+  --use-missing-sentinel
+                        Use pydantic.experimental.missing_sentinel.MISSING for
+                        optional fields without defaults (Pydantic v2.12+).
   --use-serialization-alias
                         Use serialization_alias instead of alias for field
                         aliasing (Pydantic v2 only). This allows setting
@@ -631,11 +639,12 @@ For detailed usage, see: https://datamodel-code-generator.koxudaxi.dev
                         (default: "shared"). Use this option if your schema
                         has a file named "shared".
   --skip-root-model     Skip generating the model for the root schema element
-  --target-pydantic-version {2,2.11}
+  --target-pydantic-version {2,2.11,2.12}
                         Target Pydantic version for generated code. '2':
                         Pydantic 2.0+ compatible (default, uses
                         populate_by_name). '2.11': Pydantic 2.11+ (uses
-                        validate_by_name).
+                        validate_by_name). '2.12': Pydantic 2.12+ (supports
+                        MISSING sentinel).
   --target-python-version {3.10,3.11,3.12,3.13,3.14}
                         target python version
   --treat-dot-as-module, --no-treat-dot-as-module
@@ -706,6 +715,17 @@ For detailed usage, see: https://datamodel-code-generator.koxudaxi.dev
                         another input file type (e.g. GraphQL), the key is the
                         name of the object. The value is a dictionary of the
                         template data to add.
+  --generate-schema-validators
+                        Generate Pydantic v2 model validators for JSON Schema
+                        rules that cannot be represented as type hints
+                        (experimental).
+  --schema-validator-base-class-name SCHEMA_VALIDATOR_BASE_CLASS_NAME
+                        Set the generated shared Pydantic v2 schema runtime
+                        validator base class name.
+  --schema-validator-type {pydantic-v2}
+                        Select the schema-derived runtime validator backend.
+                        'pydantic-v2' generates Pydantic v2 model validators
+                        (experimental).
   --use-double-quotes   Model generated with double quotes. Single quotes or
                         your black config skip_string_normalization value will
                         be used without this option.

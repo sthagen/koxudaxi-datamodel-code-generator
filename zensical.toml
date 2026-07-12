@@ -8,35 +8,15 @@ copyright = 'Maintained by <a href="https://koxudaxi.dev/?utm_source=dm_docs&utm
 
 nav = [
   { "Overview" = "index.md" },
+  { "Getting Started" = "getting-started.md" },
   { "Presets" = "presets.md" },
   { "Playground" = "playground.md" },
-  { "CLI Reference" = [
-    { "Overview" = "cli-reference/index.md" },
-    { "Base Options" = "cli-reference/base-options.md" },
-    { "Model Customization" = "cli-reference/model-customization.md" },
-    { "Field Customization" = "cli-reference/field-customization.md" },
-    { "Typing Customization" = "cli-reference/typing-customization.md" },
-    { "Template Customization" = "cli-reference/template-customization.md" },
-    { "OpenAPI Options" = "cli-reference/openapi-only-options.md" },
-    { "GraphQL Options" = "cli-reference/graphql-only-options.md" },
-    { "General Options" = "cli-reference/general-options.md" },
-    { "Utility Options" = "cli-reference/utility-options.md" },
-    { "Quick Reference" = "cli-reference/quick-reference.md" },
-    { "Manual" = [
-      { "Help" = "cli-reference/manual/help.md" },
-      { "Version" = "cli-reference/manual/version.md" },
-      { "Debug" = "cli-reference/manual/debug.md" },
-      { "Profile" = "cli-reference/manual/profile.md" },
-      { "No Color" = "cli-reference/manual/no-color.md" },
-      { "Generate Prompt" = "cli-reference/manual/generate-prompt.md" },
-      { "List Deprecations" = "cli-reference/manual/list-deprecations.md" }
-    ]}
-  ]},
-  { "Support data types" = "supported-data-types.md" },
+  { "Supported Data Types" = "supported-data-types.md" },
   { "Schema Version Support" = "supported_formats.md" },
   { "Usage" = [
     { "Input Formats" = [
       { "OpenAPI" = "openapi.md" },
+      { "OpenAPI Options" = "openapi-options.md" },
       { "AsyncAPI" = "asyncapi.md" },
       { "JSON Schema" = "jsonschema.md" },
       { "Apache Avro" = "avro.md" },
@@ -58,7 +38,6 @@ nav = [
       { "Field Aliases" = "aliases.md" },
       { "Validators" = "validators.md" },
       { "Class Decorators" = "class-decorators.md" },
-      { "OpenAPI-Specific Options" = "openapi-options.md" }
     ]},
     { "Templates and Formatting" = [
       { "Custom Templates" = "custom_template.md" },
@@ -76,13 +55,44 @@ nav = [
       { "Coding Agent Skill" = "coding-agent-skill.md" }
     ]}
   ]},
+  { "CLI Reference" = [
+    { "Overview" = "cli-reference/index.md" },
+    { "Base Options" = "cli-reference/base-options.md" },
+    { "Model Customization" = "cli-reference/model-customization.md" },
+    { "Field Customization" = "cli-reference/field-customization.md" },
+    { "Typing Customization" = "cli-reference/typing-customization.md" },
+    { "Template Customization" = "cli-reference/template-customization.md" },
+    { "OpenAPI Options" = "cli-reference/openapi-only-options.md" },
+    { "GraphQL Options" = "cli-reference/graphql-only-options.md" },
+    { "General Options" = "cli-reference/general-options.md" },
+    { "Utility Options" = "cli-reference/utility-options.md" },
+    { "Focused Topics" = [
+      { "Model Customization" = "cli-reference/topics/model-customization.md" },
+      { "Template Customization" = "cli-reference/topics/template-customization.md" },
+      { "Typing Customization" = "cli-reference/topics/typing-customization.md" },
+      { "OpenAPI" = "cli-reference/topics/openapi.md" }
+    ]},
+    { "Quick Reference" = "cli-reference/quick-reference.md" },
+    { "Manual" = [
+      { "Help" = "cli-reference/manual/help.md" },
+      { "Version" = "cli-reference/manual/version.md" },
+      { "Debug" = "cli-reference/manual/debug.md" },
+      { "Profile" = "cli-reference/manual/profile.md" },
+      { "No Color" = "cli-reference/manual/no-color.md" },
+      { "Generate Prompt" = "cli-reference/manual/generate-prompt.md" },
+      { "List Deprecations" = "cli-reference/manual/list-deprecations.md" },
+      { "List Experimental" = "cli-reference/manual/list-experimental.md" },
+      { "Output Format" = "cli-reference/manual/output-format.md" },
+      { "Output Format JSON Schema" = "cli-reference/manual/output-format-json-schema.md" }
+    ]}
+  ]},
   { "Conformance Dashboard" = "conformance.md" },
   { "Performance Benchmarks" = "performance-benchmarks.md" },
   { "Deprecations" = "deprecations.md" },
   { "Experimental Features" = "experimental.md" },
   { "FAQ" = "faq.md" },
   { "Architecture" = "architecture.md" },
-  { "Development-Contributing" = "development-contributing.md" }
+  { "Development" = "development-contributing.md" }
 ]
 
 extra_css = [

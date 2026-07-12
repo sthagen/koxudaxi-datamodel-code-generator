@@ -1284,19 +1284,29 @@ def _get_concurrent_interpreters_module() -> Any | None:
     return interpreters
 
 
+_SUBINTERPRETER_UNSUPPORTED: list[None] = []
+
+
 def _is_subinterpreter_unsupported_import_error(exception: BaseException) -> bool:
     messages = [str(exception)]
-    excinfo = getattr(exception, "excinfo", None)
-    if excinfo is not None:
+    if (excinfo := getattr(exception, "excinfo", None)) is not None:
         messages.append(str(excinfo))
-    return any(
-        "does not support loading in subinterpreter" in message
-        or "does not support loading in subinterpreters" in message
-        for message in messages
-    )
+    for message in messages:
+        match message:
+            case str() if (
+                "does not support loading in subinterpreter" in message
+                or "does not support loading in subinterpreters" in message
+            ):
+                return True
+            case _:
+                continue
+    return False
 
 
 def _try_import_generated_output_in_subinterpreter(output_path: Path) -> bool:
+    if _SUBINTERPRETER_UNSUPPORTED:
+        return False
+
     interpreters = _get_concurrent_interpreters_module()
     if interpreters is None:
         return False
@@ -1307,6 +1317,7 @@ def _try_import_generated_output_in_subinterpreter(output_path: Path) -> bool:
     except Exception as exception:
         if _is_subinterpreter_unsupported_import_error(exception):
             # Keep import validation active when an extension dependency cannot run in subinterpreters.
+            _SUBINTERPRETER_UNSUPPORTED.append(None)
             return False
         raise
     finally:
@@ -1387,7 +1398,11 @@ def assert_generated_model_json_validation(
         if expected_attribute_path:
             actual: Any = parsed
             for attribute in expected_attribute_path:
-                actual = getattr(actual, attribute)
+                match actual:
+                    case Mapping() if attribute in actual:
+                        actual = actual[attribute]
+                    case _:
+                        actual = getattr(actual, attribute)
             if actual != expected_attribute_value:  # pragma: no cover
                 pytest.fail(
                     f"Expected {'.'.join(expected_attribute_path)} to be {expected_attribute_value!r}, got {actual!r}",

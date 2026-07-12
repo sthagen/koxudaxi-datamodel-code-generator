@@ -29,6 +29,7 @@ from datamodel_code_generator.enums import (
     OpenAPIScope,
     ReadOnlyWriteOnlyModelType,
     ReuseScope,
+    SchemaValidatorType,
     TargetPydanticVersion,
     VersionMode,
 )
@@ -90,6 +91,7 @@ _PUBLIC_MODULE_EXPORTS: dict[str, frozenset[str]] = {
         "PythonVersionMin",
         "ReadOnlyWriteOnlyModelType",
         "ReuseScope",
+        "SchemaValidatorType",
         "SchemaParseError",
         "TargetPydanticVersion",
         "VersionMode",
@@ -142,6 +144,7 @@ _PUBLIC_MODULE_EXPORTS: dict[str, frozenset[str]] = {
         "ProtobufVersion",
         "ReadOnlyWriteOnlyModelType",
         "ReuseScope",
+        "SchemaValidatorType",
         "StrictTypes",
         "TargetPydanticVersion",
         "UnionMode",
@@ -194,6 +197,54 @@ _PUBLIC_MODULE_EXPORTS: dict[str, frozenset[str]] = {
 }
 
 
+_DE_FACTO_PUBLIC_SYMBOLS: dict[str, frozenset[str]] = {
+    "datamodel_code_generator.format": frozenset({
+        "CodeFormatter",
+        "Formatter",
+        "PythonVersion",
+        "PythonVersionMin",
+    }),
+    "datamodel_code_generator.imports": frozenset({
+        "IMPORT_ANNOTATIONS",
+        "Import",
+        "Imports",
+    }),
+    "datamodel_code_generator.parser.base": frozenset({
+        "Parser",
+        "SPECIAL_PATH_FORMAT",
+        "Source",
+        "YamlValue",
+        "title_to_class_name",
+    }),
+    "datamodel_code_generator.parser.graphql": frozenset({"GraphQLParser"}),
+    "datamodel_code_generator.parser.jsonschema": frozenset({
+        "JsonSchemaObject",
+        "JsonSchemaParser",
+        "get_model_by_path",
+        "get_special_path",
+    }),
+    "datamodel_code_generator.parser.openapi": frozenset({
+        "MediaObject",
+        "OpenAPIParser",
+        "Operation",
+        "ParameterObject",
+        "RequestBodyObject",
+        "ResponseObject",
+    }),
+    "datamodel_code_generator.reference": frozenset({
+        "ModelResolver",
+        "Reference",
+        "snake_to_upper_camel",
+    }),
+    "datamodel_code_generator.types": frozenset({
+        "DataType",
+        "DataTypeManager",
+        "StrictTypes",
+        "Types",
+    }),
+}
+
+
 def _baseline_generate(
     input_: Path | str | ParseResult | Mapping[str, Any] | list[Any],
     *,
@@ -212,8 +263,11 @@ def _baseline_generate(
     additional_imports: list[str] | None = None,
     class_decorators: list[str] | None = None,
     custom_template_dir: Path | None = None,
+    schema_validator_type: SchemaValidatorType | None = None,
     extra_template_data: defaultdict[str, dict[str, Any]] | None = None,
     validators: Mapping[str, ModelValidators] | None = None,
+    generate_schema_validators: bool = False,
+    schema_validator_base_class_name: str | None = None,
     validation: bool = False,
     field_constraints: bool = False,
     alias_generator: AliasGenerator | None = None,
@@ -246,6 +300,7 @@ def _baseline_generate(
     use_inline_field_description: bool = False,
     use_single_line_docstring: bool = False,
     use_default_kwarg: bool = False,
+    use_missing_sentinel: bool = False,
     reuse_model: bool = False,
     reuse_scope: ReuseScope = ReuseScope.Module,
     shared_module_name: str = DEFAULT_SHARED_MODULE_NAME,
@@ -369,6 +424,8 @@ class _BaselineParser:
         custom_template_dir: Path | None = None,
         extra_template_data: defaultdict[str, dict[str, Any]] | None = None,
         validators: Mapping[str, ModelValidators] | None = None,
+        generate_schema_validators: bool = False,
+        schema_validator_base_class_name: str | None = None,
         target_python_version: PythonVersion = PythonVersionMin,
         dump_resolve_reference_action: Callable[[Iterable[str]], str] | None = None,
         validation: bool = False,
@@ -399,6 +456,7 @@ class _BaselineParser:
         use_inline_field_description: bool = False,
         use_single_line_docstring: bool = False,
         use_default_kwarg: bool = False,
+        use_missing_sentinel: bool = False,
         reuse_model: bool = False,
         reuse_scope: ReuseScope | None = None,
         shared_module_name: str = DEFAULT_SHARED_MODULE_NAME,
@@ -661,6 +719,15 @@ def test_public_module_all_exports_match_baseline(module_name: str, expected_exp
     assert missing_exports == [], f"{module_name}.__all__ contains non-importable names: {missing_exports}"
 
 
+@pytest.mark.parametrize(("module_name", "expected_symbols"), _DE_FACTO_PUBLIC_SYMBOLS.items())
+def test_de_facto_public_symbols_remain_importable(module_name: str, expected_symbols: frozenset[str]) -> None:
+    """Pin importable symbols used downstream without requiring module __all__ changes."""
+    module = importlib.import_module(module_name)
+    missing_symbols = sorted(name for name in expected_symbols if not hasattr(module, name))
+
+    assert missing_symbols == [], f"{module_name} no longer exposes de facto public symbols: {missing_symbols}"
+
+
 def test_generate_signature_matches_baseline() -> None:
     """Ensure generate keeps backward compatibility via GenerateConfigDict.
 
@@ -778,6 +845,47 @@ def test_pydantic_v2_compatibility_reexports_remain_importable() -> None:
     assert DataModelFieldV1 is PydanticBaseDataModelField
     assert issubclass(PydanticV2DataModelField, DataModelFieldV1)
     assert PydanticV2DataclassConstraints is PydanticV2BaseConstraints
+
+
+def test_config_models_force_rebuild_after_defer_build() -> None:
+    """Ensure deferred config model schemas can still be rebuilt at import-test time."""
+    from pydantic import BaseModel as PydanticBaseModel
+
+    from datamodel_code_generator.model.base import DataModel, DataModelFieldBase
+    from datamodel_code_generator.model.pydantic_v2 import UnionMode
+    from datamodel_code_generator.types import DataTypeManager, StrictTypes
+
+    config_module = importlib.import_module("datamodel_code_generator.config")
+    expected_model_names = {
+        "AsyncAPIParserConfig",
+        "AvroParserConfig",
+        "BaseGenerateConfig",
+        "GenerateConfig",
+        "GraphQLParserConfig",
+        "JSONSchemaParserConfig",
+        "OpenAPIParserConfig",
+        "ParseConfig",
+        "ParserConfig",
+        "ProtobufParserConfig",
+        "XMLSchemaParserConfig",
+    }
+    config_model_types = {
+        name: model_type
+        for name, model_type in inspect.getmembers(config_module, inspect.isclass)
+        if issubclass(model_type, PydanticBaseModel)
+        and model_type.__module__ in {"datamodel_code_generator.base_config", config_module.__name__}
+    }
+    rebuild_namespace = {
+        "DataModel": DataModel,
+        "DataModelFieldBase": DataModelFieldBase,
+        "DataTypeManager": DataTypeManager,
+        "StrictTypes": StrictTypes,
+        "UnionMode": UnionMode,
+    }
+
+    assert set(config_model_types) == expected_model_names
+    for model_type in config_model_types.values():
+        assert model_type.model_rebuild(force=True, _types_namespace=rebuild_namespace)
 
 
 def test_generate_config_dict_fields_match_generate_config() -> None:

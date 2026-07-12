@@ -85,6 +85,9 @@ EXCLUDED_FILES: dict[str, str] = {
 }
 EXCLUDED_CASES: dict[str, str] = {
     "jsonschema/all_of_any_of_base_class_ref.json": "hypothesis-jsonschema cannot satisfy the allOf/anyOf constraints",
+    "jsonschema/additional_properties_schema_with_allof_properties.json": (
+        "hypothesis-jsonschema cannot satisfy the allOf object constraints; typed extras are covered by e2e tests"
+    ),
     "jsonschema/decimal_fractional_constraints.json": (
         "format decimal strings from hypothesis-jsonschema are arbitrary text that Decimal cannot parse"
     ),
@@ -151,6 +154,13 @@ EXCLUDED_CASES: dict[str, str] = {
         "top-level nullable object components need a wrapper policy; nullable refs are covered via Parent"
     ),
 }
+MISSING_SENTINEL_PAYLOAD_CASE_IDS = (
+    "jsonschema/missing_sentinel_payload.json",
+    "openapi/missing_sentinel_nullable.yaml::components.schemas.MissingSentinelNullable",
+)
+PAYLOAD_BACKEND_EXTRA_ARGS_BY_CASE_ID: dict[str, dict[PayloadBackend, tuple[str, ...]]] = {
+    case_id: {PayloadBackend.PYDANTIC_V2: ("--use-missing-sentinel",)} for case_id in MISSING_SENTINEL_PAYLOAD_CASE_IDS
+}
 ROUND_TRIP_EXCLUDED_CASES: dict[str, str] = {
     "jsonschema/default_factory_nested_model_with_dict.json": (
         "pydantic union branch normalization can dump a oneOf value into a shape that matches multiple branches"
@@ -177,6 +187,7 @@ ROUND_TRIP_EXCLUDED_CASES: dict[str, str] = {
 }
 PYDANTIC_V2_FULL_PAYLOAD_RUNTIME_MIN_VERSION = "2.5.0"
 PYDANTIC_V2_0_RUNTIME_MAX_VERSION = "2.1.0"
+PYDANTIC_V2_MISSING_SENTINEL_RUNTIME_MIN_VERSION = "2.12.0"
 PYDANTIC_V2_LEGACY_LOOKAROUND_EXCLUDED_CASES: dict[str, str] = {
     "jsonschema/lookaround_anyof_nullable.json": (
         "Pydantic before 2.5.0 cannot apply regex_engine='python-re' to lookaround pattern validators"
@@ -235,6 +246,12 @@ PYDANTIC_V2_LEGACY_RUNTIME_EXCLUDED_CASES: dict[PayloadBackend, dict[str, str]] 
             "Pydantic before 2.5.0 can reject schema-valid dataclass float multipleOf values near float boundaries"
         ),
     },
+}
+PYDANTIC_V2_MISSING_SENTINEL_RUNTIME_EXCLUDED_CASES: dict[PayloadBackend, dict[str, str]] = {
+    PayloadBackend.PYDANTIC_V2: dict.fromkeys(
+        MISSING_SENTINEL_PAYLOAD_CASE_IDS,
+        "Pydantic MISSING sentinel runtime support requires Pydantic 2.12+",
+    )
 }
 PYDANTIC_V2_0_RUNTIME_ROUND_TRIP_EXCLUDED_CASES: dict[PayloadBackend, dict[str, str]] = {
     PayloadBackend.PYDANTIC_V2: {

@@ -77,6 +77,32 @@ class ReferenceChild(Protocol):
         ...
 
 
+if TYPE_CHECKING:
+
+    class _ReferenceSource(ReferenceChild, Protocol):
+        """Protocol for objects that can be assigned to Reference.source."""
+
+        fields: Sequence[Any]
+
+        @property
+        def is_alias(self) -> bool:
+            """Return whether this source renders as an alias."""
+            raise NotImplementedError
+
+        @property
+        def module_name(self) -> str | None:
+            """Return this source module name."""
+            raise NotImplementedError
+
+        @property
+        def nullable(self) -> bool:
+            """Return whether this source is nullable."""
+            raise NotImplementedError
+
+else:
+    _ReferenceSource = ReferenceChild
+
+
 class _BaseModel(BaseModel):
     """Base model with field exclusion and pass-through support."""
 
@@ -104,7 +130,7 @@ class _BaseModel(BaseModel):
             exclude_none: bool = False,
         ) -> dict[str, Any]:
             return self.model_dump(
-                include=include,  # ty: ignore
+                include=include,  # ty: ignore[invalid-argument-type]
                 exclude=set(exclude or ()) | self._exclude_fields,
                 by_alias=by_alias,
                 exclude_unset=exclude_unset,
@@ -124,11 +150,11 @@ class Reference(_BaseModel):
     name: str
     duplicate_name: Optional[str] = None  # noqa: UP045
     loaded: bool = True
-    source: Optional[ReferenceChild] = None  # noqa: UP045
+    source: Optional[_ReferenceSource] = None  # noqa: UP045
     children: list[ReferenceChild] = Field(default_factory=list)
     _exclude_fields: ClassVar[set[str]] = {"children"}
 
-    @model_validator(mode="before")  # ty: ignore
+    @model_validator(mode="before")
     def validate_original_name(cls, values: Any) -> Any:  # noqa: N805
         """Assign name to original_name if original_name is empty."""
         if not isinstance(values, dict):  # pragma: no cover
@@ -140,7 +166,7 @@ class Reference(_BaseModel):
         values["original_name"] = values.get("name", original_name)
         return values
 
-    model_config = ConfigDict(  # ty: ignore
+    model_config = ConfigDict(
         arbitrary_types_allowed=True,
         ignored_types=(cached_property,),
         revalidate_instances="never",
@@ -158,7 +184,7 @@ class Reference(_BaseModel):
             if _is_data_type(child):
                 child.replace_reference(new_reference)
 
-    def iter_data_model_children(self) -> Iterator[DataModel]:
+    def iter_data_model_children(self) -> Iterator[Any]:
         """Yield all DataModel children."""
         for child in self.children:
             if _is_data_model(child):
@@ -168,6 +194,7 @@ class Reference(_BaseModel):
 SINGULAR_NAME_SUFFIX: str = "Item"
 
 ID_PATTERN: Pattern[str] = re.compile(r"^#[^/].*")
+_NON_IDENTIFIER_PATTERN: Pattern[str] = re.compile(r"[¹²³⁴⁵⁶⁷⁸⁹]|\W")
 
 SPECIAL_PATH_MARKER: str = "#-datamodel-code-generator-#-"
 
@@ -267,7 +294,7 @@ class FieldNameResolver:
         if self.snake_case_field and not ignore_snake_case_field and self.original_delimiter is not None:
             name = snake_to_upper_camel(name, delimiter=self.original_delimiter)
 
-        name = re.sub(r"[¹²³⁴⁵⁶⁷⁸⁹]|\W", "_", name)
+        name = _NON_IDENTIFIER_PATTERN.sub("_", name)
         if name[0].isnumeric():
             name = f"{self.special_field_name_prefix}_{name}"
 
@@ -557,6 +584,7 @@ class ModelResolver:  # noqa: PLR0904
 
         # Incrementally maintained set of reference names for O(1) uniqueness checking
         self._reference_names_cache: set[str] = set()
+        self._unique_name_start_hints: dict[tuple[str, str, str], int] = {}
 
         # Default value overrides from external JSON file
         self.default_value_overrides: Mapping[str, Any] = (
@@ -629,6 +657,7 @@ class ModelResolver:  # noqa: PLR0904
         self.exclude_names = exclude_names
         self.references.clear()
         self._reference_names_cache.clear()
+        self._unique_name_start_hints.clear()
 
     def _get_reference_names(self) -> set[str]:
         """Get the set of all reference names for uniqueness checking."""
@@ -638,11 +667,13 @@ class ModelResolver:  # noqa: PLR0904
         """Update the reference names cache when a reference name changes."""
         if old_name and old_name != new_name:
             self._reference_names_cache.discard(old_name)
+            self._invalidate_unique_name_hints(old_name)
         self._reference_names_cache.add(new_name)
 
     def _remove_reference_name(self, name: str) -> None:
         """Remove a name from the reference names cache."""
         self._reference_names_cache.discard(name)
+        self._invalidate_unique_name_hints(name)
 
     @property
     def current_base_path(self) -> Path | None:
@@ -667,7 +698,7 @@ class ModelResolver:  # noqa: PLR0904
         """Temporarily set the current base path within a context."""
         if base_path:
             base_path = (self._base_path / base_path).resolve()
-        with context_variable(self.set_current_base_path, self.current_base_path, base_path):  # ty: ignore
+        with context_variable(self.set_current_base_path, self.current_base_path, base_path):  # ty: ignore[invalid-argument-type]
             yield
 
     @contextmanager
@@ -681,7 +712,7 @@ class ModelResolver:  # noqa: PLR0904
         this method was previously a no-op.
         """
         if self._base_url or (base_url and is_url(base_url)):
-            with context_variable(self.set_base_url, self.base_url, base_url):  # ty: ignore
+            with context_variable(self.set_base_url, self.base_url, base_url):  # ty: ignore[invalid-argument-type]
                 yield
         else:
             yield
@@ -698,7 +729,7 @@ class ModelResolver:  # noqa: PLR0904
     @contextmanager
     def current_root_context(self, current_root: Sequence[str]) -> Generator[None, None, None]:
         """Temporarily set the current root path within a context."""
-        with context_variable(self.set_current_root, self.current_root, current_root):  # ty: ignore
+        with context_variable(self.set_current_root, self.current_root, current_root):  # ty: ignore[invalid-argument-type]
             yield
 
     @property
@@ -1195,8 +1226,6 @@ class ModelResolver:  # noqa: PLR0904
         return ClassName(name=f"{prefix}{class_name}", duplicate_name=duplicate_name)
 
     def _get_unique_name(self, name: str, camel: bool = False, model_type: str = "model") -> str:  # noqa: FBT001, FBT002
-        unique_name: str = name
-        count: int = 1
         reference_names = self._get_reference_names()
         exclude_names = self.exclude_names
 
@@ -1206,18 +1235,61 @@ class ModelResolver:  # noqa: PLR0904
             suffix = self.duplicate_name_suffix
 
         delimiter = "" if camel else "_"
+        hint_key = (name, suffix or "", delimiter)
+        count = self._unique_name_start_hints.get(hint_key, 0)
+        if count and self._is_unique_name_available(
+            self._build_unique_name_candidate(name, suffix, delimiter, count - 1),
+            reference_names,
+            exclude_names,
+        ):
+            count = 0
+        unique_name = self._build_unique_name_candidate(name, suffix, delimiter, count)
         while unique_name in reference_names or unique_name in exclude_names:
-            if suffix:
-                suffix_count = count - 1
-                unique_name = (
-                    delimiter.join((name, suffix, str(suffix_count)))
-                    if suffix_count
-                    else delimiter.join((name, suffix))
-                )
-            else:
-                unique_name = delimiter.join((name, str(count)))
             count += 1
+            unique_name = self._build_unique_name_candidate(name, suffix, delimiter, count)
+        if count:
+            self._unique_name_start_hints[hint_key] = count + 1
         return unique_name
+
+    @staticmethod
+    def _build_unique_name_candidate(name: str, suffix: str | None, delimiter: str, count: int) -> str:
+        """Build the same duplicate candidate sequence used by _get_unique_name."""
+        if count == 0:
+            return name
+        if suffix:
+            suffix_count = count - 1
+            return delimiter.join((name, suffix, str(suffix_count))) if suffix_count else delimiter.join((name, suffix))
+        return delimiter.join((name, str(count)))
+
+    @staticmethod
+    def _is_unique_name_available(candidate: str, reference_names: set[str], exclude_names: set[str]) -> bool:
+        """Return whether a duplicate-name candidate is currently free."""
+        return candidate not in reference_names and candidate not in exclude_names
+
+    @staticmethod
+    def _matches_unique_name_candidate(candidate: str, name: str, suffix: str, delimiter: str) -> bool:
+        """Return whether candidate belongs to the duplicate sequence for name."""
+        if candidate == name:
+            return True
+        if suffix:
+            first_duplicate = delimiter.join((name, suffix))
+            if candidate == first_duplicate:
+                return True
+            prefix = f"{first_duplicate}{delimiter}" if delimiter else first_duplicate
+        else:
+            prefix = f"{name}{delimiter}" if delimiter else name
+        if not candidate.startswith(prefix):
+            return False
+        count = candidate.removeprefix(prefix)
+        return bool(count) and count.isdecimal()
+
+    def _invalidate_unique_name_hints(self, released_name: str) -> None:
+        """Drop duplicate-name hints whose sequence may reuse a released name."""
+        if not self._unique_name_start_hints:
+            return
+        for hint_key in tuple(self._unique_name_start_hints):
+            if self._matches_unique_name_candidate(released_name, *hint_key):
+                del self._unique_name_start_hints[hint_key]
 
     def _get_suffix_for_model_type(self, model_type: str) -> str:
         """Get the suffix for a given model type from the suffix map."""
@@ -1361,10 +1433,10 @@ def _get_inflect_engine() -> inflect.engine:
 @lru_cache(maxsize=4096)
 def get_singular_name(name: str, suffix: str = SINGULAR_NAME_SUFFIX) -> str:
     """Convert a plural name to singular form."""
-    singular_name = _get_inflect_engine().singular_noun(cast("inflect.Word", name))  # ty: ignore
+    singular_name = _get_inflect_engine().singular_noun(cast("inflect.Word", name))  # ty: ignore[redundant-cast]
     if singular_name is False:
         singular_name = f"{name}{suffix}"
-    return singular_name  # ty: ignore
+    return singular_name
 
 
 @lru_cache(maxsize=4096)

@@ -116,10 +116,13 @@ ReadOnlyWriteOnlyModelType: TypeAlias = Literal['request-response', 'all']
 ReuseScope: TypeAlias = Literal['module', 'tree']
 
 
+SchemaValidatorType: TypeAlias = Literal['pydantic-v2']
+
+
 StrictTypesModel: TypeAlias = Literal['str', 'bytes', 'int', 'float', 'bool']
 
 
-TargetPydanticVersion: TypeAlias = Literal['2', '2.11']
+TargetPydanticVersion: TypeAlias = Literal['2', '2.11', '2.12']
 
 
 UnionMode: TypeAlias = Literal['smart', 'left_to_right']
@@ -145,6 +148,9 @@ class BaseGenerateConfig(TypedDict):
     additional_imports: NotRequired[list[str] | None]
     class_decorators: NotRequired[list[str] | None]
     custom_template_dir: NotRequired[str | None]
+    schema_validator_type: NotRequired[SchemaValidatorType | None]
+    generate_schema_validators: NotRequired[bool]
+    schema_validator_base_class_name: NotRequired[str | None]
     validation: NotRequired[bool]
     field_constraints: NotRequired[bool]
     alias_generator: NotRequired[AliasGenerator | None]
@@ -171,6 +177,7 @@ class BaseGenerateConfig(TypedDict):
     use_inline_field_description: NotRequired[bool]
     use_single_line_docstring: NotRequired[bool]
     use_default_kwarg: NotRequired[bool]
+    use_missing_sentinel: NotRequired[bool]
     reuse_model: NotRequired[bool]
     reuse_scope: NotRequired[ReuseScope]
     shared_module_name: NotRequired[str]

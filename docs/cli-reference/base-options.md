@@ -9,13 +9,29 @@
 | [`--external-ref-mapping`](#external-ref-mapping) | Map external `$ref` files to Python packages. |
 | [`--input`](#input) | Specify the input schema file path. |
 | [`--input-file-type`](#input-file-type) | Specify the input file type for code generation. |
-| [`--input-model`](#input-model) | Import a Python type or dict schema from a module. |
+| [`--input-model`](#input-model) | Import a Python type or dict schema from a module or Python ... |
 | [`--input-model-ref-strategy`](#input-model-ref-strategy) | Strategy for referenced types when using --input-model. |
 | [`--output`](#output) | Specify the destination path for generated Python code. |
 | [`--preset`](#preset) | Apply an immutable built-in option preset. |
 | [`--schema-version`](#schema-version) | Schema version to use for parsing. |
 | [`--schema-version-mode`](#schema-version-mode) | Schema version validation mode. |
 | [`--url`](#url) | Fetch schema from URL with custom HTTP headers. |
+
+---
+
+## 🍳 Recipes
+
+### Generate a local schema file
+
+Pin the input type and destination when the source extension is ambiguous or generated output needs a stable path.
+
+**Options:** [`--input`](#input), [`--input-file-type`](#input-file-type), [`--output`](#output)
+
+### Fetch a protected remote schema
+
+Use URL input together with HTTP request controls for schemas served behind headers or slower endpoints.
+
+**Options:** [`--url`](#url), [`--http-headers`](general-options.md#http-headers), [`--http-timeout`](general-options.md#http-timeout)
 
 ---
 
@@ -426,7 +442,7 @@ not `--input-file-type yaml`. The `yaml` type treats the file as raw data and in
 
 ## `--input-model` {#input-model}
 
-Import a Python type or dict schema from a module.
+Import a Python type or dict schema from a module or Python file.
 
 Use the format `module:Object` or `path/to/file.py:Object` to specify the type.
 
@@ -438,9 +454,42 @@ Use the format `module:Object` or `path/to/file.py:Object` to specify the type.
 
     1. :material-arrow-left: `--input-model` - the option documented here
 
+<!-- BEGIN AUTO-GENERATED DOC EXAMPLE: cli-reference.base-options.input-model.example -->
 ??? example "Examples"
 
+    **Command:**
+    ```bash
+    datamodel-codegen \
+      --input-model tests.data.python.input_model.typeddict_models:User \
+      --output model.py
+    ```
+
+    **Input Model (`tests/data/python/input_model/typeddict_models.py`):**
+    ```python
+    """TypedDict models for --input-model tests."""
+
+    from typing_extensions import TypedDict
+
+
+    class User(TypedDict):
+        """User TypedDict with basic fields."""
+
+        name: str
+        age: int
+    ```
+
     **Output:**
+    ```python
+    from __future__ import annotations
+
+    from pydantic import BaseModel, Field
+
+
+    class User(BaseModel):
+        name: str = Field(..., title='Name')
+        age: int = Field(..., title='Age')
+    ```
+<!-- END AUTO-GENERATED DOC EXAMPLE: cli-reference.base-options.input-model.example -->
 
 ---
 

@@ -6,6 +6,10 @@ This page lists features that are available but still experimental.
 
 | ID | Kind | Target | Since | Tracking |
 |----|------|--------|-------|----------|
+| `cli-option.generate-schema-validators` | cli-option | `--generate-schema-validators` | 0.66.1 | - |
+| `cli-option.schema-validator-type` | cli-option | `--schema-validator-type` | 0.66.1 | - |
+| `cli-option.use-missing-sentinel` | cli-option | `--use-missing-sentinel` | 0.66.1 | - |
+| `cli-option.use-type-alias` | cli-option | `--use-type-alias` | 0.36.0 | - |
 | `formatter.builtin` | formatter | `--formatters builtin` | 0.59.0 | - |
 | `input-format.asyncapi` | input-format | `--input-file-type asyncapi` | 0.59.0 | - |
 | `input-format.avro` | input-format | `--input-file-type avro` | 0.59.0 | - |
@@ -14,6 +18,46 @@ This page lists features that are available but still experimental.
 | `input-format.xmlschema` | input-format | `--input-file-type xmlschema` | 0.59.0 | - |
 
 ## Details
+
+### `cli-option.generate-schema-validators`
+
+- **Kind:** cli-option
+- **Target:** `--generate-schema-validators`
+- **Since:** 0.66.1
+
+Schema-derived runtime validators are experimental and may change as JSON Schema coverage is expanded.
+
+The option currently targets Pydantic v2 BaseModel output and covers selected object-level rules such as patternProperties, required-only oneOf/anyOf groups, and simple if/then/else required-property conditions.
+
+### `cli-option.schema-validator-type`
+
+- **Kind:** cli-option
+- **Target:** `--schema-validator-type`
+- **Since:** 0.66.1
+
+Schema-derived runtime validator backend selection is experimental and may change as validation backends are added.
+
+The only currently implemented backend is 'pydantic-v2', which preserves the existing generated Pydantic v2 validator behavior.
+
+### `cli-option.use-missing-sentinel`
+
+- **Kind:** cli-option
+- **Target:** `--use-missing-sentinel`
+- **Since:** 0.66.1
+
+Pydantic MISSING sentinel output is experimental because it depends on pydantic.experimental.missing_sentinel.
+
+The option requires Pydantic v2 BaseModel output and a target Pydantic version that supports the MISSING sentinel.
+
+### `cli-option.use-type-alias`
+
+- **Kind:** cli-option
+- **Target:** `--use-type-alias`
+- **Since:** 0.36.0
+
+Type alias output is experimental and may change as Python typing support evolves.
+
+The option replaces root model classes with type aliases where possible. Pydantic v2 output may use TypeAliasType or Python 3.12 type statements depending on the target Python version.
 
 ### `formatter.builtin`
 

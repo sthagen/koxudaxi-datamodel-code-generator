@@ -1,5 +1,41 @@
 [
   {
+    "id": "cli-option.generate-schema-validators",
+    "kind": "cli-option",
+    "message": "Schema-derived runtime validators are experimental and may change as JSON Schema coverage is expanded.",
+    "note": "The option currently targets Pydantic v2 BaseModel output and covers selected object-level rules such as patternProperties, required-only oneOf/anyOf groups, and simple if/then/else required-property conditions.",
+    "since_version": "0.66.1",
+    "target": "--generate-schema-validators",
+    "tracking_issue": null
+  },
+  {
+    "id": "cli-option.schema-validator-type",
+    "kind": "cli-option",
+    "message": "Schema-derived runtime validator backend selection is experimental and may change as validation backends are added.",
+    "note": "The only currently implemented backend is 'pydantic-v2', which preserves the existing generated Pydantic v2 validator behavior.",
+    "since_version": "0.66.1",
+    "target": "--schema-validator-type",
+    "tracking_issue": null
+  },
+  {
+    "id": "cli-option.use-missing-sentinel",
+    "kind": "cli-option",
+    "message": "Pydantic MISSING sentinel output is experimental because it depends on pydantic.experimental.missing_sentinel.",
+    "note": "The option requires Pydantic v2 BaseModel output and a target Pydantic version that supports the MISSING sentinel.",
+    "since_version": "0.66.1",
+    "target": "--use-missing-sentinel",
+    "tracking_issue": null
+  },
+  {
+    "id": "cli-option.use-type-alias",
+    "kind": "cli-option",
+    "message": "Type alias output is experimental and may change as Python typing support evolves.",
+    "note": "The option replaces root model classes with type aliases where possible. Pydantic v2 output may use TypeAliasType or Python 3.12 type statements depending on the target Python version.",
+    "since_version": "0.36.0",
+    "target": "--use-type-alias",
+    "tracking_issue": null
+  },
+  {
     "id": "formatter.builtin",
     "kind": "formatter",
     "message": "The internal formatter is experimental and may change as generated-output coverage is expanded.",

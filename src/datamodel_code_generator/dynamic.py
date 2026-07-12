@@ -164,7 +164,7 @@ def _execute_multi_module(
             if previous_module is _MISSING_MODULE:
                 sys.modules.pop(created_module_name, None)
             else:
-                sys.modules[created_module_name] = previous_module  # type: ignore[assignment]
+                sys.modules[created_module_name] = previous_module
 
 
 def _should_extract_model_name(name: str, *, include_private: bool = False) -> bool:
@@ -337,7 +337,7 @@ def generate_dynamic_models(
             while len(_dynamic_models_cache) >= cache_size:
                 oldest_key = next(iter(_dynamic_models_cache))
                 del _dynamic_models_cache[oldest_key]
-            _dynamic_models_cache[cache_key] = models  # type: ignore[index]
+            _dynamic_models_cache[cache_key] = models  # ty: ignore[invalid-assignment]
 
         return _filter_target_models(models, normalized_target_model_names)
 

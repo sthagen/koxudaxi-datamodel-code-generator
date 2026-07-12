@@ -20,7 +20,7 @@ Input sources, output paths, and schema version handling.
 - `--emit-model-metadata`: Write a separate JSON map from source schema references to generated models and fields.
 - `--preset`: Apply an immutable built-in option preset. Preset names include the target Python version so generated syntax is pinned. Choices: `standard-py310-20260619`, `standard-py311-20260619`, `standard-py312-20260619`, `standard-py313-20260619`, `standard-py314-20260619`, `practical-py310-20260619`, `practical-py311-20260619`, `practical-py312-20260619`, `practical-py313-20260619`, `practical-py314-20260619`.
 - `--url`: Input file URL. `--input` is ignored when `--url` is used
-- `--input-model`: Python import path to a Pydantic v2 model or schema dict (e.g., 'mypackage.module:ClassName' or 'mypackage.schemas:SCHEMA_DICT'). Can be specified multiple times for related models with inheritance. For dict input, --input-file-type is required. Cannot be used with --input or --url.
+- `--input-model`: Python import path or file path to a Pydantic v2 model or schema dict (e.g., 'mypackage.module:ClassName', './models.py:ClassName', or 'mypackage.schemas:SCHEMA_DICT'). Can be specified multiple times for related models with inheritance. For dict input, --input-file-type is required. Cannot be used with --input or --url.
 - `--input-model-ref-strategy`: Strategy for referenced types in --input-model. 'regenerate-all': Regenerate all types. 'reuse-foreign': Reuse types from different families (Enum, etc.), regenerate same-family. 'reuse-all': Reuse all referenced types via import. If not specified, defaults to regenerate-all behavior. Choices: `regenerate-all`, `reuse-foreign`, `reuse-all`.
 - `--encoding`: The encoding of input and output (default: utf-8)
 - `--schema-version`: Schema version. Valid values depend on input type: JsonSchema: auto, draft-04, draft-06, draft-07, 2019-09, 2020-12. OpenAPI: auto, 3.0, 3.1, 3.2. AsyncAPI: auto, 2.0, 3.0. XMLSchema: auto, 1.0, 1.1. Protobuf: auto, proto2, proto3, 2023. (default: auto - detected from $schema, openapi/asyncapi field, XML Schema versioning attributes, or Protobuf syntax/edition)
@@ -125,7 +125,7 @@ Generated model class and package behavior.
 - `--reuse-model`: Reuse models on the field when a module has the model with the same content
 - `--reuse-scope`: Scope for model reuse deduplication: module (per-file, default) or tree (cross-file with shared module). Only effective when --reuse-model is set. Choices: `module`, `tree`.
 - `--target-python-version`: target python version Choices: `3.10`, `3.11`, `3.12`, `3.13`, `3.14`.
-- `--target-pydantic-version`: Target Pydantic version for generated code. '2': Pydantic 2.0+ compatible (default, uses populate_by_name). '2.11': Pydantic 2.11+ (uses validate_by_name). Choices: `2`, `2.11`.
+- `--target-pydantic-version`: Target Pydantic version for generated code. '2': Pydantic 2.0+ compatible (default, uses populate_by_name). '2.11': Pydantic 2.11+ (uses validate_by_name). '2.12': Pydantic 2.12+ (supports MISSING sentinel). Choices: `2`, `2.11`, `2.12`.
 - `--alias-generator`: Pydantic v2 BaseModel alias generator to use in ConfigDict. Matching generated aliases are omitted from individual Field() calls. Choices: `to_camel`, `to_pascal`, `to_snake`.
 - `--use-generic-base-class`: Generate a shared base class with model configuration (e.g., extra='forbid') instead of repeating the configuration in each model. Keeps code DRY.
 - `--parent-scoped-naming` (deprecated): Deprecated: --parent-scoped-naming is deprecated. Use --naming-strategy parent-prefixed instead.
@@ -143,6 +143,7 @@ Generated model class and package behavior.
 - `--strip-default-none`: Strip default None on fields
 - `--use-default`: Use default value even if a field is required
 - `--use-default-kwarg`: Use `default=` instead of a positional argument for Fields that have default values.
+- `--use-missing-sentinel`: Use pydantic.experimental.missing_sentinel.MISSING for optional fields without defaults (Pydantic v2.12+).
 - `--union-mode`: Union mode for only pydantic v2 field Choices: `smart`, `left_to_right`.
 - `--use-frozen-field`: Use Field(frozen=True) for readOnly fields (Pydantic v2).
 - `--no-use-frozen-field`: Use Field(frozen=True) for readOnly fields (Pydantic v2).
@@ -165,6 +166,9 @@ Formatting, custom templates, and generated file headers.
 - `--custom-template-dir`: Custom template directory
 - `--extra-template-data`: Extra template data for output models as inline JSON or a JSON file path. For OpenAPI and Jsonschema the keys are the spec path of the object, or the name of the object if you want to apply the template data to multiple objects with the same name. If you are using another input file type (e.g. GraphQL), the key is the name of the object. The value is a dictionary of the template data to add.
 - `--validators`: Validators configuration as inline JSON or a JSON file path. Defines field validators for Pydantic v2 models. Keys are model names, values contain validator definitions with field, function, and mode.
+- `--generate-schema-validators`: Generate Pydantic v2 model validators for JSON Schema rules that cannot be represented as type hints (experimental).
+- `--schema-validator-type`: Select the schema-derived runtime validator backend. 'pydantic-v2' generates Pydantic v2 model validators (experimental). Choices: `pydantic-v2`.
+- `--schema-validator-base-class-name`: Set the generated shared Pydantic v2 schema runtime validator base class name.
 - `--use-type-checking-imports`: Allow Ruff to move typing-only imports into TYPE_CHECKING blocks. By default this stays enabled, except for multi-module Ruff formatting of modular Pydantic output where referenced models stay imported at runtime. Use --no-use-type-checking-imports to force runtime imports.
 - `--no-use-type-checking-imports`: Allow Ruff to move typing-only imports into TYPE_CHECKING blocks. By default this stays enabled, except for multi-module Ruff formatting of modular Pydantic output where referenced models stay imported at runtime. Use --no-use-type-checking-imports to force runtime imports.
 - `--use-double-quotes`: Model generated with double quotes. Single quotes or your black config skip_string_normalization value will be used without this option.

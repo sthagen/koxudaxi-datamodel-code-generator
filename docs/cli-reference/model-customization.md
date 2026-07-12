@@ -43,10 +43,27 @@
 | [`--use-default-kwarg`](#use-default-kwarg) | Use default= keyword argument instead of positional argument... |
 | [`--use-frozen-field`](#use-frozen-field) | Generate frozen (immutable) field definitions for readOnly p... |
 | [`--use-generic-base-class`](#use-generic-base-class) | Generate a shared base class with model configuration to avo... |
+| [`--use-missing-sentinel`](#use-missing-sentinel) | Use Pydantic's MISSING sentinel for optional fields without ... |
 | [`--use-one-literal-as-default`](#use-one-literal-as-default) | Use single literal value as default when enum has only one o... |
 | [`--use-root-model-sequence-interface`](#use-root-model-sequence-interface) | Make non-null sequence-like Pydantic v2 RootModel classes im... |
 | [`--use-serialize-as-any`](#use-serialize-as-any) | Wrap fields with subtypes in Pydantic's SerializeAsAny. |
 | [`--use-subclass-enum`](#use-subclass-enum) | Generate typed Enum subclasses for enums with specific field... |
+
+---
+
+## 🍳 Recipes
+
+### Target Pydantic v2 on modern Python
+
+Set the output model family and Python/Pydantic compatibility targets together.
+
+**Options:** [`--output-model-type`](#output-model-type), [`--target-python-version`](#target-python-version), [`--target-pydantic-version`](#target-pydantic-version)
+
+### Deduplicate reusable schemas
+
+Reuse equivalent models and tune the scope or root-model behavior when schemas repeat.
+
+**Options:** [`--reuse-model`](#reuse-model), [`--reuse-scope`](#reuse-scope), [`--collapse-root-models`](#collapse-root-models)
 
 ---
 
@@ -57,7 +74,7 @@ Use a Pydantic v2 alias generator in model_config.
 The `--alias-generator` option emits a per-model ConfigDict alias generator for
 Pydantic v2 BaseModel output and omits matching per-field aliases.
 
-**Related:** [`--output-model-type`](model-customization.md#output-model-type), [`--snake-case-field`](field-customization.md#snake-case-field)
+**Related:** [`--output-model-type`](#output-model-type), [`--snake-case-field`](field-customization.md#snake-case-field)
 
 !!! tip "Usage"
 
@@ -127,6 +144,10 @@ Allow extra fields in generated Pydantic models (extra='allow').
 The `--allow-extra-fields` flag configures the code generation behavior.
 
 **Deprecated:** --allow-extra-fields is deprecated. Use --extra-fields=allow instead.
+
+**Option relationships:**
+
+- **Implies:** [`--extra-fields`](field-customization.md#extra-fields) = `allow`
 
 !!! tip "Usage"
 
@@ -425,7 +446,7 @@ model names. Use --allow-leading-underscore-class-name together with an explicit
 --class-name when you need the generated root model to preserve that name
 exactly.
 
-**Related:** [`--class-name`](model-customization.md#class-name)
+**Related:** [`--class-name`](#class-name)
 
 !!! tip "Usage"
 
@@ -1088,7 +1109,7 @@ You can pass the mapping either inline as JSON or as a path to a JSON file.
 When using multiple base classes, the specified classes are used directly without
 adding `BaseModel`. Ensure your mixins inherit from `BaseModel` if needed.
 
-**Related:** [`--base-class`](model-customization.md#base-class)
+**Related:** [`--base-class`](#base-class)
 
 !!! tip "Usage"
 
@@ -1098,10 +1119,10 @@ adding `BaseModel`. Ensure your mixins inherit from `BaseModel` if needed.
 
     1. :material-arrow-left: `--base-class-map` - the option documented here
 
+<!-- BEGIN AUTO-GENERATED DOC EXAMPLE: cli-reference.model-customization.base-class-map.example -->
 ??? example "Examples"
 
     **Input Schema:**
-
     ```json
     {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -1129,8 +1150,31 @@ adding `BaseModel`. Ensure your mixins inherit from `BaseModel` if needed.
     ```
 
     **Output:**
+    ```python
+    from __future__ import annotations
 
-    > **Error:** File not found: base_class_map.py
+    from typing import Any
+
+    from custom.bases import AnimalBase, PersonBase
+    from pydantic import BaseModel, RootModel
+
+
+    class Model(RootModel[Any]):
+        root: Any
+
+
+    class Person(PersonBase):
+        name: str | None = None
+
+
+    class Animal(AnimalBase):
+        species: str | None = None
+
+
+    class Car(BaseModel):
+        model: str | None = None
+    ```
+<!-- END AUTO-GENERATED DOC EXAMPLE: cli-reference.model-customization.base-class-map.example -->
 
 ---
 
@@ -1220,7 +1264,7 @@ prefix or suffix specified by --class-name-prefix or --class-name-suffix:
 - 'models': Apply only to model classes (BaseModel, dataclass, TypedDict, etc.)
 - 'enums': Apply only to enum classes
 
-**Related:** [`--class-name-prefix`](model-customization.md#class-name-prefix), [`--class-name-suffix`](model-customization.md#class-name-suffix)
+**Related:** [`--class-name-prefix`](#class-name-prefix), [`--class-name-suffix`](#class-name-suffix)
 
 !!! tip "Usage"
 
@@ -1300,7 +1344,7 @@ The --class-name-prefix option allows you to add a prefix to all generated class
 names, including both models and enums. This is useful for namespacing generated
 code or avoiding conflicts with existing classes.
 
-**Related:** [`--class-name-affix-scope`](model-customization.md#class-name-affix-scope), [`--class-name-suffix`](model-customization.md#class-name-suffix)
+**Related:** [`--class-name-affix-scope`](#class-name-affix-scope), [`--class-name-suffix`](#class-name-suffix)
 
 !!! tip "Usage"
 
@@ -1380,7 +1424,7 @@ The --class-name-suffix option allows you to add a suffix to all generated class
 names, including both models and enums. This is useful for distinguishing generated
 classes (e.g., adding 'Schema' or 'Model' suffix).
 
-**Related:** [`--class-name-affix-scope`](model-customization.md#class-name-affix-scope), [`--class-name-prefix`](model-customization.md#class-name-prefix)
+**Related:** [`--class-name-affix-scope`](#class-name-affix-scope), [`--class-name-prefix`](#class-name-prefix)
 
 !!! tip "Usage"
 
@@ -1460,7 +1504,7 @@ The `--collapse-reuse-models` flag, when used with `--reuse-model`,
 eliminates redundant empty subclasses (e.g., `class Foo(Bar): pass`)
 by replacing all references to duplicate models with the canonical model.
 
-**Related:** [`--reuse-model`](model-customization.md#reuse-model)
+**Related:** [`--reuse-model`](#reuse-model)
 
 !!! tip "Usage"
 
@@ -1709,7 +1753,11 @@ Select which name to keep when collapsing root models with object references.
 The --collapse-root-models-name-strategy option controls naming when collapsing
 root models. 'child' keeps the inner model's name, 'parent' uses the wrapper's name.
 
-**Related:** [`--collapse-root-models`](model-customization.md#collapse-root-models)
+**Related:** [`--collapse-root-models`](#collapse-root-models)
+
+**Option relationships:**
+
+- **Requires:** [`--collapse-root-models`](model-customization.md#collapse-root-models) enabled - `--collapse-root-models-name-strategy` requires `--collapse-root-models`.
 
 !!! tip "Usage"
 
@@ -1780,7 +1828,7 @@ dictionary (e.g., '{"frozen": true, "kw_only": true, "slots": true, "order": tru
 This overrides individual flags like --frozen-dataclasses and provides fine-grained
 control over dataclass generation.
 
-**Related:** [`--frozen-dataclasses`](model-customization.md#frozen-dataclasses), [`--keyword-only`](model-customization.md#keyword-only)
+**Related:** [`--frozen-dataclasses`](#frozen-dataclasses), [`--keyword-only`](#keyword-only)
 
 **See also:** [Output Model Types](../output-model-types.md)
 
@@ -2116,7 +2164,7 @@ resolving duplicate names by type. The value is a JSON mapping where keys
 are type names ('model', 'enum', 'default') and values are suffix strings.
 For example, `{"model": "Schema"}` changes `Item1` to `ItemSchema`.
 
-**Related:** [`--naming-strategy`](model-customization.md#naming-strategy)
+**Related:** [`--naming-strategy`](#naming-strategy)
 
 !!! tip "Usage"
 
@@ -2787,7 +2835,7 @@ The `--frozen-dataclasses` flag generates dataclass instances that are immutable
 (frozen=True). Combined with `--keyword-only` (Python 3.10+), all fields become
 keyword-only arguments.
 
-**Related:** [`--keyword-only`](model-customization.md#keyword-only), [`--output-model-type`](model-customization.md#output-model-type)
+**Related:** [`--keyword-only`](#keyword-only), [`--output-model-type`](#output-model-type)
 
 **See also:** [Output Model Types](../output-model-types.md)
 
@@ -2860,7 +2908,7 @@ order either. Inheritance and other runtime ordering requirements can force a
 non-alphabetical arrangement. The value of the flag is that repeated runs on the
 same schema produce the same ordering, which keeps diffs stable.
 
-**Related:** [`--collapse-root-models`](model-customization.md#collapse-root-models)
+**Related:** [`--collapse-root-models`](#collapse-root-models)
 
 !!! tip "Usage"
 
@@ -3041,9 +3089,13 @@ Python 3.10+. When combined with `--frozen-dataclasses`, it creates immutable
 dataclasses with keyword-only arguments, improving code clarity and preventing
 positional argument errors.
 
-**Related:** [`--frozen-dataclasses`](model-customization.md#frozen-dataclasses), [`--output-model-type`](model-customization.md#output-model-type), [`--target-python-version`](model-customization.md#target-python-version)
+**Related:** [`--frozen-dataclasses`](#frozen-dataclasses), [`--output-model-type`](#output-model-type), [`--target-python-version`](#target-python-version)
 
 **See also:** [Output Model Types](../output-model-types.md)
+
+**Option relationships:**
+
+- **Requires:** [`--target-python-version`](model-customization.md#target-python-version) = `3.10+` - `--keyword-only` requires `--target-python-version` 3.10 or higher for dataclasses.
 
 !!! tip "Usage"
 
@@ -3547,7 +3599,7 @@ This is useful when a schema cannot be edited but generated model names must be
 stable for public APIs or downstream code. Colliding mapped names fail instead
 of being silently suffixed.
 
-**Related:** [`--naming-strategy`](model-customization.md#naming-strategy), [`--use-title-as-name`](field-customization.md#use-title-as-name)
+**Related:** [`--naming-strategy`](#naming-strategy), [`--use-title-as-name`](field-customization.md#use-title-as-name)
 
 !!! tip "Usage"
 
@@ -3645,7 +3697,7 @@ The `--naming-strategy parent-prefixed` flag prefixes model names with their
 parent model name when duplicates occur. For example, if both `Order` and
 `Cart` have an inline `Item` definition, they become `OrderItem` and `CartItem`.
 
-**Related:** [`--duplicate-name-suffix`](model-customization.md#duplicate-name-suffix), [`--parent-scoped-naming`](model-customization.md#parent-scoped-naming)
+**Related:** [`--duplicate-name-suffix`](#duplicate-name-suffix), [`--parent-scoped-naming`](#parent-scoped-naming)
 
 !!! tip "Usage"
 
@@ -3735,6 +3787,10 @@ for the generated code. Supported values include `pydantic_v2.BaseModel`,
 `pydantic_v2.dataclass`, `dataclasses.dataclass`, `typing.TypedDict`, and `msgspec.Struct`.
 
 **See also:** [Output Model Types](../output-model-types.md)
+
+**Option relationships:**
+
+- **Implies:** When `--output-model-type=msgspec.Struct`, [`--use-annotated`](typing-customization.md#use-annotated) enabled
 
 !!! tip "Usage"
 
@@ -4294,6 +4350,10 @@ appears in different contexts within an OpenAPI specification.
 
 **Deprecated:** --parent-scoped-naming is deprecated. Use --naming-strategy parent-prefixed instead.
 
+**Option relationships:**
+
+- **Implies:** [`--naming-strategy`](model-customization.md#naming-strategy) = `parent-prefixed`
+
 !!! tip "Usage"
 
     ```bash
@@ -4442,7 +4502,7 @@ The `--reuse-model` flag detects identical enum or model definitions
 across the schema and generates a single shared definition, reducing
 code duplication in the output.
 
-**Related:** [`--collapse-root-models`](model-customization.md#collapse-root-models)
+**Related:** [`--collapse-root-models`](#collapse-root-models)
 
 **See also:** [Model Reuse and Deduplication](../model-reuse.md)
 
@@ -4559,6 +4619,10 @@ Scope for model reuse detection (root or tree).
 The `--reuse-scope` flag configures the code generation behavior.
 
 **See also:** [Model Reuse and Deduplication](../model-reuse.md)
+
+**Option relationships:**
+
+- **Requires:** When `--reuse-scope=tree`, [`--reuse-model`](model-customization.md#reuse-model) enabled - `--reuse-scope=tree` has no effect without `--reuse-model`.
 
 !!! tip "Usage"
 
@@ -4734,7 +4798,7 @@ with their exact schema type (non-nullable), rather than being made nullable.
 This is particularly useful when combined with `--use-default` to generate models
 where optional fields have defaults but cannot accept `None` values.
 
-**Related:** [`--use-default`](model-customization.md#use-default)
+**Related:** [`--use-default`](#use-default)
 
 !!! tip "Usage"
 
@@ -5246,6 +5310,7 @@ The `--target-pydantic-version` flag controls Pydantic version-specific config:
 
 - **2**: Uses `populate_by_name=True` (compatible with Pydantic 2.0-2.10)
 - **2.11**: Uses `validate_by_name=True` (for Pydantic 2.11+)
+- **2.12**: Uses `validate_by_name=True` and allows features that require Pydantic 2.12+
 
 This prevents breaking changes when generated code is used on older Pydantic versions.
 
@@ -5407,6 +5472,10 @@ Union mode for combining anyOf/oneOf schemas (smart or left_to_right).
 
 The `--union-mode` flag configures the code generation behavior.
 
+**Option relationships:**
+
+- **Requires:** [`--output-model-type`](model-customization.md#output-model-type) = `pydantic_v2.BaseModel` - `--union-mode` is only supported for `--output-model-type pydantic_v2.BaseModel`.
+
 !!! tip "Usage"
 
     ```bash
@@ -5530,7 +5599,7 @@ When `--strict-nullable` is enabled, the field type still follows the schema's
 nullability. For example, a required string field with a default is generated
 as `str = 'value'`, not `str | None = 'value'`, unless the schema allows null.
 
-**Related:** [`--strict-nullable`](model-customization.md#strict-nullable)
+**Related:** [`--strict-nullable`](#strict-nullable)
 
 !!! tip "Usage"
 
@@ -5999,6 +6068,92 @@ Generate a shared base class with model configuration to avoid repetition (DRY).
         foo: Foo
         bar: Bar | None = None
         baz: Baz | None = None
+    ```
+
+---
+
+## `--use-missing-sentinel` {#use-missing-sentinel}
+
+Use Pydantic's MISSING sentinel for optional fields without defaults.
+
+The `--use-missing-sentinel` flag generates `MISSING` as the default for optional
+Pydantic v2 fields that do not define a schema default. This preserves the
+difference between an omitted field and a nullable field set to `None`.
+
+**Related:** [`--strict-nullable`](#strict-nullable), [`--target-pydantic-version`](#target-pydantic-version)
+
+**Option relationships:**
+
+- **Implies:** [`--target-pydantic-version`](model-customization.md#target-pydantic-version) = `2.12`
+- **Requires:** [`--output-model-type`](model-customization.md#output-model-type) = `pydantic_v2.BaseModel` - `--use-missing-sentinel` is only supported for `--output-model-type pydantic_v2.BaseModel`.
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --output-model-type pydantic_v2.BaseModel --use-missing-sentinel # (1)!
+    ```
+
+    1. :material-arrow-left: `--use-missing-sentinel` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```json
+    {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "MissingSentinel",
+      "type": "object",
+      "required": ["required", "requiredNullable"],
+      "properties": {
+        "required": {
+          "type": "integer"
+        },
+        "requiredNullable": {
+          "type": ["integer", "null"]
+        },
+        "unrequired": {
+          "type": "integer"
+        },
+        "nullableUnrequired": {
+          "type": ["integer", "null"]
+        },
+        "withDefault": {
+          "type": "integer",
+          "default": 1
+        },
+        "nullDefault": {
+          "type": ["integer", "null"],
+          "default": null
+        },
+        "aliased-field": {
+          "type": "string"
+        }
+      }
+    }
+    ```
+
+    **Output:**
+
+    ```python
+    # generated by datamodel-codegen:
+    #   filename:  missing_sentinel.json
+    #   timestamp: 2019-07-26T00:00:00+00:00
+
+    from __future__ import annotations
+
+    from pydantic import BaseModel, Field
+    from pydantic.experimental.missing_sentinel import MISSING
+
+
+    class MissingSentinel(BaseModel):
+        required: int
+        requiredNullable: int | None
+        unrequired: int | MISSING = MISSING
+        nullableUnrequired: int | None | MISSING = MISSING
+        withDefault: int | None = 1
+        nullDefault: int | None = None
+        aliased_field: str | MISSING = Field(MISSING, alias='aliased-field')
     ```
 
 ---

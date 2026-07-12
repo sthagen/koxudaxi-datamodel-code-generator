@@ -5,7 +5,7 @@
 🧪 Try it in your browser: [Playground](https://datamodel-code-generator.koxudaxi.dev/playground/)
 
 > [!NOTE]
-> Playground privacy: generation runs locally in your browser with Pyodide. Schemas and options are not sent to a
+> Playground privacy: Generation runs locally in your browser with Pyodide. Your schema and options are not sent to a
 > backend. Shared repro URLs encode them in the URL fragment (`#state=...`), which browsers do not send to the server;
 > the full URL can still be stored in your browser history or wherever you share it.
 
@@ -92,6 +92,10 @@ pip install 'datamodel-code-generator[protobuf]'
 ```bash
 docker pull koxudaxi/datamodel-code-generator
 ```
+
+Published Docker images run as a non-root `appuser`. When writing generated files
+to a bind-mounted directory, make sure the directory is writable by the container
+user or pass an explicit Docker user, for example `--user "$(id -u):$(id -g)"`.
 
 </details>
 
@@ -210,6 +214,7 @@ See [Performance Benchmarks](https://datamodel-code-generator.koxudaxi.dev/perfo
 **👉 [datamodel-code-generator.koxudaxi.dev](https://datamodel-code-generator.koxudaxi.dev)**
 
 - 🧰 [Presets](https://datamodel-code-generator.koxudaxi.dev/presets/) - Recommended option bundles for modern output
+- 🚀 [Getting Started](https://datamodel-code-generator.koxudaxi.dev/getting-started/) - Installation and first model
 - 🖥️ [CLI Reference](https://datamodel-code-generator.koxudaxi.dev/cli-reference/) - All command-line options
 - 🧪 [Playground](https://datamodel-code-generator.koxudaxi.dev/playground/) - Try generation in your browser
 - ⚙️ [pyproject.toml](https://datamodel-code-generator.koxudaxi.dev/pyproject_toml/) - Configuration file
@@ -224,25 +229,31 @@ See [Performance Benchmarks](https://datamodel-code-generator.koxudaxi.dev/perfo
 
 ## 📥 Supported Input
 
+<!-- BEGIN AUTO-GENERATED README SUPPORTED INPUT -->
 - OpenAPI 3 (YAML/JSON)
 - AsyncAPI (YAML/JSON)
 - JSON Schema
-- Apache Avro schema (AVSC)
+- MCP tool schemas
 - XML Schema (XSD)
 - Protocol Buffers / gRPC (`.proto`)
-- MCP tool schemas
-- JSON / YAML / CSV data
+- Apache Avro schema (AVSC)
+- JSON data
+- YAML data
+- Python dictionary
+- CSV data
 - GraphQL schema
 - Python types (Pydantic, dataclass, TypedDict) via `--input-model`
-- Python dictionary
+<!-- END AUTO-GENERATED README SUPPORTED INPUT -->
 
 ## 📤 Supported Output
 
+<!-- BEGIN AUTO-GENERATED README SUPPORTED OUTPUT -->
 - [pydantic v2](https://docs.pydantic.dev/) BaseModel
 - [pydantic v2](https://docs.pydantic.dev/) dataclass
 - [dataclasses](https://docs.python.org/3/library/dataclasses.html)
 - [TypedDict](https://docs.python.org/3/library/typing.html#typing.TypedDict)
 - [msgspec](https://github.com/jcrist/msgspec) Struct
+<!-- END AUTO-GENERATED README SUPPORTED OUTPUT -->
 
 ## ✅ Conformance Signals
 
@@ -253,6 +264,21 @@ for the generated summary of runner scripts, tox environments, CI jobs, expected
 ---
 
 ## 🍳 Common Recipes
+
+<!-- BEGIN AUTO-GENERATED CLI RECIPE QUICK STARTS -->
+### CLI option quick starts
+
+Use these starting points when combining options; each option links to the generated CLI reference for details and examples.
+
+- **Generate a local schema file:** Pin the input type and destination when the source extension is ambiguous or generated output needs a stable path. Options: [`--input`](https://datamodel-code-generator.koxudaxi.dev/cli-reference/base-options/#input), [`--input-file-type`](https://datamodel-code-generator.koxudaxi.dev/cli-reference/base-options/#input-file-type), [`--output`](https://datamodel-code-generator.koxudaxi.dev/cli-reference/base-options/#output).
+- **Target Pydantic v2 on modern Python:** Set the output model family and Python/Pydantic compatibility targets together. Options: [`--output-model-type`](https://datamodel-code-generator.koxudaxi.dev/cli-reference/model-customization/#output-model-type), [`--target-python-version`](https://datamodel-code-generator.koxudaxi.dev/cli-reference/model-customization/#target-python-version), [`--target-pydantic-version`](https://datamodel-code-generator.koxudaxi.dev/cli-reference/model-customization/#target-pydantic-version).
+- **Use modern Python annotations:** Target a recent Python version and prefer built-in collection and union syntax in generated types. Options: [`--target-python-version`](https://datamodel-code-generator.koxudaxi.dev/cli-reference/model-customization/#target-python-version), [`--use-union-operator`](https://datamodel-code-generator.koxudaxi.dev/cli-reference/typing-customization/#use-union-operator), [`--use-standard-collections`](https://datamodel-code-generator.koxudaxi.dev/cli-reference/typing-customization/#use-standard-collections).
+- **Normalize incoming field names:** Convert source names to Python identifiers while preserving explicit alias data for runtime IO. Options: [`--snake-case-field`](https://datamodel-code-generator.koxudaxi.dev/cli-reference/field-customization/#snake-case-field), [`--original-field-name-delimiter`](https://datamodel-code-generator.koxudaxi.dev/cli-reference/field-customization/#original-field-name-delimiter), [`--aliases`](https://datamodel-code-generator.koxudaxi.dev/cli-reference/field-customization/#aliases).
+- **Generate operation-focused models:** Limit OpenAPI output to operation shapes and name models from operation IDs and status codes. Options: [`--openapi-scopes`](https://datamodel-code-generator.koxudaxi.dev/cli-reference/openapi-only-options/#openapi-scopes), [`--use-operation-id-as-name`](https://datamodel-code-generator.koxudaxi.dev/cli-reference/openapi-only-options/#use-operation-id-as-name), [`--use-status-code-in-response-name`](https://datamodel-code-generator.koxudaxi.dev/cli-reference/openapi-only-options/#use-status-code-in-response-name).
+- **Resolve remote references deliberately:** Enable remote `$ref` loading and configure request metadata, timeouts, or local ref roots. Options: [`--allow-remote-refs`](https://datamodel-code-generator.koxudaxi.dev/cli-reference/general-options/#allow-remote-refs), [`--http-headers`](https://datamodel-code-generator.koxudaxi.dev/cli-reference/general-options/#http-headers), [`--http-timeout`](https://datamodel-code-generator.koxudaxi.dev/cli-reference/general-options/#http-timeout), [`--http-local-ref-path`](https://datamodel-code-generator.koxudaxi.dev/cli-reference/general-options/#http-local-ref-path).
+
+See the [CLI Reference](https://datamodel-code-generator.koxudaxi.dev/cli-reference/) for the full option list and category-specific recipes.
+<!-- END AUTO-GENERATED CLI RECIPE QUICK STARTS -->
 
 ### 🤖 Get CLI Help from LLMs
 
@@ -293,7 +319,8 @@ See [pyproject.toml Configuration](https://datamodel-code-generator.koxudaxi.dev
 Validate generated models in your CI pipeline:
 
 ```yaml
-- uses: koxudaxi/datamodel-code-generator@0.44.0
+# Replace vX.Y.Z with a released action version.
+- uses: koxudaxi/datamodel-code-generator@vX.Y.Z
   with:
     input: schemas/api.yaml
     output: src/models/api.py
@@ -356,6 +383,7 @@ These projects use datamodel-code-generator. See the linked examples for real-wo
 - [browser-use/browser-use](https://github.com/browser-use/browser-use) - *[Eval dependency](https://github.com/browser-use/browser-use/blob/de14b9aa31d167696a7ea7185d71876dbd7e6c94/pyproject.toml#L74-L79)*
 - [modelcontextprotocol/python-sdk](https://github.com/modelcontextprotocol/python-sdk) - *[Generate MCP protocol models from vendored JSON Schemas](https://github.com/modelcontextprotocol/python-sdk/blob/main/scripts/gen_surface_types.py)*
 - [vllm-project/vllm](https://github.com/vllm-project/vllm) - *[Test dependency for model tests](https://github.com/vllm-project/vllm/blob/main/requirements/test.in)*
+- [modular/modular](https://github.com/modular/modular) - *[Generate MAX Serve KServe schemas from OpenAPI with datamodel-codegen](https://github.com/modular/modular/blob/0735fa29762a5c53d65a0456d0b53eac1472180f/max/python/max/serve/schemas/README.md#L20-L33)*
 - [apache/airflow](https://github.com/apache/airflow) - *[Generate OpenAPI datamodels for airflow-ctl and task-sdk via pyproject codegen config](https://github.com/apache/airflow/blob/f1ac27af8b53e7d3ca7ff710c4f4413599bd1535/airflow-ctl/pyproject.toml#L148-L172)*
 - [stanfordnlp/dspy](https://github.com/stanfordnlp/dspy) - *[Generate Pydantic models from JSON Schema for reliability tests](https://github.com/stanfordnlp/dspy/blob/main/tests/reliability/generate/utils.py)*
 - [PostHog/posthog](https://github.com/PostHog/posthog) - *[Generate models via npm run](https://github.com/PostHog/posthog/blob/e1a55b9cb38d01225224bebf8f0c1e28faa22399/package.json#L41)*

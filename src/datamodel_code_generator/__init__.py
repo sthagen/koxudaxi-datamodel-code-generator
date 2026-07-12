@@ -52,9 +52,11 @@ from datamodel_code_generator.enums import (
     ProtobufVersion,
     ReadOnlyWriteOnlyModelType,
     ReuseScope,
+    SchemaValidatorType,
     TargetPydanticVersion,
     VersionMode,
     XMLSchemaVersion,
+    _is_pydantic_version_at_least,
 )
 from datamodel_code_generator.parser import DefaultPutDict, LiteralType
 
@@ -554,6 +556,32 @@ def _validate_alias_generator(output_model_type: DataModelType, alias_generator:
     raise Error(msg)
 
 
+def _apply_missing_sentinel_config(config: GenerateConfig) -> GenerateConfig:
+    if not config.use_missing_sentinel:
+        return config
+
+    if config.output_model_type is not DataModelType.PydanticV2BaseModel:
+        msg = "`--use-missing-sentinel` is only supported for `--output-model-type pydantic_v2.BaseModel`"
+        raise Error(msg)
+
+    match target_version := config.target_pydantic_version:
+        case None:
+            return config.model_copy(update={"target_pydantic_version": TargetPydanticVersion.V2_12})
+        case _ if _is_pydantic_version_at_least(target_version, TargetPydanticVersion.V2_12):
+            return config
+        case _:
+            target_version_value = (
+                target_version.value if isinstance(target_version, TargetPydanticVersion) else target_version
+            )
+            msg = (
+                "`--use-missing-sentinel` requires "
+                f"`--target-pydantic-version {TargetPydanticVersion.V2_12.value}` or later; "
+                f"got {target_version_value!r}"
+            )
+            raise Error(msg)
+    raise AssertionError  # pragma: no cover
+
+
 class InvalidFileFormatError(Error):
     """Raised when the input file format is invalid or cannot be parsed."""
 
@@ -729,6 +757,43 @@ def _generate_config_values(generate_config: GenerateConfig) -> dict[str, Any]:
         field_name: getattr(generate_config, field_name) for field_name in fields if field_name not in values
     })
     return values
+
+
+def _warn_if_input_string_points_to_existing_path(
+    input_: Path | str | ParseResult | Mapping[str, Any] | list[Any],
+) -> None:
+    match input_:
+        case str() as input_text if input_text and "\n" not in input_text and "\r" not in input_text:
+            pass
+        case _:
+            return
+    try:
+        path = Path(input_text).expanduser()
+        path_exists = path.exists()
+    except (OSError, RuntimeError, ValueError):
+        return
+    if not path_exists:
+        return
+
+    import warnings  # noqa: PLC0415
+
+    with contextlib.suppress(Warning):
+        warnings.warn(
+            "`input_` strings are treated as schema text. "
+            "The value also resolves to an existing path; pass a `Path` object to read it as a file.",
+            stacklevel=3,
+        )
+
+
+@contextlib.contextmanager
+def _warn_on_input_string_path_failure(
+    input_: Path | str | ParseResult | Mapping[str, Any] | list[Any],
+) -> Iterator[None]:
+    try:
+        yield
+    except Exception:
+        _warn_if_input_string_points_to_existing_path(input_)
+        raise
 
 
 def _create_parser_config(
@@ -932,6 +997,20 @@ def _convert_mcp_tools(
     return source_override, InputFileType.JsonSchema, True
 
 
+def _uses_pydantic_v2_schema_validator(config: GenerateConfig) -> bool:
+    if (schema_validator_type := config.schema_validator_type) is None:
+        return False
+
+    match schema_validator_type:
+        case SchemaValidatorType.PydanticV2:
+            if config.output_model_type == DataModelType.PydanticV2BaseModel:
+                return True
+            msg = "schema_validator_type='pydantic-v2' is only supported for pydantic_v2.BaseModel"
+            raise Error(msg)
+    msg = f"Unsupported schema_validator_type: {schema_validator_type.value}"  # pragma: no cover
+    raise Error(msg)  # pragma: no cover
+
+
 def _prepare_parser_common_options(  # noqa: PLR0913, PLR0917
     input_: Path | str | ParseResult | Mapping[str, Any] | list[Any],
     input_text: str | None,
@@ -952,6 +1031,8 @@ def _prepare_parser_common_options(  # noqa: PLR0913, PLR0917
             raise Error(msg)
     else:
         default_field_extras = None
+
+    generate_schema_validators = _uses_pydantic_v2_schema_validator(config)
 
     from datamodel_code_generator.model import get_data_model_types  # noqa: PLC0415
 
@@ -994,6 +1075,8 @@ def _prepare_parser_common_options(  # noqa: PLR0913, PLR0917
         "extra_template_data": extra_template_data,
         "serialization_aliases": config.serialization_aliases,
         "model_name_map": config.model_name_map,
+        "generate_schema_validators": generate_schema_validators,
+        "schema_validator_base_class_name": config.schema_validator_base_class_name,
         "base_path": input_.parent if isinstance(input_, Path) and input_.is_file() else None,
         "remote_text_cache": remote_text_cache,
         "known_third_party": data_model_types.known_third_party,
@@ -1009,6 +1092,7 @@ def _prepare_parser_common_options(  # noqa: PLR0913, PLR0917
             if config.enum_field_as_literal is not None
             else (LiteralType.All if config.output_model_type == DataModelType.TypingTypedDict else None)
         ),
+        "use_missing_sentinel": config.use_missing_sentinel,
         "set_default_enum_member": (
             True if config.output_model_type == DataModelType.DataclassesDataclass else config.set_default_enum_member
         ),
@@ -1042,7 +1126,7 @@ def _build_parser(  # noqa: PLR0911, PLR0913
                 **additional_options,
             }
             parser_config = _create_parser_config(config, openapi_additional_options)
-            return OpenAPIParser(source=source, config=parser_config)  # ty: ignore
+            return OpenAPIParser(source=source, config=parser_config)
         case InputFileType.AsyncAPI:
             from datamodel_code_generator.parser.asyncapi import AsyncAPIParser  # noqa: PLC0415
 
@@ -1052,7 +1136,7 @@ def _build_parser(  # noqa: PLR0911, PLR0913
                 **additional_options,
             }
             parser_config = _create_parser_config(config, asyncapi_additional_options)
-            return AsyncAPIParser(source=source, config=parser_config)  # ty: ignore
+            return AsyncAPIParser(source=source, config=parser_config)
         case InputFileType.XMLSchema:
             from datamodel_code_generator.parser.xmlschema import XMLSchemaParser  # noqa: PLC0415
 
@@ -1061,7 +1145,7 @@ def _build_parser(  # noqa: PLR0911, PLR0913
                 **additional_options,
             }
             parser_config = _create_parser_config(config, xmlschema_additional_options)
-            return XMLSchemaParser(source=source, config=parser_config)  # ty: ignore
+            return XMLSchemaParser(source=source, config=parser_config)
         case InputFileType.Protobuf:
             from datamodel_code_generator.parser.protobuf import ProtobufParser  # noqa: PLC0415
 
@@ -1071,13 +1155,13 @@ def _build_parser(  # noqa: PLR0911, PLR0913
                 "skip_root_model": True,
             }
             parser_config = _create_parser_config(config, protobuf_additional_options)
-            return ProtobufParser(source=source, config=parser_config)  # ty: ignore
+            return ProtobufParser(source=source, config=parser_config)
         case InputFileType.Avro:
             from datamodel_code_generator.parser.avro import AvroParser  # noqa: PLC0415
 
             avro_additional_options: AvroParserConfigDict = {**additional_options}
             parser_config = _create_parser_config(config, avro_additional_options)
-            return AvroParser(source=source, config=parser_config)  # ty: ignore
+            return AvroParser(source=source, config=parser_config)
         case InputFileType.GraphQL:
             from datamodel_code_generator.parser.graphql import GraphQLParser  # noqa: PLC0415
 
@@ -1087,7 +1171,7 @@ def _build_parser(  # noqa: PLR0911, PLR0913
                 **additional_options,
             }
             parser_config = _create_parser_config(config, graphql_additional_options)
-            return GraphQLParser(source=source, config=parser_config)  # ty: ignore
+            return GraphQLParser(source=source, config=parser_config)
         case _:
             from datamodel_code_generator.parser.jsonschema import JsonSchemaParser  # noqa: PLC0415
 
@@ -1096,12 +1180,12 @@ def _build_parser(  # noqa: PLR0911, PLR0913
                 **additional_options,
             }
             parser_config = _create_parser_config(config, jsonschema_additional_options)
-            return JsonSchemaParser(source=source, config=parser_config)  # ty: ignore
+            return JsonSchemaParser(source=source, config=parser_config)
     msg = f"Unsupported input file type: {input_file_type}"
     raise Error(msg)
 
 
-def _emit_results(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
+def _emit_results(  # noqa: PLR0912, PLR0913, PLR0915
     results: str | dict[tuple[str, ...], Any],
     input_: Path | str | ParseResult | Mapping[str, Any] | list[Any],
     input_filename: str | None,
@@ -1178,25 +1262,24 @@ def _emit_results(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
             for name, result in sorted(results.items())
         }
 
-    file: IO[Any] | None
     for path, (body, future_imports, filename) in modules.items():
         if not path.parent.exists():
             path.parent.mkdir(parents=True)
 
         safe_filename = filename.replace("\n", " ").replace("\r", " ") if filename else ""
         effective_header = custom_file_header or header.format(safe_filename)
-        file = path.open("wt", encoding=config.encoding)
-        if custom_file_header and body:
-            file.write(
-                _build_module_content(body, effective_header, custom_file_header, future_imports=future_imports) + "\n"
-            )
-        else:
-            file.write(effective_header)
-            if body:
-                file.write("\n\n")
-                file.write(body.rstrip())
-            file.write("\n")
-        file.close()
+        with path.open("wt", encoding=config.encoding) as file:
+            if custom_file_header and body:
+                file.write(
+                    _build_module_content(body, effective_header, custom_file_header, future_imports=future_imports)
+                    + "\n"
+                )
+            else:
+                file.write(effective_header)
+                if body:
+                    file.write("\n\n")
+                    file.write(body.rstrip())
+                file.write("\n")
 
     if defer_formatting and config.formatters:
         from datamodel_code_generator._format_types import Formatter  # noqa: PLC0415
@@ -1255,7 +1338,7 @@ def generate(  # noqa: PLR0912, PLR0914, PLR0915
     (JSON, YAML, Dict, CSV) as input.
 
     Args:
-        input_: The input source (file path, string content, URL, dict,
+        input_: The input source (Path file input, string content, URL, dict,
             list of file paths, or MCP tools list when input_file_type is
             InputFileType.MCPTools).
         config: A GenerateConfig object with all options. Cannot be used together with **options.
@@ -1280,6 +1363,7 @@ def generate(  # noqa: PLR0912, PLR0914, PLR0915
         _rebuild_generate_config()
         config = GenerateConfig.model_validate(options)
     config = _apply_generate_config_preset(config)
+    config = _apply_missing_sentinel_config(config)
 
     _validate_output_datetime_class(config.output_model_type, config.output_datetime_class)
     _validate_alias_generator(config.output_model_type, config.alias_generator)
@@ -1378,8 +1462,9 @@ def generate(  # noqa: PLR0912, PLR0914, PLR0915
             raise Error(msg) from exc
 
         try:
-            assert isinstance(input_text_, str)
-            input_file_type = infer_input_type(input_text_)
+            with _warn_on_input_string_path_failure(input_):
+                assert isinstance(input_text_, str)
+                input_file_type = infer_input_type(input_text_)
         except Exception as exc:
             raise InvalidFileFormatError(exc) from exc
         else:
@@ -1392,15 +1477,17 @@ def generate(  # noqa: PLR0912, PLR0914, PLR0915
             if isinstance(input_, Path) and input_.is_file() and input_file_type not in RAW_DATA_TYPES:
                 input_text = input_text_
 
-    input_text = _normalize_raw_input(input_, input_text, input_file_type, config)
+    with _warn_on_input_string_path_failure(input_):
+        input_text = _normalize_raw_input(input_, input_text, input_file_type, config)
 
     if input_file_type == InputFileType.MCPTools:
-        source_override, input_file_type, skip_root_model = _convert_mcp_tools(
-            input_,
-            input_text,
-            config,
-            remote_text_cache,
-        )
+        with _warn_on_input_string_path_failure(input_):
+            source_override, input_file_type, skip_root_model = _convert_mcp_tools(
+                input_,
+                input_text,
+                config,
+                remote_text_cache,
+            )
 
     if isinstance(input_, ParseResult) and input_file_type not in RAW_DATA_TYPES:
         input_text = None
@@ -1421,29 +1508,35 @@ def generate(  # noqa: PLR0912, PLR0914, PLR0915
         _resolve_schema_versions(input_file_type, config.schema_version)
     )
 
-    parser = _build_parser(
-        input_file_type,
-        source,
-        config,
-        additional_options,
-        data_model_types,
-        jsonschema_version=jsonschema_version,
-        openapi_version=openapi_version,
-        asyncapi_version=asyncapi_version,
-        xmlschema_version=xmlschema_version,
-        protobuf_version=protobuf_version,
-    )
+    with _warn_on_input_string_path_failure(input_):
+        parser = _build_parser(
+            input_file_type,
+            source,
+            config,
+            additional_options,
+            data_model_types,
+            jsonschema_version=jsonschema_version,
+            openapi_version=openapi_version,
+            asyncapi_version=asyncapi_version,
+            xmlschema_version=xmlschema_version,
+            protobuf_version=protobuf_version,
+        )
 
     with chdir(config.output):
         try:
-            results = parser.parse(
-                settings_path=config.settings_path,
-                disable_future_imports=config.disable_future_imports,
-                all_exports_scope=config.all_exports_scope,
-                all_exports_collision_strategy=config.all_exports_collision_strategy,
-                module_split_mode=config.module_split_mode,
-                collect_model_metadata=config.emit_model_metadata is not None,
-            )
+            with _warn_on_input_string_path_failure(input_):
+                results = parser.parse(
+                    settings_path=config.settings_path,
+                    disable_future_imports=config.disable_future_imports,
+                    all_exports_scope=config.all_exports_scope,
+                    all_exports_collision_strategy=config.all_exports_collision_strategy,
+                    module_split_mode=config.module_split_mode,
+                    collect_model_metadata=config.emit_model_metadata is not None,
+                )
+        except Exception:
+            with contextlib.suppress(BaseException):
+                parser._dispose()  # noqa: SLF001
+            raise
         except BaseException:
             with contextlib.suppress(BaseException):
                 parser._dispose()  # noqa: SLF001
@@ -1476,8 +1569,11 @@ def infer_input_type(text: str) -> InputFileType:  # noqa: PLR0911, PLR0912
 
     try:
         data = load_yaml(text)
-    except get_yaml_parse_errors():
-        return InputFileType.CSV
+    except get_yaml_parse_errors() as exc:
+        if not _is_json_text(text) and _looks_like_csv_text(text):
+            return InputFileType.CSV
+        msg = _infer_input_type_error_message(parse_error=exc)
+        raise Error(msg) from exc
     if isinstance(data, dict):
         if is_asyncapi(data):
             return InputFileType.AsyncAPI
@@ -1498,15 +1594,42 @@ def infer_input_type(text: str) -> InputFileType:  # noqa: PLR0911, PLR0912
         if is_avro_schema_data(data):
             return InputFileType.Avro
     if isinstance(data, str):
+        if _looks_like_csv_text(text):
+            return InputFileType.CSV
         from datamodel_code_generator.parser._avro_detection import is_avro_schema_data  # noqa: PLC0415
 
         if is_avro_schema_data(data):
             return InputFileType.Avro
-    msg = (
-        "Can't infer input file type from the input data. "
-        "Please specify the input file type explicitly with --input-file-type option."
-    )
+    msg = _infer_input_type_error_message()
     raise Error(msg)
+
+
+def _infer_input_type_error_message(*, parse_error: Exception | None = None) -> str:
+    message = "Can't infer input file type from the input data."
+    hint = "Please specify the input file type explicitly with --input-file-type option."
+    if parse_error is None:
+        return f"{message} {hint}"
+    return f"{message} YAML parser error: {type(parse_error).__name__}: {parse_error}. {hint}"
+
+
+_MIN_CSV_NON_EMPTY_LINES = 2
+
+
+def _looks_like_csv_text(text: str) -> bool:
+    comma_count: int | None = None
+    matched_lines = 0
+    for raw_line in text.splitlines():
+        if not (line := raw_line.strip()):
+            continue
+        if (current_comma_count := line.count(",")) == 0:
+            return False
+        match comma_count:
+            case None:
+                comma_count = current_comma_count
+            case _ if current_comma_count != comma_count:
+                return False
+        matched_lines += 1
+    return matched_lines >= _MIN_CSV_NON_EMPTY_LINES
 
 
 inferred_message = (
@@ -1590,6 +1713,7 @@ __all__ = [
     "ReadOnlyWriteOnlyModelType",
     "ReuseScope",
     "SchemaParseError",
+    "SchemaValidatorType",
     "TargetPydanticVersion",
     "VersionMode",
     "XMLSchemaVersion",

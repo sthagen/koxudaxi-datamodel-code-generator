@@ -1,0 +1,35 @@
+
+<details>
+<summary>schema.yaml</summary>
+
+```yaml
+name: User
+```
+</details>
+
+```yaml
+name: User
+```
+
+```python
+class User:
+    pass
+```
+
+??? example "Examples"
+
+    **Command:**
+    ```bash
+    datamodel-codegen --input schema.yaml --output model.py
+    ```
+
+    **Schema:**
+    ```yaml
+    name: User
+    ```
+
+    **Model:**
+    ```python
+    class User:
+        pass
+    ```

@@ -54,6 +54,8 @@ _TYPING_IMPORT_NAMES: frozenset[str] = frozenset({
     IMPORT_OPTIONAL.import_,
     IMPORT_UNION.import_,
 })
+_MODULE_NAME_INVALID_CHAR_PATTERN = re.compile(r"[^0-9a-zA-Z_]")
+_MODULE_NAME_INVALID_CHAR_WITH_DOTS_PATTERN = re.compile(r"[^0-9a-zA-Z_.]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,27 +222,25 @@ def _safe_extra_template_data(extra_template_data: dict[str, Any]) -> dict[str, 
 class _RenderedDataModelField:
     """Proxy a field with a pre-rendered docstring for built-in templates."""
 
-    __slots__ = ("_cache", "_field", "docstring")
-
     def __init__(self, field: DataModelFieldBase, docstring: str) -> None:
-        self._field = field
-        self._cache: dict[str, Any] = {}
-        self.docstring = docstring
+        field_values = self.__dict__
+        field_values["_field"] = field
+        field_values["docstring"] = docstring
 
     def __getattr__(self, name: str) -> Any:
-        try:
-            return self._cache[name]
-        except KeyError:
-            if name in {"annotated", "field"} and (
-                rendered_field_values := getattr(self._field, "_rendered_field_values", None)
-            ):
-                field, annotated = rendered_field_values()
-                self._cache["field"] = field
-                self._cache["annotated"] = annotated
-                return self._cache[name]
-            value = getattr(self._field, name)
-            self._cache[name] = value
-            return value
+        field_values = self.__dict__
+        field = field_values["_field"]
+        if (
+            name in {"annotated", "field"}
+            and (rendered_field_values := getattr(field, "_rendered_field_values", None)) is not None
+        ):
+            rendered_field, annotated = rendered_field_values()
+            field_values["field"] = rendered_field
+            field_values["annotated"] = annotated
+            return field_values[name]
+        value = getattr(field, name)
+        field_values[name] = value
+        return value
 
 
 ALL_MODEL: str = "#all#"
@@ -263,7 +263,7 @@ class ConstraintsBase(_BaseModel):
 
     unique_items: Optional[bool] = Field(None, alias="uniqueItems")  # noqa: UP045
     _exclude_fields: ClassVar[set[str]] = {"has_constraints", "_exclude_unset_dump"}
-    model_config = ConfigDict(  # ty: ignore
+    model_config = ConfigDict(
         arbitrary_types_allowed=True,
         ignored_types=(cached_property,),
         defer_build=True,
@@ -312,7 +312,7 @@ class DataModelFieldBase(_BaseModel):
     _FIELD_IMPORTS_CACHE_MAX_SIZE: ClassVar[int] = 4096
     _field_imports_cache: ClassVar[dict[tuple[Any, ...], tuple[Import, ...]]] = {}
 
-    model_config = ConfigDict(  # ty: ignore
+    model_config = ConfigDict(
         arbitrary_types_allowed=True,
         defer_build=True,
     )
@@ -338,6 +338,7 @@ class DataModelFieldBase(_BaseModel):
     const: bool = False
     original_name: Optional[str] = None  # noqa: UP045
     use_default_kwarg: bool = False
+    use_missing_sentinel: bool = False
     use_one_literal_as_default: bool = False
     _exclude_fields: ClassVar[set[str]] = {"parent"}
     _pass_fields: ClassVar[set[str]] = {"parent", "data_type"}
@@ -964,16 +965,18 @@ def _nested_model_default_factory(field: DataModelFieldBase, model_cls: type[Dat
     return None
 
 
-def _build_environment(loader: Any) -> Environment:
+def _build_environment(loader: Any, *, auto_reload: bool = True) -> Environment:
     """Build a Jinja environment with built-in filters."""
     from jinja2 import Environment, select_autoescape  # noqa: PLC0415
 
     env = Environment(
         loader=loader,
         autoescape=select_autoescape(["html", "xml"]),
+        auto_reload=auto_reload,
     )
     env.filters["escape_docstring"] = escape_docstring  # For old custom templates
     env.filters["format_docstring"] = format_docstring
+    env.filters["repr"] = repr
     return env
 
 
@@ -983,16 +986,18 @@ def _get_environment(template_subdir: Path, custom_template_dir: Path | None) ->
     from jinja2 import ChoiceLoader, FileSystemLoader  # noqa: PLC0415
 
     loaders: list[FileSystemLoader] = []
+    has_custom_loader = False
 
     if custom_template_dir is not None:
         custom_dir = custom_template_dir / template_subdir
         if cached_path_exists(custom_dir):
             loaders.append(FileSystemLoader(str(custom_dir)))
+            has_custom_loader = True
 
     loaders.append(FileSystemLoader(str(TEMPLATE_DIR / template_subdir)))
 
     loader: ChoiceLoader | FileSystemLoader = ChoiceLoader(loaders) if len(loaders) > 1 else loaders[0]
-    return _build_environment(loader)
+    return _build_environment(loader, auto_reload=has_custom_loader)
 
 
 @lru_cache
@@ -1048,8 +1053,8 @@ def sanitize_module_name(name: str, *, treat_dot_as_module: bool | None) -> str:
     If treat_dot_as_module is True, dots are preserved in the name.
     If treat_dot_as_module is False or None (default), dots are replaced with underscores.
     """
-    pattern = r"[^0-9a-zA-Z_.]" if treat_dot_as_module else r"[^0-9a-zA-Z_]"
-    sanitized = re.sub(pattern, "_", name)
+    pattern = _MODULE_NAME_INVALID_CHAR_WITH_DOTS_PATTERN if treat_dot_as_module else _MODULE_NAME_INVALID_CHAR_PATTERN
+    sanitized = pattern.sub("_", name)
     if sanitized and sanitized[0].isdigit():
         sanitized = f"_{sanitized}"
     return sanitized
@@ -1131,6 +1136,7 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
     SUPPORTS_FIELD_RENAMING: ClassVar[bool] = False
     SUPPORTS_KW_ONLY: ClassVar[bool] = False
     TYPED_EXTRA_FIELD_NAME: ClassVar[str | None] = None
+    TYPED_EXTRA_PLAIN_ANNOTATION_TEMPLATE_DATA_KEY: ClassVar[str | None] = None
     REQUIRES_RUNTIME_IMPORTS_WITH_RUFF_CHECK: ClassVar[bool] = False
     DOCSTRING_INDENT: ClassVar[int] = 4
     FIELD_DOCSTRING_INDENT: ClassVar[int] = 4
@@ -1442,6 +1448,16 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
         Each model type should override this to provide appropriate implementation.
         """
         return None
+
+    @classmethod
+    def render_module_code(cls, models: list[DataModel]) -> str:  # noqa: ARG003
+        """Render shared code that should be emitted once per generated module."""
+        return ""
+
+    @property
+    def custom_template_dir(self) -> Path | None:
+        """Return the custom template directory used by this model."""
+        return self._custom_template_dir
 
     @property
     def nullable(self) -> bool:

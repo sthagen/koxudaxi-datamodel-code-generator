@@ -387,9 +387,9 @@ def _serialize_python_type(tp: type) -> str | None:  # noqa: PLR0911
 
     type_name: str | None = None
     if origin is not None:
-        type_name = preserved_origins.get(origin)  # ty: ignore
+        type_name = preserved_origins.get(origin)
         if type_name is None and getattr(origin, "__module__", None) == "collections":  # pragma: no cover
-            type_name = _simple_type_name(origin)  # ty: ignore
+            type_name = _simple_type_name(origin)
     if type_name is not None:
         if args:
             args_str = ", ".join(_serialize_python_type(a) or _full_type_name(a) for a in args)
@@ -399,7 +399,7 @@ def _serialize_python_type(tp: type) -> str | None:  # noqa: PLR0911
     if args:
         nested = [_serialize_python_type(a) for a in args]
         if any(n is not None for n in nested):
-            origin_name = _simple_type_name(origin or tp)  # ty: ignore
+            origin_name = _simple_type_name(origin or tp)
             args_str = ", ".join(n or _full_type_name(a) for n, a in zip(nested, args, strict=False))
             return f"{origin_name}[{args_str}]"
 
@@ -441,7 +441,7 @@ def _full_type_name(tp: type) -> str:  # noqa: PLR0911
                 return " | ".join(_full_type_name(a) for a in args)
             return str(tp)  # pragma: no cover
 
-        origin_name = _simple_type_name(origin)  # ty: ignore
+        origin_name = _simple_type_name(origin)
         args = get_args(tp)
         if args:
             args_str = ", ".join(_full_type_name(a) for a in args)
@@ -669,7 +669,7 @@ def _try_rebuild_model(obj: type) -> None:
             "StrictTypes": StrictTypes,
             "UnionMode": UnionMode,
         }
-        obj.model_rebuild(_types_namespace=types_namespace)  # ty: ignore
+        obj.model_rebuild(_types_namespace=types_namespace)  # ty: ignore[unresolved-attribute]
     elif module == "datamodel_code_generator.__main__" and class_name in main_config_classes:  # pragma: no cover
         from datamodel_code_generator.enums import UnionMode  # noqa: PLC0415
         from datamodel_code_generator.types import StrictTypes  # noqa: PLC0415
@@ -678,9 +678,9 @@ def _try_rebuild_model(obj: type) -> None:
             "UnionMode": UnionMode,
             "StrictTypes": StrictTypes,
         }
-        obj.model_rebuild(_types_namespace=types_namespace)  # ty: ignore
+        obj.model_rebuild(_types_namespace=types_namespace)  # ty: ignore[unresolved-attribute]
     else:
-        obj.model_rebuild()  # ty: ignore
+        obj.model_rebuild()  # ty: ignore[unresolved-attribute]
 
 
 def _get_base_model_parents(model_class: type) -> list[type]:
@@ -827,7 +827,7 @@ def load_model_schema(  # noqa: PLR0912, PLR0914, PLR0915
             model_name = model_class.__name__
             _try_rebuild_model(model_class)
 
-            schema = model_class.model_json_schema(schema_generator=schema_generator)  # ty: ignore
+            schema = model_class.model_json_schema(schema_generator=schema_generator)  # ty: ignore[unresolved-attribute]
             schema = _add_python_type_for_unserializable(schema, model_class)
             schema = _add_python_type_info(schema, model_class)
 
@@ -923,7 +923,7 @@ def _load_single_model_schema(  # noqa: PLR0912, PLR0915
             if ref_strategy and ref_strategy != InputModelRefStrategy.RegenerateAll:
                 nested_models = _collect_nested_models(obj)
                 model_name = getattr(obj, "__name__", None)
-                if model_name and "$defs" in schema and model_name in schema["$defs"]:  # pragma: no cover  # ty: ignore
+                if model_name and "$defs" in schema and model_name in schema["$defs"]:  # pragma: no cover  # ty: ignore[unsupported-operator]
                     nested_models[model_name] = obj
                 schema = _filter_defs_by_strategy(schema, nested_models, output_model_type, ref_strategy)
 
