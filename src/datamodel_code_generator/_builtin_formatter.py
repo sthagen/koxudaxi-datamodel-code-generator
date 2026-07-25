@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, TypeGuard, cast
 from datamodel_code_generator.util import load_toml
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping, Sequence
+    from collections.abc import Iterable, Iterator, Mapping, Sequence
     from pathlib import Path
     from typing import Protocol
 
@@ -54,6 +54,20 @@ STRING_PREFIX_PATTERN = re.compile(r"(?i)^([rubf]*)(\"\"\"|'''|\"|')")
 PEP695_TYPE_ALIAS_START_PATTERN = re.compile(r"^(?P<indent>\s*)type\s+(?P<target>[A-Za-z_]\w*(?:\[.*?\])?)\s*=")
 PEP695_TYPE_ALIAS_PLACEHOLDER = "__datamodel_codegen_builtin_type_alias__"
 _SOURCE_LINES_CACHE: list[tuple[str, list[str]]] = []
+
+
+def _split_python_lines(source: str) -> list[str]:
+    """Split physical Python lines while preserving Unicode separators."""
+    if not source:
+        return []
+    if "\r" in source:
+        source = source.replace("\r\n", "\n").replace("\r", "\n")
+
+    lines = source.split("\n")
+    if lines[-1]:
+        return lines
+    lines.pop()
+    return lines
 
 
 def _is_valid_builtin_line_length(line_length: Any) -> TypeGuard[int]:
@@ -231,7 +245,7 @@ def _pep695_type_alias_statement_end(lines: list[str], start_index: int) -> int:
 
 
 def _replace_pep695_type_aliases_with_placeholders(code: str) -> str:
-    lines = code.splitlines()
+    lines = _split_python_lines(code)
     placeholder_lines = list(lines)
     line_index = 0
     while line_index < len(lines):
@@ -504,15 +518,41 @@ def _format_call_argument(keyword: ast.keyword, source: str) -> str:
     return f"{keyword.arg}={_inline_source_segment(source, keyword.value)}"
 
 
+def _format_nested_literal(
+    node: ast.AST,
+    indent: str,
+    source: str,
+    line_length: int,
+    *,
+    preserve_dict_trailing_comma: bool = False,
+) -> str | None:
+    match node:
+        case ast.Dict(keys=[_, *_]):
+            return _format_dict_literal(
+                node,
+                indent,
+                source,
+                line_length,
+                preserve_trailing_comma=preserve_dict_trailing_comma,
+            )
+        case ast.Tuple(elts=[_, *_]):
+            return _format_tuple_literal(node, indent, source, line_length)
+    return None
+
+
 def _format_dict_literal(
     dict_node: ast.Dict,
     indent: str,
     source: str,
     line_length: int = DEFAULT_LINE_LENGTH,
+    *,
+    preserve_trailing_comma: bool = False,
 ) -> str:
     entries: list[str] = []
     entry_indent = f"{indent}    "
-    has_trailing_comma = len(dict_node.keys) > 1
+    has_trailing_comma = len(dict_node.keys) > 1 or (
+        preserve_trailing_comma and _source_segment(source, dict_node).rstrip()[:-1].rstrip().endswith(",")
+    )
     for key, value in zip(dict_node.keys, dict_node.values, strict=True):
         trailing_comma = "," if has_trailing_comma else ""
         if key is None:
@@ -522,14 +562,56 @@ def _format_dict_literal(
         key_source = _source_segment(source, key)
         value_source = _source_segment(source, value)
         entry = f"{entry_indent}{key_source}: {value_source}{trailing_comma}"
-        if isinstance(value, ast.Dict) and len(entry) > line_length:
-            nested_lines = _format_dict_literal(value, entry_indent, source, line_length).splitlines()
+        if (
+            len(entry) > line_length
+            and (
+                nested_literal := _format_nested_literal(
+                    value,
+                    entry_indent,
+                    source,
+                    line_length,
+                    preserve_dict_trailing_comma=preserve_trailing_comma,
+                )
+            )
+            is not None
+        ):
+            nested_lines = _split_python_lines(nested_literal)
             entries.append(f"{entry_indent}{key_source}: {nested_lines[0]}")
             entries.extend(nested_lines[1:-1])
             entries.append(f"{nested_lines[-1]}{trailing_comma}")
         else:
             entries.append(entry)
     return "{\n" + "\n".join(entries) + f"\n{indent}}}"
+
+
+def _format_tuple_literal(
+    tuple_node: ast.Tuple,
+    indent: str,
+    source: str,
+    line_length: int = DEFAULT_LINE_LENGTH,
+) -> str:
+    element_indent = f"{indent}    "
+    elements: list[str] = []
+    for element in tuple_node.elts:
+        element_source = _source_segment(source, element)
+        if "\n" not in element_source and len(f"{element_indent}{element_source},") <= line_length:
+            elements.append(f"{element_indent}{element_source},")
+            continue
+        if (
+            nested_literal := _format_nested_literal(
+                element,
+                element_indent,
+                source,
+                line_length,
+                preserve_dict_trailing_comma=True,
+            )
+        ) is None:
+            elements.append(f"{element_indent}{element_source},")
+            continue
+        nested_lines = _split_python_lines(nested_literal)
+        elements.extend(_indent_first_line(nested_lines, element_indent))
+        elements[-1] = f"{elements[-1]},"
+    return "(\n" + "\n".join(elements) + f"\n{indent})"
 
 
 def _format_list_literal(list_node: ast.List, indent: str, source: str) -> str:
@@ -954,13 +1036,15 @@ def _format_annotated(  # noqa: PLR0913
             if len(f"{continuation_indent}{inline_field},") <= line_length:
                 formatted_lines.append(f"{continuation_indent}{inline_field},")
                 continue
-            call_lines = _format_call(
-                element,
-                continuation_indent,
-                line_length,
-                source,
-                wrap_string_literal=wrap_string_literal,
-            ).splitlines()
+            call_lines = _split_python_lines(
+                _format_call(
+                    element,
+                    continuation_indent,
+                    line_length,
+                    source,
+                    wrap_string_literal=wrap_string_literal,
+                )
+            )
             call_lines[-1] = f"{call_lines[-1]},"
             formatted_lines.extend(_indent_first_line(call_lines, continuation_indent))
         else:
@@ -972,6 +1056,16 @@ def _format_annotated(  # noqa: PLR0913
 def _config_dict_assignment(statement: ast.stmt) -> tuple[ast.Assign, ast.Call] | None:
     if isinstance(statement, ast.Assign) and len(statement.targets) == 1 and _is_call(statement.value, "ConfigDict"):
         return statement, statement.value
+    return None
+
+
+def _classvar_tuple_value(statement: ast.AnnAssign) -> ast.Tuple | None:
+    match statement:
+        case ast.AnnAssign(
+            annotation=ast.Subscript(value=class_var),
+            value=ast.Tuple() as value,
+        ) if _is_name_or_attr(class_var, "ClassVar"):
+            return value
     return None
 
 
@@ -990,6 +1084,11 @@ def _format_generated_annotation_assignment(  # noqa: PLR0911, PLR0912
     target_prefix = f"{indent}{target}: "
     annotation_prefix = f"{target_prefix}{annotation}"
     value_prefix = f"{annotation_prefix} = "
+    if (
+        statement.lineno != (statement.end_lineno or statement.lineno)
+        and (tuple_value := _classvar_tuple_value(statement)) is not None
+    ):
+        return f"{value_prefix}{_format_tuple_literal(tuple_value, indent, source, line_length)}"
     if statement.value is None and _is_list_of_annotated(statement.annotation):
         return f"{target_prefix}{_format_list_of_annotated(statement.annotation, indent, line_length, source)}"
     if _should_format_constrained_call_union(
@@ -1233,7 +1332,7 @@ def _format_annotated_union(annotation: ast.BinOp, indent: str, line_length: int
         return f"(\n{indent}    {inline_union}\n{indent})"
     if _is_annotated(left):
         if len(f"{indent}    {_source_segment(source, left)}") > line_length:
-            annotated_lines = _format_annotated(left, f"{indent}    ", line_length, source).splitlines()
+            annotated_lines = _split_python_lines(_format_annotated(left, f"{indent}    ", line_length, source))
             formatted_annotated = "\n".join(_indent_first_line(annotated_lines, f"{indent}    "))
         else:
             formatted_annotated = f"{indent}    {_source_segment(source, left)}"
@@ -1252,7 +1351,9 @@ def _format_list_of_annotated(annotation: ast.Subscript, indent: str, line_lengt
     if len(f"{continuation_indent}{inline_annotated}") <= line_length:
         formatted_annotated = f"{continuation_indent}{inline_annotated}"
     else:
-        annotated_lines = _format_annotated(annotation.slice, continuation_indent, line_length, source).splitlines()
+        annotated_lines = _split_python_lines(
+            _format_annotated(annotation.slice, continuation_indent, line_length, source)
+        )
         formatted_annotated = "\n".join(_indent_first_line(annotated_lines, continuation_indent))
     return f"list[\n{formatted_annotated}\n{indent}]"
 
@@ -1300,12 +1401,43 @@ def _format_subscript_value(
                 element_lines[-1] = f"{element_lines[-1]},"
             formatted_lines.extend(element_lines)
         elif isinstance(element, ast.Subscript) and len(f"{continuation_indent}{element_source}") > line_length:
-            element_lines = _format_subscript_value(element, continuation_indent, line_length, source, ",").splitlines()
+            element_lines = _split_python_lines(
+                _format_subscript_value(element, continuation_indent, line_length, source, ",")
+            )
             formatted_lines.extend(_indent_first_line(element_lines, continuation_indent))
         else:
             formatted_lines.append(f"{continuation_indent}{element_source}{',' if trailing_comma else ''}")
     formatted_lines.append(f"{indent}]{closing_suffix}")
     return "\n".join(formatted_lines)
+
+
+def _format_type_alias_type_argument(
+    argument: ast.AST,
+    continuation_indent: str,
+    line_length: int,
+    source: str,
+) -> Iterable[str]:
+    if _is_union(argument):
+        union_lines = _split_python_lines(_format_union_subscript(argument, continuation_indent, source, ",", 0))
+        return _indent_first_line(union_lines, continuation_indent)
+
+    argument_source = _source_segment(source, argument)
+    if not _is_annotated(argument):
+        return [f"{continuation_indent}{argument_source},"]
+    match argument.slice:
+        case ast.Tuple(elts=[ast.BinOp(op=ast.BitOr()), *_]):
+            has_bit_or_value = True
+        case _:
+            has_bit_or_value = False
+    if (
+        not has_bit_or_value
+        and "\n" not in argument_source
+        and len(f"{continuation_indent}{argument_source},") <= line_length
+    ):
+        return [f"{continuation_indent}{argument_source},"]
+
+    annotated_lines = _split_python_lines(_format_annotated(argument, continuation_indent, line_length, source, ","))
+    return _indent_first_line(annotated_lines, continuation_indent)
 
 
 def _format_type_alias_type_call(call: ast.Call, indent: str, line_length: int, source: str) -> str:
@@ -1322,14 +1454,7 @@ def _format_type_alias_type_call(call: ast.Call, indent: str, line_length: int, 
 
     formatted_lines = ["TypeAliasType("]
     for argument in call.args:
-        if _is_union(argument):
-            union_lines = _format_union_subscript(argument, continuation_indent, source, ",", 0).splitlines()
-            formatted_lines.extend(_indent_first_line(union_lines, continuation_indent))
-        elif _is_annotated(argument):
-            annotated_lines = _format_annotated(argument, continuation_indent, line_length, source, ",").splitlines()
-            formatted_lines.extend(_indent_first_line(annotated_lines, continuation_indent))
-        else:
-            formatted_lines.append(f"{continuation_indent}{_source_segment(source, argument)},")
+        formatted_lines.extend(_format_type_alias_type_argument(argument, continuation_indent, line_length, source))
     formatted_lines.extend(
         f"{continuation_indent}{_format_call_argument(keyword, source)}," for keyword in call.keywords
     )
@@ -1355,6 +1480,12 @@ def _format_type_alias_union_assignment(
         ) if _is_union(value):
             union = _format_union_subscript(value, indent, source, line_length=0)
             return f"{indent}{target}: TypeAlias = {union}"
+        case ast.AnnAssign(
+            target=ast.Name(id=target),
+            annotation=ast.Name(id="TypeAlias"),
+            value=ast.Subscript() as value,
+        ) if _is_annotated(value) and statement.lineno == (statement.end_lineno or statement.lineno):
+            return f"{indent}{target}: TypeAlias = {_format_annotated(value, indent, line_length, source)}"
 
     return None
 
@@ -1364,7 +1495,7 @@ def _format_typed_dict_call(call: ast.Call, indent: str, source: str) -> str:
     formatted_lines = ["TypedDict("]
     for argument in call.args:
         if isinstance(argument, ast.Dict):
-            dict_lines = _format_dict_literal(argument, continuation_indent, source).splitlines()
+            dict_lines = _split_python_lines(_format_dict_literal(argument, continuation_indent, source))
             dict_lines[-1] = f"{dict_lines[-1]},"
             formatted_lines.extend(_indent_first_line(dict_lines, continuation_indent))
         else:
@@ -1398,12 +1529,12 @@ def _format_root_model_constrained_union_base(
     assert isinstance(union, ast.BinOp)
     formatted_lines = ["RootModel["]
     if _is_constrained_string_call(union.left):
-        call_lines = _format_constrained_call(union.left, inner_indent, line_length, source).splitlines()
+        call_lines = _split_python_lines(_format_constrained_call(union.left, inner_indent, line_length, source))
         formatted_lines.extend(_indent_first_line(call_lines, inner_indent))
         formatted_lines.append(f"{inner_indent}| {_source_segment(source, union.right)}")
     elif _is_constrained_string_call(union.right):  # pragma: no branch
         formatted_lines.append(f"{inner_indent}{_source_segment(source, union.left)}")
-        call_lines = _format_constrained_call(union.right, inner_indent, line_length, source).splitlines()
+        call_lines = _split_python_lines(_format_constrained_call(union.right, inner_indent, line_length, source))
         formatted_lines.append(f"{inner_indent}| {call_lines[0]}")
         formatted_lines.extend(call_lines[1:])
     formatted_lines.append(f"{continuation_indent}]")
@@ -1521,7 +1652,9 @@ def _format_type_checking_block(
 
     indent = _line_indent(lines[node.lineno - 1])
     import_block = _build_builtin_import_block(import_nodes, line_length, lines, known_first_party)
-    indented_import_block = "\n".join(f"{indent}    {line}" if line else line for line in import_block.splitlines())
+    indented_import_block = "\n".join(
+        f"{indent}    {line}" if line else line for line in _split_python_lines(import_block)
+    )
     return f"{indent}if TYPE_CHECKING:\n{indented_import_block}"
 
 
@@ -1550,7 +1683,7 @@ def _pep695_type_alias_replacement(lines: list[str], start_index: int, line_leng
     indent = match.group("indent")
     target = match.group("target")
     formatted_value = _format_annotated(value, indent, line_length, rhs_source)
-    return start_index + 1, end_index + 1, f"{indent}type {target} = {formatted_value}".splitlines()
+    return start_index + 1, end_index + 1, _split_python_lines(f"{indent}type {target} = {formatted_value}")
 
 
 def _collect_pep695_type_alias_replacements(lines: list[str], line_length: int) -> list[_LineReplacement]:
@@ -1563,6 +1696,31 @@ def _collect_pep695_type_alias_replacements(lines: list[str], line_length: int) 
         replacements.append(replacement)
         line_index = replacement[1]
     return replacements
+
+
+def _has_overlong_tuple_value(statement: ast.stmt, lines: list[str], line_length: int) -> bool:
+    match statement:
+        case ast.AnnAssign(target=ast.Name()) if (value := _classvar_tuple_value(statement)) is not None:
+            end_lineno = statement.end_lineno or statement.lineno
+            statement_lines = lines[statement.lineno - 1 : end_lineno]
+            if len(statement_lines[0]) > line_length or any(_has_comment_token(line) for line in statement_lines):
+                return False
+            overlong_line_numbers = {
+                line_number
+                for line_number, line in enumerate(statement_lines, start=statement.lineno)
+                if len(line) > line_length
+            }
+            return any(
+                node is not value
+                and isinstance(node, ast.Tuple)
+                and bool(node.elts)
+                and any(
+                    line_number in overlong_line_numbers
+                    for line_number in range(node.lineno, (node.end_lineno or node.lineno) + 1)
+                )
+                for node in ast.walk(value)
+            )
+    return False
 
 
 def _collect_builtin_replacements(  # noqa: PLR0912, PLR0913
@@ -1579,17 +1737,25 @@ def _collect_builtin_replacements(  # noqa: PLR0912, PLR0913
         if _is_type_checking_if(node):
             formatted_type_checking = _format_type_checking_block(node, lines, line_length, known_first_party)
             if formatted_type_checking is not None:
-                replacements.append((node.lineno, node.end_lineno or node.lineno, formatted_type_checking.splitlines()))
+                replacements.append((
+                    node.lineno,
+                    node.end_lineno or node.lineno,
+                    _split_python_lines(formatted_type_checking),
+                ))
             continue
 
         formatted_statement = _format_generated_module_statement(node, lines[node.lineno - 1], line_length, source)
         if formatted_statement is not None:
-            replacements.append((node.lineno, node.end_lineno or node.lineno, formatted_statement.splitlines()))
+            replacements.append((
+                node.lineno,
+                node.end_lineno or node.lineno,
+                _split_python_lines(formatted_statement),
+            ))
 
         if isinstance(node, ast.ClassDef):
             formatted_definition = _format_generated_class_definition(node, lines[node.lineno - 1], line_length, source)
             if formatted_definition is not None:
-                replacements.append((node.lineno, node.lineno, formatted_definition.splitlines()))
+                replacements.append((node.lineno, node.lineno, _split_python_lines(formatted_definition)))
             if len(node.body) > 1 and (docstring_node := _docstring_node(node.body[0])) is not None:
                 docstring_end = docstring_node.end_lineno or docstring_node.lineno
                 next_statement = node.body[1]
@@ -1611,9 +1777,16 @@ def _collect_builtin_replacements(  # noqa: PLR0912, PLR0913
                 is_long_function_definition = (
                     isinstance(statement, ast.FunctionDef) and len(lines[statement.lineno - 1]) > line_length
                 )
+                is_multiline_statement = statement.lineno != (statement.end_lineno or statement.lineno)
+                format_tuple_value = (
+                    is_multiline_statement
+                    and isinstance(statement, ast.AnnAssign)
+                    and _has_overlong_tuple_value(statement, lines, line_length)
+                )
                 if (
-                    statement.lineno != (statement.end_lineno or statement.lineno)
+                    is_multiline_statement
                     and not is_long_function_definition
+                    and not format_tuple_value
                     and not (
                         isinstance(statement, ast.Assign)
                         and len(statement.targets) == 1
@@ -1621,19 +1794,29 @@ def _collect_builtin_replacements(  # noqa: PLR0912, PLR0913
                     )
                 ):
                     continue
-                formatted_statement = _format_generated_class_statement(
-                    statement,
-                    lines[statement.lineno - 1],
-                    line_length,
-                    source,
-                    wrap_string_literal=wrap_string_literal,
-                )
+                if format_tuple_value:
+                    assert isinstance(statement, ast.AnnAssign)
+                    formatted_statement = _format_generated_annotation_assignment(
+                        statement,
+                        lines[statement.lineno - 1],
+                        line_length,
+                        source,
+                        wrap_string_literal=wrap_string_literal,
+                    )
+                else:
+                    formatted_statement = _format_generated_class_statement(
+                        statement,
+                        lines[statement.lineno - 1],
+                        line_length,
+                        source,
+                        wrap_string_literal=wrap_string_literal,
+                    )
                 if formatted_statement is not None:
                     replacement_end = statement.lineno if is_long_function_definition else statement.end_lineno
                     replacements.append((
                         statement.lineno,
                         replacement_end or statement.lineno,
-                        formatted_statement.splitlines(),
+                        _split_python_lines(formatted_statement),
                     ))
 
     return replacements
@@ -1723,7 +1906,7 @@ def _normalize_top_level_blank_lines(code: str) -> str:
             if token.type == tokenize.STRING and token.start[0] != token.end[0]:
                 string_lines.update(range(token.start[0], token.end[0] + 1))
 
-    lines = code.splitlines()
+    lines = _split_python_lines(code)
     formatted_lines: list[str] = []
     previous_top_level_class_or_function = False
     for line_number, line in enumerate(lines, start=1):
@@ -1791,7 +1974,7 @@ def apply_builtin_formatter(  # noqa: PLR0913
     python_version: PythonVersion | None = None,
 ) -> str:
     """Apply dependency-free formatting for generated Python code."""
-    lines = [line.rstrip() for line in code.splitlines()]
+    lines = [line.rstrip() for line in _split_python_lines(code)]
     code = "\n".join(lines).strip("\n")
     if not code:
         return ""

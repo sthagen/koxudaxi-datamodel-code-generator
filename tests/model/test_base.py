@@ -20,28 +20,44 @@ from datamodel_code_generator.imports import (
     Import,
 )
 from datamodel_code_generator.model.base import (
+    _MAX_MISSING_CUSTOM_TEMPLATE_SUBDIRS,
     DataModel,
     DataModelFieldBase,
     TemplateBase,
     _annotation_typing_import_names,
+    _clear_custom_template_caches,
     _get_environment,
     _get_environment_with_absolute_path,
+    _get_template_with_absolute_path,
+    _get_template_with_custom_dir,
+    _missing_custom_template_state,
+    _refresh_custom_template_paths,
+    _remember_missing_custom_template_subdir,
     _RenderedDataModelField,
     _TypingImportRequirements,
     comment_safe,
     escape_docstring,
     format_docstring,
     get_module_path,
+    get_template,
     inline_comment_safe,
     sanitize_module_name,
 )
+from datamodel_code_generator.model.dataclass import DataClass as DataclassModel
 from datamodel_code_generator.model.imports import IMPORT_MSGSPEC_META, IMPORT_MSGSPEC_UNSET, IMPORT_MSGSPEC_UNSETTYPE
 from datamodel_code_generator.model.msgspec import DataModelField as MsgspecDataModelField
 from datamodel_code_generator.model.msgspec import Struct as MsgspecStruct
 from datamodel_code_generator.model.pydantic_base import DataModelField as PydanticBaseDataModelField
 from datamodel_code_generator.model.pydantic_v2 import BaseModel
 from datamodel_code_generator.model.pydantic_v2 import DataModelField as PydanticV2DataModelField
+from datamodel_code_generator.model.pydantic_v2.base_model import (
+    _strip_legacy_pydantic_extra_post_class_assignment,
+)
+from datamodel_code_generator.model.pydantic_v2.dataclass import DataClass as PydanticDataclassModel
+from datamodel_code_generator.model.pydantic_v2.dataclass import DataModelField as PydanticDataclassField
 from datamodel_code_generator.model.pydantic_v2.imports import IMPORT_FIELD, IMPORT_MISSING
+from datamodel_code_generator.model.typed_dict import DataModelField as TypedDictDataModelField
+from datamodel_code_generator.model.typed_dict import TypedDict as TypedDictModel
 from datamodel_code_generator.reference import Reference
 from datamodel_code_generator.types import ANY, NONE, DataType, Types
 
@@ -82,6 +98,80 @@ class ReferenceSource:
 
     nullable: bool
     is_alias: bool = False
+
+
+@pytest.mark.parametrize(
+    ("model_type", "supports_inherited_enum"),
+    [
+        pytest.param(DataModel, False, id="base"),
+        pytest.param(BaseModel, True, id="pydantic"),
+        pytest.param(DataclassModel, True, id="dataclass"),
+        pytest.param(MsgspecStruct, True, id="msgspec"),
+        pytest.param(PydanticDataclassModel, False, id="pydantic-dataclass"),
+        pytest.param(TypedDictModel, False, id="typed-dict"),
+    ],
+)
+def test_inherited_discriminator_enum_capability(
+    model_type: type[DataModel],
+    *,
+    supports_inherited_enum: bool,
+) -> None:
+    """Output models explicitly declare inherited discriminator enum support."""
+    assert model_type.SUPPORTS_INHERITED_DISCRIMINATOR_ENUM is supports_inherited_enum
+    external_model_type = type(f"External{model_type.__name__}", (model_type,), {})
+    assert external_model_type.SUPPORTS_INHERITED_DISCRIMINATOR_ENUM is supports_inherited_enum
+
+
+@pytest.mark.parametrize(
+    ("field_type", "supports_discriminator"),
+    [
+        pytest.param(DataModelFieldBase, False, id="base"),
+        pytest.param(PydanticV2DataModelField, True, id="pydantic"),
+        pytest.param(PydanticDataclassField, True, id="pydantic-dataclass"),
+        pytest.param(MsgspecDataModelField, False, id="msgspec"),
+        pytest.param(TypedDictDataModelField, False, id="typed-dict"),
+    ],
+)
+def test_discriminator_field_capability(
+    field_type: type[DataModelFieldBase],
+    *,
+    supports_discriminator: bool,
+) -> None:
+    """Only Pydantic fields opt in to Pydantic discriminator behavior."""
+    assert field_type.SUPPORTS_DISCRIMINATOR is supports_discriminator
+    external_field_type = type(f"External{field_type.__name__}", (field_type,), {})
+    assert external_field_type.SUPPORTS_DISCRIMINATOR is supports_discriminator
+
+
+def test_msgspec_apply_discriminator_tag() -> None:
+    """The msgspec model owns its tagged-union mutation policy."""
+    field = MsgspecDataModelField(name="kind", data_type=DataType(literals=["pet"]))
+    model = MsgspecStruct(
+        fields=[field],
+        reference=Reference(path="Pet", original_name="Pet", name="Pet"),
+    )
+
+    model.apply_discriminator_tag(field, "kind", "pet")
+
+    assert model.extra_template_data["base_class_kwargs"] == {
+        "tag_field": "'kind'",
+        "tag": "'pet'",
+    }
+    assert field.extras["is_classvar"] is True
+
+
+def test_default_apply_discriminator_tag_is_noop() -> None:
+    """Models without tagged unions leave fields and template data unchanged."""
+    field = TypedDictDataModelField(name="kind", data_type=DataType(literals=["pet"]))
+    model = TypedDictModel(
+        fields=[field],
+        reference=Reference(path="Pet", original_name="Pet", name="Pet"),
+    )
+
+    model.apply_discriminator_tag(field, "kind", "pet")
+
+    assert model.extra_template_data == {}
+    assert field.extras == {}
 
 
 template: str = """{%- for decorator in decorators -%}
@@ -131,6 +221,87 @@ def test_data_model() -> None:
     assert data_model.decorators == ["@validate"]
     assert data_model.base_class == "Base"
     assert data_model.render() == "@validate\n@dataclass\nclass test_model:\n    a: str"
+
+
+def test_data_model_relative_custom_template_without_adapter() -> None:
+    """Load a relative custom template unchanged when the model has no adapter."""
+
+    class RelativeTemplateModel(B):
+        """Data model using an existing relative custom template fixture."""
+
+        TEMPLATE_FILE_PATH = "pydantic_v2/BaseModel.jinja2"
+
+    model = RelativeTemplateModel(
+        fields=[],
+        reference=Reference(path="Model", original_name="Model", name="Model"),
+        custom_template_dir=Path("tests/data/templates_pydantic_extra_pre_3593"),
+    )
+
+    assert Path(model.template.filename).parts[-2:] == ("pydantic_v2", "BaseModel.jinja2")
+
+
+def test_pydantic_custom_template_legacy_root_keeps_precedence(tmp_path: Path) -> None:
+    """The historical root layout still wins when both custom paths exist."""
+    legacy_template = tmp_path / "BaseModel.jinja2"
+    current_template = tmp_path / "pydantic_v2/BaseModel.jinja2"
+    current_template.parent.mkdir()
+    legacy_template.write_text("legacy", encoding="utf-8")
+    current_template.write_text("current", encoding="utf-8")
+
+    model = BaseModel(
+        fields=[],
+        reference=Reference(path="Model", original_name="Model", name="Model"),
+        custom_template_dir=tmp_path,
+    )
+
+    assert model.template_file_path == legacy_template
+
+
+def test_direct_data_models_reuse_bounded_custom_template_cache(tmp_path: Path) -> None:
+    """Direct model consumers retain bounded process-level template reuse."""
+    _clear_custom_template_caches()
+    try:
+        custom_template = tmp_path / "pydantic_v2/BaseModel.jinja2"
+        custom_template.parent.mkdir()
+        custom_template.write_text("class {{ class_name }}({{ base_class }}):\n    pass\n", encoding="utf-8")
+
+        models = [
+            BaseModel(
+                fields=[],
+                reference=Reference(path=name, original_name=name, name=name),
+                custom_template_dir=tmp_path,
+            )
+            for name in ("First", "Second")
+        ]
+
+        assert models[0].template is models[1].template
+        assert _get_template_with_absolute_path.cache_parameters()["maxsize"] == 128
+        assert _get_template_with_custom_dir.cache_parameters()["maxsize"] == 128
+        assert _get_environment.cache_parameters()["maxsize"] == 16
+        assert _get_environment_with_absolute_path.cache_parameters()["maxsize"] == 16
+        assert get_template.cache_parameters()["maxsize"] == 128
+
+        for index in range(_MAX_MISSING_CUSTOM_TEMPLATE_SUBDIRS + 2):
+            include_only_dir = tmp_path / f"include-only-{index}"
+            model = BaseModel(
+                fields=[],
+                reference=Reference(path=f"Model{index}", original_name=f"Model{index}", name=f"Model{index}"),
+                custom_template_dir=include_only_dir,
+            )
+            _ = model.template
+
+        assert _get_template_with_custom_dir.cache_info().currsize <= 128
+        assert _missing_custom_template_state.count == _MAX_MISSING_CUSTOM_TEMPLATE_SUBDIRS
+        _refresh_custom_template_paths(tmp_path / "overflow-refresh")
+        assert not _missing_custom_template_state.paths
+        assert _get_template_with_custom_dir.cache_info().currsize == 0
+
+        missing_subdir = tmp_path / "duplicate/pydantic_v2"
+        _remember_missing_custom_template_subdir(missing_subdir.parent, missing_subdir)
+        _remember_missing_custom_template_subdir(missing_subdir.parent, missing_subdir)
+        assert _missing_custom_template_state.count == 1
+    finally:
+        _clear_custom_template_caches()
 
 
 def test_data_model_create_typed_extra_field_unsupported() -> None:
@@ -243,6 +414,91 @@ def test_pydantic_v2_extra_annotation_mode_uses_plain_annotation_for_native_defe
     assert field.use_pydantic_extra_plain_annotation
     assert not field.use_pydantic_extra_annotations_dict
     assert IMPORT_DICT not in field.imports
+
+
+def test_pydantic_v2_legacy_extra_template_supports_relative_custom_path() -> None:
+    """Test legacy typed extras render through a relative custom template path."""
+    field = PydanticV2DataModelField(
+        name="__pydantic_extra__",
+        data_type=DataType(type="str", is_dict=True),
+        required=True,
+    )
+    model = BaseModel(
+        fields=[field],
+        reference=Reference(path="Model", original_name="Model", name="Model"),
+        custom_template_dir=Path("tests/data/templates_pydantic_extra_pre_3593"),
+    )
+
+    with pytest.warns(UserWarning, match="was rewritten automatically for Pydantic typed-extra"):
+        rendered = model.render()
+
+    assert Path(model.template.filename).parts[-2:] == ("pydantic_v2", "BaseModel.jinja2")
+    assert "'__pydantic_extra__': Dict[str, str]," in rendered
+    assert "Model.__annotations__['__pydantic_extra__']" not in rendered
+    assert "Model.model_rebuild(force=True)" not in rendered
+    assert "locals()" not in rendered
+
+
+@pytest.mark.parametrize("customization", ["missing-tail", "missing-class-body"])
+def test_pydantic_v2_legacy_extra_template_warns_when_not_fully_rewritten(customization: str, tmp_path: Path) -> None:
+    """Warn without failing when a customized legacy template cannot be fully rewritten."""
+    source_template = Path("tests/data/templates_pydantic_extra_pre_3593/pydantic_v2/BaseModel.jinja2")
+    custom_template = tmp_path / "pydantic_v2/BaseModel.jinja2"
+    custom_template.parent.mkdir()
+    template_source = source_template.read_text(encoding="utf-8")
+    match customization:
+        case "missing-tail":
+            template_source = template_source.rsplit("{%- for field in fields %}", 1)[0]
+        case _:
+            template_source = template_source.replace(
+                "{%- for line in class_body_lines %}\n    {{ line }}\n{%- endfor %}\n",
+                "",
+            )
+    custom_template.write_text(template_source, encoding="utf-8")
+    field = PydanticV2DataModelField(
+        name="__pydantic_extra__",
+        data_type=DataType(type="str", is_dict=True),
+        required=True,
+    )
+    model = BaseModel(
+        fields=[field],
+        reference=Reference(path="Model", original_name="Model", name="Model"),
+        custom_template_dir=tmp_path,
+    )
+
+    with pytest.warns(UserWarning, match="could not be fully rewritten automatically"):
+        rendered = model.render()
+
+    match customization:
+        case "missing-tail":
+            assert "'__pydantic_extra__': Dict[str, str]," in rendered
+        case _:
+            assert "Model.__annotations__['__pydantic_extra__'] = Dict[str, str]" in rendered
+
+
+def test_strip_legacy_pydantic_extra_post_class_assignment_is_model_scoped() -> None:
+    """Strip only the target model's old assignment while preserving rebuilds and helpers."""
+    rendered = (
+        "Helper.__annotations__['__pydantic_extra__'] = Dict[str, int]\n"
+        "Helper.model_rebuild(force=True)\n"
+        'Model . __annotations__ [ "__pydantic_extra__" ] = Dict[str, int]\r\n'
+        "\r\n"
+        "Model . model_rebuild ( force = True )  # legacy\r\n"
+        "Model.model_rebuild()\n"
+    )
+
+    assert _strip_legacy_pydantic_extra_post_class_assignment(rendered, "Missing") is None
+    assert _strip_legacy_pydantic_extra_post_class_assignment(rendered, "Model") == (
+        "Helper.__annotations__['__pydantic_extra__'] = Dict[str, int]\n"
+        "Helper.model_rebuild(force=True)\n"
+        "Model.model_rebuild()\n"
+    )
+    unicode_stripped = _strip_legacy_pydantic_extra_post_class_assignment(
+        "℘Model.__annotations__['__pydantic_extra__'] = Dict[str, int]\n℘Model.model_rebuild(force=True)\n",
+        "℘Model",
+    )
+    assert unicode_stripped is not None
+    assert not unicode_stripped
 
 
 def test_pydantic_v2_missing_sentinel_default_keeps_explicit_default() -> None:
@@ -534,6 +790,69 @@ def test_msgspec_required_annotated_nullable_keeps_none_outside_annotated() -> N
         IMPORT_ANNOTATED,
         IMPORT_MSGSPEC_META,
     )
+
+
+def test_typed_dict_empty_original_name_uses_functional_syntax_and_key() -> None:
+    """Preserve an empty source key instead of falling back to the generated field name."""
+    field = TypedDictDataModelField(
+        name="field_",
+        original_name="",
+        data_type=DataType(type="str"),
+        required=True,
+    )
+    model = TypedDictModel(
+        fields=[field],
+        reference=Reference(path="EmptyField", original_name="EmptyField", name="EmptyField"),
+    )
+
+    rendered = model.render()
+    assert model.is_functional_syntax
+    assert not field.key
+    assert "EmptyField = TypedDict('EmptyField', {" in rendered
+    assert "    '': str," in rendered
+
+
+@pytest.mark.parametrize("source_name", ["", "value"], ids=["empty", "regular"])
+def test_typed_dict_functional_syntax_replaces_inherited_source_key(source_name: str) -> None:
+    """Render only the child override when an inherited source key is repeated."""
+    base_reference = Reference(path="Base", original_name="Base", name="Base")
+    TypedDictModel(
+        fields=[
+            TypedDictDataModelField(
+                name="base_value",
+                original_name=source_name,
+                data_type=DataType(type="str"),
+                required=False,
+            )
+        ],
+        reference=base_reference,
+    )
+    child = TypedDictModel(
+        fields=[
+            TypedDictDataModelField(
+                name="child_value",
+                original_name=source_name,
+                data_type=DataType(type="int"),
+                required=True,
+            ),
+            TypedDictDataModelField(
+                name="trigger_key",
+                original_name="trigger-key",
+                data_type=DataType(type="bool"),
+                required=True,
+            ),
+        ],
+        base_classes=[base_reference],
+        reference=Reference(path="Child", original_name="Child", name="Child"),
+    )
+
+    matching_fields = [field for field in child.all_fields if field.original_name == source_name]
+    rendered = child.render()
+    assert len(matching_fields) == 1
+    assert matching_fields[0].name == "child_value"
+    assert matching_fields[0].type_hint == "int"
+    assert rendered.count(f"'{source_name}':") == 1
+    assert f"'{source_name}': int," in rendered
 
 
 def test_ordered_union_type_hint_handles_empty_and_discriminator() -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import inspect
+import json
 import os
 import shutil
 import sys
@@ -16,14 +17,14 @@ from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from functools import cache
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 import black
 import pytest
 from packaging import version
 from pydantic import TypeAdapter, ValidationError
 
-from datamodel_code_generator import InputFileType, enable_parsed_source_cache, generate
+from datamodel_code_generator import DataModelType, InputFileType, enable_parsed_source_cache, generate
 from datamodel_code_generator.__main__ import Exit, main
 from datamodel_code_generator.arguments import arg_parser
 from datamodel_code_generator.format import Formatter, PythonVersion, is_supported_in_black
@@ -130,6 +131,19 @@ BLACK_PY314_SKIP = pytest.mark.skipif(
     reason=f"Installed black ({black.__version__}) doesn't support Python 3.14",
 )
 
+BACKEND_GOLDEN_TARGET_ARGS = ("--target-python-version", "3.10")
+BACKEND_GOLDEN_CASES = (
+    pytest.param(DataModelType.PydanticV2BaseModel.value, "pydantic_v2_BaseModel", id="pydantic-v2"),
+    pytest.param(DataModelType.DataclassesDataclass.value, "dataclasses_dataclass", id="dataclass"),
+    pytest.param(DataModelType.TypingTypedDict.value, "typing_TypedDict", id="typed-dict"),
+    pytest.param(
+        DataModelType.MsgspecStruct.value,
+        "msgspec_Struct",
+        id="msgspec",
+        marks=MSGSPEC_LEGACY_BLACK_SKIP,
+    ),
+)
+
 CURRENT_PYTHON_VERSION = f"{sys.version_info[0]}.{sys.version_info[1]}"
 """Current Python version as string (e.g., '3.13')."""
 
@@ -190,6 +204,36 @@ def output_file(tmp_path: Path) -> Path:
 def output_dir(tmp_path: Path) -> Path:
     """Return standard output directory path."""
     return tmp_path / "model"
+
+
+@pytest.fixture
+def extreme_large_schema(tmp_path: Path) -> Path:  # pragma: no cover - perf-only fixture
+    """Generate a deterministic large schema with 2000 models."""
+    definitions: dict[str, object] = {}
+    schema: dict[str, object] = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ExtremeLargeSchema",
+        "definitions": definitions,
+    }
+    for i in range(2000):
+        definitions[f"Model{i:04d}"] = {
+            "type": "object",
+            "properties": {
+                "id": {"type": "integer"},
+                "name": {"type": "string"},
+                "value": {"type": "number"},
+                "active": {"type": "boolean"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "metadata": {"type": "object", "additionalProperties": {"type": "string"}},
+                "ref_prev": {"$ref": f"#/definitions/Model{max(0, i - 1):04d}"},
+            },
+            "required": ["id", "name"],
+        }
+    schema["$ref"] = "#/definitions/Model1999"
+
+    schema_file = tmp_path / "extreme_large.json"
+    schema_file.write_text(json.dumps(schema), encoding="utf-8")
+    return schema_file
 
 
 def get_current_version_args(*extra_args: str) -> list[str]:
@@ -468,10 +512,9 @@ def _optional_test_parsed_source_cache(enabled: bool) -> Generator[None, None, N
 def _clear_model_template_cache() -> None:
     from datamodel_code_generator.model import base as model_base
 
+    model_base._clear_custom_template_caches()
     for cached in (
         model_base.get_template,
-        model_base._get_template_with_custom_dir,
-        model_base._get_environment,
         model_base._get_template_with_absolute_path,
         model_base._get_environment_with_absolute_path,
     ):
@@ -678,74 +721,6 @@ def assert_input_file_type(result: object, expected: InputFileType) -> None:
     __tracebackhide__ = True
     if result != expected:  # pragma: no cover
         pytest.fail(f"Expected input file type {expected!r}, got {result!r}")
-
-
-def _value_at_path(value: object, path: Sequence[str | int]) -> object:
-    __tracebackhide__ = True
-    current = value
-    for key in path:
-        match current, key:
-            case Mapping(), _:
-                current = cast("Mapping[object, object]", current)[key]
-            case Sequence(), int() if not isinstance(current, str | bytes | bytearray):
-                current = cast("Sequence[object]", current)[key]
-            case _:
-                pytest.fail(f"Expected cached value to contain path {path!r}, got {value!r}")
-    return current
-
-
-def assert_path_cache_reuses_value(
-    loader: Callable[[Path, str], object],
-    path: Path,
-    *,
-    encoding: str = "utf-8",
-    warmups: int = 0,
-) -> None:
-    """Assert a path-based cache reuses the parsed or decoded value."""
-    __tracebackhide__ = True
-    for _ in range(warmups):
-        loader(path, encoding)
-
-    first = loader(path, encoding)
-    second = loader(path, encoding)
-
-    if first is second:
-        return
-
-    pytest.fail(f"Expected cached value for {path} to be reused")
-
-
-def assert_path_cache_invalidates_after_write(
-    loader: Callable[[Path, str], object],
-    path: Path,
-    new_text: str,
-    expected_value: object,
-    *,
-    encoding: str = "utf-8",
-    expected_value_path: Sequence[str | int] = (),
-    warmups: int = 0,
-) -> None:
-    """Assert a path-based cache reloads after file content changes."""
-    __tracebackhide__ = True
-    for _ in range(warmups):
-        loader(path, encoding)
-
-    first = loader(path, encoding)
-    path.write_text(new_text, encoding=encoding)
-    second = loader(path, encoding)
-
-    if first is second:
-        pytest.fail(f"Expected cached value for {path} to be invalidated after write")
-
-    actual_value = _value_at_path(second, expected_value_path)
-    if actual_value != expected_value:
-        pytest.fail(f"Expected cached value {expected_value!r}, got {actual_value!r}")
-
-    third = loader(path, encoding)
-    if second is third:
-        return
-
-    pytest.fail(f"Expected updated cached value for {path} to be reused")
 
 
 def assert_path_cache_evicts_lru_entries(
@@ -988,9 +963,14 @@ def run_main_and_assert(  # noqa: PLR0912
     elif output_path is None:
         if input_path is None:  # pragma: no cover
             pytest.fail("input_path is required when output_path is None")
+        _copy_files(copy_files)
         args = []
         use_builtin_default = _extend_args(
-            args, input_path=input_path, input_file_type=input_file_type, extra_args=extra_args
+            args,
+            input_path=input_path,
+            input_file_type=input_file_type,
+            extra_args=extra_args,
+            copy_files=copy_files,
         )
         with (
             _enable_test_parsed_source_cache(),

@@ -30,6 +30,7 @@ from datamodel_code_generator.enums import (
     AllOfMergeMode,
     ClassNameAffixScope,
     CollapseRootModelsNameStrategy,
+    CustomFileHeaderMode,
     DataclassArguments,
     DataModelType,
     FieldTypeCollisionStrategy,
@@ -140,6 +141,7 @@ class BaseGenerateConfig(BaseModel):
     allof_merge_mode: AllOfMergeMode = AllOfMergeMode.Constraints
     allof_class_hierarchy: AllOfClassHierarchy = AllOfClassHierarchy.IfNoConflict
     allow_remote_refs: bool | None = None
+    strict_refs: bool = False
     allow_private_network: bool = False
     http_headers: Sequence[tuple[str, str]] | None = None
     http_local_ref_path: Path | None = None
@@ -165,12 +167,14 @@ class BaseGenerateConfig(BaseModel):
     keep_model_order: bool = False
     custom_file_header: str | None = None
     custom_file_header_path: Path | None = None
+    custom_file_header_mode: CustomFileHeaderMode = CustomFileHeaderMode.Replace
     custom_formatters: list[str] | None = None
     use_pendulum: bool = False
     use_standard_primitive_types: bool = False
     use_object_type: bool = False
     http_query_parameters: Sequence[tuple[str, str]] | None = None
     treat_dot_as_module: bool | None = None
+    strict_dotted_module_names: bool = False
     use_exact_imports: bool = False
     use_type_checking_imports: bool | None = None
     union_mode: UnionMode | None = None

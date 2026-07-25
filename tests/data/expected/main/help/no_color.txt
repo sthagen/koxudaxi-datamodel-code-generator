@@ -106,6 +106,8 @@ Options:
                         Schema version validation mode. 'lenient': accept all
                         features regardless of version (default). 'strict':
                         warn on features outside declared/detected version.
+  --strict-refs         Treat unresolved local $ref JSON pointers as errors
+                        instead of generating fallback Any models.
   --url URL             Input file URL. `--input` is ignored when `--url` is
                         used
 
@@ -432,6 +434,12 @@ Model customization:
                         (default: "shared"). Use this option if your schema
                         has a file named "shared".
   --skip-root-model     Skip generating the model for the root schema element
+  --strict-dotted-module-names, --no-strict-dotted-module-names
+                        Only infer dotted schema names as module paths when
+                        every segment is a canonical Python identifier. This
+                        applies only to automatic inference and does not
+                        override --treat-dot-as-module or --no-treat-dot-as-
+                        module.
   --target-pydantic-version {2,2.11,2.12}
                         Target Pydantic version for generated code. '2':
                         Pydantic 2.0+ compatible (default, uses
@@ -481,6 +489,9 @@ Template customization:
                         'id': 'id_'} generates `id_: ... = Field(alias='id')`.
   --custom-file-header CUSTOM_FILE_HEADER
                         Custom file header
+  --custom-file-header-mode {replace,prepend}
+                        How to combine a custom file header with the generated
+                        header (default: replace)
   --custom-file-header-path CUSTOM_FILE_HEADER_PATH
                         Custom file header file path
   --custom-formatters-kwargs CUSTOM_FORMATTERS_KWARGS
@@ -581,6 +592,10 @@ General options:
   --debug               show debug message (require "debug". `$ pip install
                         'datamodel-code-generator[debug]'`)
   --disable-warnings    disable warnings
+  --fail-on-multi-module-stdout
+                        Return an error instead of concatenating multiple
+                        generated modules in text stdout. This does not affect
+                        single-module, JSON, or file output.
   --generate-cli-command
                         Generate CLI command from pyproject.toml configuration
                         and exit

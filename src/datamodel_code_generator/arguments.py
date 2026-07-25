@@ -24,6 +24,7 @@ from datamodel_code_generator.enums import (
     AllOfMergeMode,
     ClassNameAffixScope,
     CollapseRootModelsNameStrategy,
+    CustomFileHeaderMode,
     DataclassArguments,
     DataModelType,
     FieldTypeCollisionStrategy,
@@ -149,6 +150,12 @@ base_options.add_argument(
     "or --no-allow-remote-refs to block remote fetching. "
     "In a future version, remote fetching will be disabled by default.",
     action=BooleanOptionalAction,
+    default=None,
+)
+base_options.add_argument(
+    "--strict-refs",
+    help="Treat unresolved local $ref JSON pointers as errors instead of generating fallback Any models.",
+    action="store_true",
     default=None,
 )
 base_options.add_argument(
@@ -468,6 +475,14 @@ model_options.add_argument(
     "--treat-dot-as-module",
     help="Treat dotted schema names as module paths, creating nested directory structures (e.g., 'foo.bar.Model' "
     "becomes 'foo/bar.py'). Use --no-treat-dot-as-module to keep dots in names as underscores for single-file output.",
+    action=BooleanOptionalAction,
+    default=None,
+)
+model_options.add_argument(
+    "--strict-dotted-module-names",
+    help="Only infer dotted schema names as module paths when every segment is a canonical Python identifier. "
+    "This applies only to automatic inference and does not override --treat-dot-as-module or "
+    "--no-treat-dot-as-module.",
     action=BooleanOptionalAction,
     default=None,
 )
@@ -1017,6 +1032,12 @@ template_options.add_argument(
     type=str,
 )
 template_options.add_argument(
+    "--custom-file-header-mode",
+    help="How to combine a custom file header with the generated header (default: replace)",
+    choices=[mode.value for mode in CustomFileHeaderMode],
+    default=None,
+)
+template_options.add_argument(
     "--custom-template-dir",
     help="Custom template directory",
     type=str,
@@ -1271,6 +1292,13 @@ general_options.add_argument(
     choices=["text", "json"],
     default=None,
     help="Format for command output (default: text). Use json for structured output when supported.",
+)
+general_options.add_argument(
+    "--fail-on-multi-module-stdout",
+    action="store_true",
+    default=None,
+    help="Return an error instead of concatenating multiple generated modules in text stdout. "
+    "This does not affect single-module, JSON, or file output.",
 )
 general_options.add_argument(
     "--output-format-json-schema",

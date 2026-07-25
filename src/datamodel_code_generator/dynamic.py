@@ -35,6 +35,11 @@ _dynamic_module_counter = itertools.count(1)
 _MISSING_MODULE = object()
 
 
+def _evict_dynamic_models_cache_entries(count: int) -> None:
+    for _ in range(count):
+        del _dynamic_models_cache[next(iter(_dynamic_models_cache))]
+
+
 def _is_init_file(path_tuple: tuple[str, ...]) -> bool:
     """Check if path tuple represents an __init__.py file."""
     return PurePath(path_tuple[-1]).stem == "__init__"
@@ -175,10 +180,17 @@ def _should_extract_model_name(name: str, *, include_private: bool = False) -> b
 
 def _extract_models(namespace: dict[str, Any], *, include_private: bool = False) -> dict[str, type]:
     """Extract model and enum classes from namespace."""
+    match namespace.get("__name__"):
+        case str() as module_name:
+            pass
+        case _:
+            module_name = "builtins"
+
     return {
         k: v
         for k, v in namespace.items()
         if isinstance(v, type)
+        and v.__module__ == module_name
         and _should_extract_model_name(k, include_private=include_private)
         and ((issubclass(v, BaseModel) and v is not BaseModel) or (issubclass(v, Enum) and v is not Enum))
     }
@@ -320,6 +332,8 @@ def generate_dynamic_models(
         if use_cache:
             assert cache_key is not None
             if (cached_models := _dynamic_models_cache.get(cache_key)) is not None:
+                if (excess := len(_dynamic_models_cache) - cache_size) > 0:
+                    _evict_dynamic_models_cache_entries(excess)
                 return _filter_target_models(cached_models, normalized_target_model_names)
 
         result = generate(input_=input_, config=config)
@@ -334,9 +348,8 @@ def generate_dynamic_models(
         )
 
         if use_cache:
-            while len(_dynamic_models_cache) >= cache_size:
-                oldest_key = next(iter(_dynamic_models_cache))
-                del _dynamic_models_cache[oldest_key]
+            if (excess := len(_dynamic_models_cache) - cache_size + 1) > 0:
+                _evict_dynamic_models_cache_entries(excess)
             _dynamic_models_cache[cache_key] = models  # ty: ignore[invalid-assignment]
 
         return _filter_target_models(models, normalized_target_model_names)

@@ -140,7 +140,8 @@ def test_schema_validator_input_names_include_validation_aliases_and_schema_base
         validation_aliases=["fieldAlias", "field-alt"],
         data_type=DataType(type="str"),
     )
-    empty_field = DataModelFieldBase(name="", original_name="", data_type=DataType(type="str"))
+    empty_field = DataModelFieldBase(name="field_", original_name="", alias="", data_type=DataType(type="str"))
+    nameless_field = DataModelFieldBase(data_type=DataType(type="str"))
     parser.raw_obj = {
         "$defs": {
             "Empty": {"type": "object"},
@@ -153,13 +154,13 @@ def test_schema_validator_input_names_include_validation_aliases_and_schema_base
 
     assert parser._field_input_names(field) == ("field", "fieldAlias", "field_name", "field-alt")
     assert parser._get_input_names_by_property(
-        [empty_field],
+        [empty_field, nameless_field],
         [Reference(path="#/$defs/Empty", name="Empty"), Reference(path="#/$defs/Base", name="Base")],
-    ) == {"base": ("base",)}
+    ) == {"": ("", "field_"), "base": ("base",)}
 
 
-def test_schema_validator_input_names_skip_empty_datamodel_base_fields() -> None:
-    """Test inherited generated model fields include usable names and skip empty names."""
+def test_schema_validator_input_names_include_empty_datamodel_base_fields() -> None:
+    """Test inherited generated model fields retain empty source names."""
     parser = JsonSchemaParser("", generate_schema_validators=True)
     base_field = DataModelFieldBase(
         name="base_field",
@@ -168,13 +169,124 @@ def test_schema_validator_input_names_skip_empty_datamodel_base_fields() -> None
         validation_aliases=["baseAlias", "base-alt"],
         data_type=DataType(type="str"),
     )
-    empty_field = DataModelFieldBase(name="", original_name="", data_type=DataType(type="str"))
+    empty_field = DataModelFieldBase(name="field_", original_name="", alias="", data_type=DataType(type="str"))
+    nameless_field = DataModelFieldBase(data_type=DataType(type="str"))
     base_ref = Reference(path="#/$defs/Base", name="Base")
-    BaseModel(reference=base_ref, fields=[base_field, empty_field])
+    BaseModel(reference=base_ref, fields=[base_field, empty_field, nameless_field])
 
     assert parser._get_input_names_by_property([], [base_ref]) == {
-        "base": ("base", "baseAlias", "base_field", "base-alt")
+        "": ("", "field_"),
+        "base": ("base", "baseAlias", "base_field", "base-alt"),
     }
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {
+            "title": "Model",
+            "type": "object",
+            "properties": {"": {"type": "string"}, "field_": {"type": "integer"}},
+            "allOf": [{"required": [""]}],
+        },
+        {
+            "title": "Model",
+            "required": [""],
+            "allOf": [
+                {
+                    "type": "object",
+                    "properties": {"": {"type": "string"}, "field_": {"type": "integer"}},
+                }
+            ],
+        },
+        {
+            "title": "Model",
+            "allOf": [
+                {
+                    "type": "object",
+                    "properties": {"": {"type": "string"}, "field_": {"type": "integer"}},
+                    "required": [""],
+                }
+            ],
+        },
+    ],
+    ids=["allof-required", "root-required", "inline-required"],
+)
+def test_allof_required_preserves_empty_property_name(schema: dict[str, Any]) -> None:
+    """Test allOf required handling neither misses nor duplicates an empty property name."""
+    parser = JsonSchemaParser(json.dumps(schema))
+
+    parser.parse(format_=False)
+
+    model = next(result for result in parser.results if result.class_name == "Model")
+    fields = {field.original_name: field for field in model.fields}
+    assert len(model.fields) == len(fields) == 2
+    assert fields[""].required
+    assert not fields["field_"].required
+
+
+def test_allof_inheritance_uses_empty_original_name() -> None:
+    """Test an empty property override inherits its own type, not the generated-name collision."""
+    parser = JsonSchemaParser(
+        json.dumps({
+            "title": "Child",
+            "type": "object",
+            "properties": {"": {}},
+            "allOf": [{"$ref": "#/$defs/Base"}],
+            "$defs": {
+                "Base": {
+                    "type": "object",
+                    "properties": {"": {"type": "string"}, "field_": {"type": "integer"}},
+                }
+            },
+        })
+    )
+
+    parser.parse(format_=False)
+
+    child = next(result for result in parser.results if result.class_name == "Child")
+    assert len(child.fields) == 1
+    assert child.fields[0].original_name is not None
+    assert not child.fields[0].original_name
+    assert child.fields[0].data_type.type == "str"
+
+
+def test_read_write_variants_keep_empty_and_generated_name_collision() -> None:
+    """Test request/response deduplication distinguishes empty and generated-looking source names."""
+    parser = JsonSchemaParser(
+        json.dumps({
+            "title": "Model",
+            "type": "object",
+            "properties": {
+                "": {"type": "string", "readOnly": True},
+                "field_": {"type": "integer", "writeOnly": True},
+                "shared": {"type": "boolean"},
+            },
+            "required": ["", "field_"],
+        }),
+        read_only_write_only_model_type=ReadOnlyWriteOnlyModelType.All,
+    )
+
+    parser.parse(format_=False)
+
+    models = {result.class_name: result for result in parser.results}
+    assert [field.original_name for field in models["ModelRequest"].fields] == ["field_", "shared"]
+    assert [field.original_name for field in models["ModelResponse"].fields] == ["", "shared"]
+    assert [field.original_name for field in models["Model"].fields] == ["", "field_", "shared"]
+
+
+def test_empty_original_name_supports_explicit_serialization_alias() -> None:
+    """Test serialization alias lookup treats an empty original name as present."""
+    parser = JsonSchemaParser(
+        json.dumps({"title": "Model", "type": "object", "properties": {"": {"type": "string"}}}),
+        serialization_aliases={"": "serialized"},
+    )
+
+    parser.parse(format_=False)
+
+    model = next(result for result in parser.results if result.class_name == "Model")
+    assert len(model.fields) == 1
+    assert model.fields[0].serialization_alias == "serialized"
 
 
 def test_schema_runtime_validation_reuses_existing_instance() -> None:
@@ -360,10 +472,66 @@ def test_split_json_pointer_slow_path_rejects_invalid_list_index() -> None:
         split_json_pointer(schema, "weird~1key/foo")
 
 
+def test_split_json_pointer_slow_path_preserves_out_of_range_index() -> None:
+    """Let deferred pointer resolution diagnose a valid but unavailable list index."""
+    schema = {"weird/key": ["x", "y"]}
+    assert split_json_pointer(schema, "weird~1key/1") == ["weird/key", "1"]
+    assert split_json_pointer(schema, "weird~1key/9") == ["weird/key", "9"]
+    assert split_json_pointer(schema, "weird~1key/9/nested") == ["weird/key", "9", "nested"]
+
+
+@pytest.mark.parametrize(
+    ("ref", "match"),
+    [
+        ("#/items/foo", "Invalid JSON pointer array index 'foo'"),
+        ("#/items/01", "Invalid JSON pointer array index '01'"),
+    ],
+)
+def test_parse_deferred_json_pointer_rejects_invalid_array_index(ref: str, match: str) -> None:
+    """Do not classify syntactically invalid array indices as dangling references."""
+    parser = JsonSchemaParser("")
+    with pytest.raises(Error, match=match):
+        parser.parse_json_pointer({"items": [{}]}, ref, [])
+
+
+@pytest.mark.skipif(
+    not hasattr(sys, "set_int_max_str_digits") or sys.get_int_max_str_digits() == 0,
+    reason="int string-conversion length limit requires Python 3.11+",
+)
+def test_parse_deferred_json_pointer_rejects_overlong_array_index() -> None:
+    """Keep integer-conversion failures outside dangling-reference diagnostics."""
+    parser = JsonSchemaParser("")
+    overlong = "9" * (sys.get_int_max_str_digits() + 1)
+    with pytest.raises(Error, match="integer string is too long to parse"):
+        parser.parse_json_pointer({"items": [{}]}, f"#/items/{overlong}", [])
+
+
 def test_validate_schema_python_import_path_rejects_non_string() -> None:
     """Test schema import path validation rejects non-string values."""
     with pytest.raises(Error, match="customTypePath must be a dotted Python identifier path: 1"):
         _validate_schema_python_import_path(1, "customTypePath")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, None),
+        ("custom.Base", "custom.Base"),
+        (["custom.Base", "mixins.Other"], ["custom.Base", "mixins.Other"]),
+    ],
+)
+def test_json_schema_object_validates_custom_base_path(
+    value: object,
+    expected: str | list[str] | None,
+) -> None:
+    """Test schema custom base paths preserve valid scalar, list, and null values."""
+    assert JsonSchemaObject.model_validate({"customBasePath": value}).custom_base_path == expected
+
+
+def test_json_schema_object_rejects_invalid_custom_base_path_list_item() -> None:
+    """Test invalid list members report the schema extension name."""
+    with pytest.raises(Error, match="customBasePath must be a dotted Python identifier path: 1"):
+        JsonSchemaObject.model_validate({"customBasePath": ["custom.Base", 1]})
 
 
 def test_get_x_python_import_path_handles_empty_and_incomplete_metadata() -> None:
@@ -476,6 +644,14 @@ def test_json_schema_parser_load_source_dict_rejects_non_dict_text_source() -> N
         parser._load_source_dict(Source(path=Path(), text="[1]"))
 
 
+def test_json_schema_parser_load_source_dict_rejects_non_dict_cached_source() -> None:
+    """Reject non-dict parsed data before parsing a JSON Schema source."""
+    parser = JsonSchemaParser("")
+
+    with pytest.raises(TypeError, match="Expected dict, got list"):
+        parser._load_source_dict(Source(path=Path(), raw_data=[]))
+
+
 def test_json_schema_iter_local_source_paths_ignores_non_local_source() -> None:
     """Test local source path iteration is empty for non-local source input."""
     assert list(JsonSchemaParser("{}")._iter_local_source_paths()) == []
@@ -532,7 +708,7 @@ def test_json_schema_object_ref_url_json(mocker: MockerFixture) -> None:
         "socket.getaddrinfo",
         return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))],
     )
-    mock_fetch = mocker.patch("datamodel_code_generator.http._get_http_response")
+    mock_fetch = mocker.patch("datamodel_code_generator.http._HTTPFetchSession.get_response")
     mock_fetch.return_value.status_code = 200
     mock_fetch.return_value.headers = {}
     mock_fetch.return_value.text = json.dumps(
@@ -580,7 +756,7 @@ def test_json_schema_object_ref_url_yaml(mocker: MockerFixture) -> None:
         "socket.getaddrinfo",
         return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))],
     )
-    mock_fetch = mocker.patch("datamodel_code_generator.http._get_http_response")
+    mock_fetch = mocker.patch("datamodel_code_generator.http._HTTPFetchSession.get_response")
     mock_fetch.return_value.status_code = 200
     mock_fetch.return_value.headers = {}
     mock_fetch.return_value.text = yaml.safe_dump(json.load((DATA_PATH / "user.json").open()))
@@ -627,7 +803,7 @@ def test_json_schema_object_cached_ref_url_yaml(mocker: MockerFixture) -> None:
         "socket.getaddrinfo",
         return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))],
     )
-    mock_fetch = mocker.patch("datamodel_code_generator.http._get_http_response")
+    mock_fetch = mocker.patch("datamodel_code_generator.http._HTTPFetchSession.get_response")
     mock_fetch.return_value.status_code = 200
     mock_fetch.return_value.headers = {}
     mock_fetch.return_value.text = yaml.safe_dump(json.load((DATA_PATH / "user.json").open()))
@@ -667,7 +843,7 @@ def test_json_schema_ref_url_json(mocker: MockerFixture) -> None:
         "socket.getaddrinfo",
         return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))],
     )
-    mock_fetch = mocker.patch("datamodel_code_generator.http._get_http_response")
+    mock_fetch = mocker.patch("datamodel_code_generator.http._HTTPFetchSession.get_response")
     mock_fetch.return_value.status_code = 200
     mock_fetch.return_value.headers = {}
     mock_fetch.return_value.text = json.dumps(json.load((DATA_PATH / "user.json").open()))

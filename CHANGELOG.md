@@ -5,6 +5,142 @@ This changelog is automatically generated from GitHub Releases.
 
 ---
 
+## [0.71.0](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.71.0) - 2026-07-24
+
+## Breaking Changes
+
+
+### Default Behavior Changes
+* New warning emitted by default for unresolved local `$ref` pointers - By default, an unresolved local `$ref` JSON pointer now emits a new `DanglingRefWarning` and generates a fallback `Any` model. Previously such refs resolved to a silent fallback, and some cases (e.g., out-of-range JSON pointer array indices) raised a hard error. Schemas that previously generated cleanly can now produce warnings, which breaks workflows that treat warnings as errors (e.g., `python -W error`). Use `--strict-refs` to fail on unresolved pointers instead, or `--disable-warnings` to silence them (#3639)
+
+### Error Handling Changes
+* `$ref` to a non-dict file now raises `InvalidFileFormatError` instead of `TypeError` - Resolving a `$ref` to a JSON/YAML file whose top-level value is not a mapping (e.g., a list) now raises `datamodel_code_generator.InvalidFileFormatError` (a subclass of `Error`/`Exception`) rather than the built-in `TypeError`. Programmatic callers that catch `TypeError` around `generate()` must catch `InvalidFileFormatError` (or `Error`) instead (#3639)
+* Malformed-input diagnostics reworded - Malformed inputs that previously surfaced an uncaught traceback now emit a concise message such as `Invalid file format for <type> at <source>: ...`, and the missing-file message changed from `File not found` to `File not found: <path>`. Tooling that matches on the exact previous strings needs updating (#3639)
+* Generation now aborts when output paths would overwrite inputs or collide - A new path-conflict validation runs before generation in both the `generate()` Python API and the CLI. Invocations that previously succeeded now raise an `Error` (CLI exits with an error code) in these cases: the output path resolves to an existing input file, the `--emit-model-metadata` path resolves to an existing input file, or the output and model-metadata paths resolve to the same file. Symlinks and hardlinks are resolved before the comparison. Workflows that intentionally wrote output over an input path, or that pointed the model-metadata artifact at the same path as the output, will now fail with one of:
+```text
+Output path must not overwrite an input path: <path>
+Model metadata path must not overwrite an input path: <path>
+Output and model metadata paths must be different: <path>
+```
+(#3647)
+
+## What's Changed
+* Update CHANGELOG for 0.70.0 by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3619
+* Decouple RootModel dependency ordering by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3620
+* Improve README and docs homepage links by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3624
+* Update release benchmark data by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3625
+* Move discriminator policies to output models by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3621
+* Invalidate generation facts for every list mutation by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3622
+* Document package manager installation options by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3629
+* Move dict-key dependency policy to output models by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3626
+* Decouple parser model behavior helpers by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3632
+* Share model constraints across output backends by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3630
+* Move Pydantic type rendering to backend by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3627
+* Move dataclass ordering policies to output models by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3628
+* Move template reference metadata to output models by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3631
+* Declare output model construction capabilities by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3623
+* Fix payload runtime validation exclusions by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3635
+* Cover output backends across input formats by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3636
+* Track large schema memory by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3637
+* Reuse remote schema connections by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3638
+* Improve malformed input diagnostics by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3639
+* Bump setuptools from 82.0.1 to 83.0.0 by @dependabot[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3633
+* Update project usage examples by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3641
+* Fix vLLM usage link by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3642
+* Refresh custom template paths by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3640
+* List project maintainers by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3643
+* Preserve Unicode line separators by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3644
+* Fix TypedDict unique item sets by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3645
+* Defer msgspec forward references by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3646
+* Validate generation path conflicts by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3647
+* Enforce dynamic model cache size by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3648
+* Filter imported dynamic model classes by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3649
+* Defer nested model default factories by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3650
+* Isolate generation state by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3652
+
+
+**Full Changelog**: https://github.com/koxudaxi/datamodel-code-generator/compare/0.70.0...0.71.0
+
+---
+
+## [0.70.0](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.70.0) - 2026-07-23
+
+## Breaking Changes
+
+
+* Preserved additionalProperties value constraints change generated output - JSON Schema `additionalProperties` (and `propertyNames`/mapping) value schemas that carry constraints (e.g. `minimum`/`maximum`, `minLength`/`maxLength`/`pattern`, array item constraints, `allOf`-merged primitives) now retain those constraints in the generated model instead of dropping them. This produces new `TypeAlias`/`RootModel`/`TypeAliasType` definitions and changes dict value type hints, so output differs for existing schemas. For example, a mapping value that previously generated `dict[str, Literal['fixed']]` now generates a dedicated alias preserving the constraints (#3616):
+
+```python
+# Before
+class DictModel(RootModel[dict[str, Literal['fixed']]]):
+    root: dict[str, Literal['fixed']]
+
+# After
+DictModelAdditionalProperty = TypeAliasType(
+    "DictModelAdditionalProperty",
+    Annotated[Literal['fixed'], Field(max_length=100, min_length=1)],
+)
+
+
+class DictModel(RootModel[dict[str, DictModelAdditionalProperty]]):
+    root: dict[str, DictModelAdditionalProperty]
+```
+
+## What's Changed
+* Update CHANGELOG for 0.69.0 by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3613
+* Update release benchmark data by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3614
+* [pre-commit.ci] pre-commit autoupdate by @pre-commit-ci[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3617
+* Preserve additionalProperties value constraints by @chuenchen309 in https://github.com/koxudaxi/datamodel-code-generator/pull/3616
+* Rename a msgspec field named "field" to avoid shadowing the field import by @chuenchen309 in https://github.com/koxudaxi/datamodel-code-generator/pull/3615
+* Bump the github-actions group with 8 updates by @dependabot[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3618
+* Update types-setuptools requirement from <70,>=67.6.0.5 to >=67.6.0.5,<84 by @dependabot[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3584
+
+
+**Full Changelog**: https://github.com/koxudaxi/datamodel-code-generator/compare/0.69.0...0.70.0
+
+---
+
+## [0.69.0](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.69.0) - 2026-07-19
+
+## Breaking Changes
+
+
+* Discriminated unions with duplicate or unresolvable discriminator values now fall back to a plain union - When a discriminated union contains variants that resolve to the same discriminator value, or variants that are containers, `RootModel`/type-alias wrappers, `None`/`str` members, or otherwise lack a resolvable discriminator literal, the generator no longer emits `Field(..., discriminator='...')` and instead produces a regular union. Previously such schemas emitted a `discriminator=` argument. Users regenerating models from these schemas will see the `discriminator` keyword removed from the affected fields (#3603)
+
+```python
+# Before (invalid duplicate-value discriminator was emitted):
+class GroupedItem(RootModel[Item | ItemReference]):
+    root: Item | ItemReference = Field(..., discriminator='type')
+
+# After (falls back to a plain union when variants are not valid discriminated members):
+class MixedItem(RootModel[str | ItemReference | None]):
+    root: str | ItemReference | None
+```
+
+## What's Changed
+* Update CHANGELOG for 0.68.1 by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3594
+* Update release benchmark data by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3595
+* Skip unused formatter construction by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3599
+* Retain model import caches by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3600
+* Fix pydantic typed extra runtime compatibility by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3601
+* [pre-commit.ci] pre-commit autoupdate by @pre-commit-ci[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3605
+* Fix legacy pydantic extra templates by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3602
+* Handle duplicate discriminator values by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3603
+* Bump the github-actions group across 1 directory with 7 updates by @dependabot[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3598
+* Allow custom and generated file headers by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3607
+* Fix payload runtime validation exclusions by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3609
+* Fix optional discriminator literals by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3608
+* Fix invalid dotted model names by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3610
+* Add multi-module stdout guard by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3611
+* Fix empty ("") property name dropping its alias by @chuenchen309 in https://github.com/koxudaxi/datamodel-code-generator/pull/3612
+
+## New Contributors
+* @chuenchen309 made their first contribution in https://github.com/koxudaxi/datamodel-code-generator/pull/3612
+
+**Full Changelog**: https://github.com/koxudaxi/datamodel-code-generator/compare/0.68.1...0.69.0
+
+---
+
 ## [0.68.1](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.68.1) - 2026-07-08
 
 ## What's Changed

@@ -78,6 +78,35 @@ def test_update_openapi_info_version_warns_when_missing() -> None:
         parser._update_openapi_info_version({"info": {"title": "Test"}})
 
 
+def test_collect_discriminator_schemas_override_keeps_no_arg_contract() -> None:
+    """Keep existing subclass overrides compatible with the no-argument hook."""
+
+    class CustomOpenAPIParser(OpenAPIParser):
+        collect_calls = 0
+
+        def _collect_discriminator_schemas(self) -> None:
+            self.collect_calls += 1
+            super()._collect_discriminator_schemas()
+
+    parser = CustomOpenAPIParser(
+        """
+openapi: 3.0.3
+info:
+  title: Compatibility
+  version: 1.0.0
+paths: {}
+components:
+  schemas:
+    User:
+      type: object
+"""
+    )
+
+    parser.parse(format_=False)
+
+    assert parser.collect_calls == 1
+
+
 @pytest.mark.parametrize(
     ("raw_obj", "specification", "expected_root_id"),
     [
@@ -581,6 +610,21 @@ def test_openapi_parser_parse_modular(tmp_path: Path, monkeypatch: pytest.Monkey
     assert_parser_modules(modules, EXPECTED_OPEN_API_PATH / "openapi_parser_parse_modular")
 
 
+def test_openapi_parser_parse_invalid_dotted_without_imports() -> None:
+    """Inspect multiple final modules when import rendering is disabled."""
+    parser = OpenAPIParser(
+        (DATA_PATH / "invalid_dotted_schema_name.yaml").resolve(),
+        data_model_field_type=DataModelFieldBase,
+        formatters=[Formatter.BUILTIN],
+    )
+    parser.repair_invalid_dotted_stdout = True
+    modules = parser.parse(with_import=False, format_=True)
+    assert_parser_modules(
+        modules,
+        EXPECTED_OPEN_API_PATH / "openapi_parser_parse_invalid_dotted_without_imports",
+    )
+
+
 def test_openapi_parser_parse_modular_pydantic_v2_ruff_keeps_runtime_imports(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -697,7 +741,10 @@ schemas:
         "socket.getaddrinfo",
         return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))],
     )
-    mock_fetch = mocker.patch("datamodel_code_generator.http._get_http_response", return_value=mock_response)
+    mock_fetch = mocker.patch(
+        "datamodel_code_generator.http._HTTPFetchSession.get_response",
+        return_value=mock_response,
+    )
 
     parser = OpenAPIParser(
         data_model_field_type=DataModelFieldBase,

@@ -6,8 +6,10 @@ import importlib.util
 import itertools
 import json
 import os
+import shutil
 import sys
 import tempfile
+import warnings
 from collections import defaultdict
 from collections.abc import Sequence
 from pathlib import Path
@@ -22,25 +24,34 @@ from datamodel_code_generator import (
     DataModelType,
     Error,
     InputFileType,
+    InvalidFileFormatError,
     PythonVersion,
     PythonVersionMin,
     SchemaValidatorType,
     TargetPydanticVersion,
     _clear_parser_source_data_cache,
+    cached_path_exists,
     chdir,
     generate,
+    load_data,
     load_data_from_path,
 )
 from datamodel_code_generator.__main__ import Exit
-from datamodel_code_generator.format import is_supported_in_black
+from datamodel_code_generator.format import Formatter, is_supported_in_black
 from datamodel_code_generator.model import base as model_base
-from datamodel_code_generator.model.pydantic_v2.version import PYDANTIC_V2_DATACLASS_ALIAS_NEEDS_FALLBACK
+from datamodel_code_generator.model.pydantic_v2.version import (
+    PYDANTIC_V2_DATACLASS_ALIAS_NEEDS_FALLBACK,
+    PYDANTIC_V2_ROOT_MODEL_DICT_KEY_FORWARD_REF_NEEDS_SORTING,
+)
 from tests.conftest import (
     HttpxGetMockFactory,
     MockHttpxResponse,
     assert_directory_content,
     assert_httpx_get_kwargs,
+    assert_mutable_copy_is_isolated,
     assert_output,
+    assert_warnings_contain,
+    assert_warnings_do_not_contain,
     create_assert_file_content,
     freeze_time,
     validate_generated_code,
@@ -56,10 +67,10 @@ from tests.main.conftest import (
     LEGACY_BLACK_SKIP,
     MSGSPEC_LEGACY_BLACK_SKIP,
     TIMESTAMP,
+    _generated_model,
+    _uses_external_test_default_formatter,
     assert_generated_model_json_invalid,
     assert_generated_model_json_validation,
-    assert_path_cache_invalidates_after_write,
-    assert_path_cache_reuses_value,
     run_generate_and_assert,
     run_generate_file_and_assert,
     run_main_and_assert,
@@ -177,6 +188,44 @@ def test_main_external_ref_slash_containing_key(output_dir: Path) -> None:
         expected_directory=EXPECTED_JSON_SCHEMA_PATH / "external_ref_slash_key",
         extra_args=["--disable-timestamp", "--target-python-version", "3.10"],
     )
+
+
+def test_generate_external_ref_slash_containing_key_strict(output_file: Path) -> None:
+    """Flatten URL-like inferred names only when strict inference is enabled."""
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "external_ref_slash_key" / "schema.json",
+        output_path=output_file,
+        input_file_type=InputFileType.JsonSchema,
+        assert_func=assert_file_content,
+        expected_file="external_ref_slash_key_strict.py",
+        strict_dotted_module_names=True,
+        disable_timestamp=True,
+        target_python_version=PythonVersion.PY_310,
+    )
+
+
+def test_generate_strict_dotted_custom_generator_nested(output_dir: Path) -> None:
+    """Apply strict module inference to names returned by a custom generator."""
+
+    def invalid_module_prefix(name: str) -> str:
+        return f"bad-name.{name}"
+
+    generate(
+        JSON_SCHEMA_DATA_PATH / "strict_dotted_custom_generator_nested.json",
+        input_file_type=InputFileType.JsonSchema,
+        output=output_dir,
+        custom_class_name_generator=invalid_module_prefix,
+        strict_dotted_module_names=True,
+        disable_timestamp=True,
+        formatters=[Formatter.BUILTIN],
+    )
+
+    assert_directory_content(
+        output_dir,
+        EXPECTED_JSON_SCHEMA_PATH / "strict_dotted_custom_generator_nested",
+    )
+    generated_file = output_dir / "bad_name.py"
+    validate_generated_code(generated_file.read_text(encoding="utf-8"), str(generated_file), do_exec=True)
 
 
 def test_main_root_ref(output_file: Path) -> None:
@@ -454,6 +503,7 @@ def test_main_keep_model_order_field_references(output_file: Path) -> None:
     )
 
 
+@pytest.mark.benchmark
 @pytest.mark.parametrize(
     ("target_python_version", "keep_model_order", "disable_future_imports"),
     [
@@ -2419,6 +2469,86 @@ def test_main_msgspec_structured_imports(output_file: Path) -> None:
     )
 
 
+def test_main_msgspec_reserved_field_name(output_file: Path) -> None:
+    """A field named ``field`` must not shadow msgspec's imported ``field``."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "msgspec_reserved_field_name.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="msgspec_reserved_field_name.py",
+        extra_args=[
+            "--output-model-type",
+            "msgspec.Struct",
+            "--class-name",
+            "Payload",
+        ],
+        force_exec_validation=True,
+        importable_module_name="generated_msgspec_reserved_field_name",
+        importable_module_attribute="Payload",
+    )
+
+
+@BLACK_PY314_SKIP
+def test_main_msgspec_python_314_without_forward_reference(output_file: Path) -> None:
+    """Keep non-forward msgspec output free of an unnecessary future import."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "msgspec_reserved_field_name.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="msgspec_reserved_field_name_python_314.py",
+        extra_args=[
+            "--output-model-type",
+            "msgspec.Struct",
+            "--class-name",
+            "Payload",
+            "--target-python-version",
+            "3.14",
+        ],
+        force_exec_validation=True,
+        importable_module_name="generated_msgspec_reserved_field_name_python_314",
+        importable_module_attribute="Payload",
+    )
+
+
+@BLACK_PY314_SKIP
+@pytest.mark.parametrize(
+    ("disable_future_imports", "expected_file"),
+    [
+        (False, "msgspec_forward_reference.py"),
+        (True, "msgspec_forward_reference_disable_future_imports.py"),
+    ],
+)
+def test_main_msgspec_python_314_forward_reference(
+    output_file: Path,
+    *,
+    disable_future_imports: bool,
+    expected_file: str,
+) -> None:
+    """Generate an importable msgspec self-reference for Python 3.14."""
+    extra_args = [
+        "--disable-timestamp",
+        "--output-model-type",
+        "msgspec.Struct",
+        "--target-python-version",
+        "3.14",
+    ]
+    if disable_future_imports:
+        extra_args.append("--disable-future-imports")
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "msgspec_forward_reference.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file=expected_file,
+        extra_args=extra_args,
+        force_exec_validation=True,
+        importable_module_name=f"generated_{Path(expected_file).stem}",
+        importable_module_attribute="Node",
+    )
+
+
 def test_main_root_model_with_additional_properties_literal(min_version: str, output_file: Path) -> None:
     """Test root model additional properties with literal types."""
     run_main_and_assert(
@@ -2671,13 +2801,26 @@ def test_main_generate_with_parsed_source_cache(output_file: Path) -> None:
     )
 
 
-def test_load_data_from_path_caches_json_source(tmp_path: Path) -> None:
-    """Reuse parsed JSON file data by path and content hash for local reference loading."""
+def test_load_data_from_path_isolates_cached_json_source(tmp_path: Path) -> None:
+    """Return independent parsed JSON values from the process-local cache."""
     schema_path = tmp_path / "schema.json"
     schema_path.write_text((JSON_SCHEMA_DATA_PATH / "person.json").read_text(encoding="utf-8"), encoding="utf-8")
     _clear_parser_source_data_cache()
 
-    assert_path_cache_reuses_value(load_data_from_path, schema_path, warmups=1)
+    original = load_data_from_path(schema_path, "utf-8")
+    cached = load_data_from_path(schema_path, "utf-8")
+    assert_mutable_copy_is_isolated(
+        original=original,
+        copied=cached,
+        mutate_copied=lambda value: value["properties"]["firstName"].update(type="integer"),
+        label="cached JSON source",
+    )
+    assert_mutable_copy_is_isolated(
+        original=original,
+        copied=load_data_from_path(schema_path, "utf-8"),
+        mutate_copied=lambda value: value["properties"]["lastName"].update(type="integer"),
+        label="reloaded JSON source",
+    )
 
 
 def test_load_data_from_path_invalidates_updated_json_source(tmp_path: Path) -> None:
@@ -2685,13 +2828,16 @@ def test_load_data_from_path_invalidates_updated_json_source(tmp_path: Path) -> 
     schema_path = tmp_path / "schema.json"
     schema_path.write_text((JSON_SCHEMA_DATA_PATH / "person.json").read_text(encoding="utf-8"), encoding="utf-8")
     _clear_parser_source_data_cache()
+    load_data_from_path(schema_path, "utf-8")
+    load_data_from_path(schema_path, "utf-8")
+    updated_text = (JSON_SCHEMA_DATA_PATH / "simple_string.json").read_text(encoding="utf-8")
+    schema_path.write_text(updated_text, encoding="utf-8")
 
-    assert_path_cache_invalidates_after_write(
-        load_data_from_path,
-        schema_path,
-        (JSON_SCHEMA_DATA_PATH / "simple_string.json").read_text(encoding="utf-8"),
-        ["s"],
-        expected_value_path=("required",),
+    assert_mutable_copy_is_isolated(
+        original=load_data(updated_text),
+        copied=load_data_from_path(schema_path, "utf-8"),
+        mutate_copied=lambda value: value["required"].append("mutated"),
+        label="updated cached JSON source",
     )
 
 
@@ -3523,6 +3669,27 @@ def test_main_jsonschema_special_enum(output_file: Path) -> None:
     )
 
 
+@pytest.mark.isolate_builtin_formatter_config
+def test_main_jsonschema_builtin_formatter_preserves_unicode_line_separators(output_file: Path) -> None:
+    """Keep Unicode separators in generated enum values without creating source lines."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "unicode_line_separators.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="unicode_line_separators_builtin.py",
+        extra_args=["--disable-timestamp", "--formatters", "builtin"],
+        force_exec_validation=True,
+    )
+
+    expected_values = ["next\u0085line", "line\u2028separator", "paragraph\u2029separator"]
+    with _generated_model(output_file, "unicode_line_separators", "UnicodeSeparator") as enum_model:
+        assert_output(
+            f"{json.dumps([enum_model(value).value for value in expected_values], indent=2)}\n",
+            EXPECTED_JSON_SCHEMA_PATH / "unicode_line_separators_values.txt",
+        )
+
+
 @pytest.mark.cli_doc(
     options=["--special-field-name-prefix"],
     option_description="""Prefix to add to special field names (like reserved keywords).
@@ -3721,6 +3888,175 @@ def test_main_jsonschema_special_field_name(output_file: Path) -> None:
         assert_func=assert_file_content,
         expected_file="special_field_name.py",
     )
+
+
+@pytest.mark.parametrize(
+    ("output_model_type", "expected_file"),
+    [
+        pytest.param(DataModelType.PydanticV2BaseModel, "empty_field_name.py", id="pydantic-v2"),
+        pytest.param(DataModelType.MsgspecStruct, "empty_field_name_msgspec.py", id="msgspec"),
+        pytest.param(DataModelType.TypingTypedDict, "empty_field_name_typed_dict.py", id="typed-dict"),
+    ],
+)
+def test_main_jsonschema_empty_field_name(  # noqa: PLR0912
+    output_file: Path,
+    output_model_type: DataModelType,
+    expected_file: str,
+) -> None:
+    """Preserve empty property names through generation, inheritance, and runtime round-trips."""
+    metadata_path = output_file.with_suffix(".metadata.json")
+    extra_args = ["--output-model-type", output_model_type.value, "--disable-timestamp"]
+    if output_model_type is DataModelType.PydanticV2BaseModel:
+        extra_args.extend([
+            "--read-only-write-only-model-type",
+            "all",
+            "--emit-model-metadata",
+            str(metadata_path),
+        ])
+
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "empty_field_name.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file=expected_file,
+        extra_args=extra_args,
+        force_exec_validation=True,
+    )
+
+    payload = {"": "value"}
+    match output_model_type:
+        case DataModelType.PydanticV2BaseModel:
+            assert_output(
+                metadata_path.read_text(encoding="utf-8"),
+                EXPECTED_JSON_SCHEMA_PATH / "empty_field_name_metadata.txt",
+            )
+            for model_name in ("RequiredEmpty", "AllOfRequiredEmpty", "AllOfOverrideEmpty"):
+                assert_generated_model_json_validation(
+                    output_file,
+                    module_name=f"empty_field_name_{model_name}",
+                    model_name=model_name,
+                    valid_json=json.dumps(payload),
+                    invalid_json="{}",
+                    expected_error_type="missing",
+                    expected_attribute_path=("field_",),
+                    expected_attribute_value="value",
+                )
+            assert_generated_model_json_validation(
+                output_file,
+                module_name="empty_field_name_request",
+                model_name="ReadWriteEmptyRequest",
+                valid_json='{"field_":1}',
+                invalid_json="{}",
+                expected_error_type="missing",
+                expected_attribute_path=("field__1",),
+                expected_attribute_value=1,
+            )
+            assert_generated_model_json_validation(
+                output_file,
+                module_name="empty_field_name_response",
+                model_name="ReadWriteEmptyResponse",
+                valid_json=json.dumps(payload),
+                invalid_json="{}",
+                expected_error_type="missing",
+                expected_attribute_path=("field_",),
+                expected_attribute_value="value",
+            )
+            with _generated_model(output_file, "empty_field_name_dump", "ReadWriteEmpty") as model:
+                instance = model.model_validate({**payload, "field_": 1})
+                if (dumped := instance.model_dump(by_alias=True, exclude_unset=True)) == {  # pragma: no branch
+                    **payload,
+                    "field_": 1,
+                }:
+                    return
+                pytest.fail(f"Empty alias was not preserved in Pydantic dump: {dumped!r}")  # pragma: no cover
+
+        case DataModelType.MsgspecStruct:
+            import msgspec
+
+            for model_name in ("RequiredEmpty", "AllOfRequiredEmpty", "AllOfOverrideEmpty"):
+                with _generated_model(output_file, f"empty_field_name_{model_name}", model_name) as model:
+                    instance = msgspec.json.decode(b'{"":"value"}', type=model)
+                    if (dumped := msgspec.to_builtins(instance)) != payload:  # pragma: no cover
+                        pytest.fail(f"Empty alias was not preserved in {model_name}: {dumped!r}")
+                    with pytest.raises(msgspec.ValidationError):
+                        msgspec.json.decode(b"{}", type=model)
+            with _generated_model(output_file, "empty_field_name_optional", "OptionalEmpty") as model:
+                if (dumped := msgspec.to_builtins(msgspec.json.decode(b"{}", type=model))) != {}:  # pragma: no cover
+                    pytest.fail(f"Unset empty alias was not omitted from msgspec dump: {dumped!r}")
+            with _generated_model(output_file, "empty_field_name_msgspec_dump", "ReadWriteEmpty") as model:
+                instance = msgspec.json.decode(b'{"":"value","field_":1}', type=model)
+                if (dumped := msgspec.to_builtins(instance)) == {**payload, "field_": 1}:  # pragma: no branch
+                    return
+                pytest.fail(f"Empty alias collided in msgspec dump: {dumped!r}")  # pragma: no cover
+
+        case DataModelType.TypingTypedDict:
+            from typing import get_origin, is_typeddict
+
+            from typing_extensions import NotRequired
+
+            expected_fields = {
+                "RequiredEmpty": (frozenset({"", "a"}), frozenset({"a"})),
+                "OptionalEmpty": (frozenset({"", "a"}), frozenset({"", "a"})),
+                "AllOfRequiredEmpty": (frozenset({"", "a"}), frozenset({"a"})),
+                "AllOfOverrideEmpty": (frozenset({"", "a"}), frozenset({"a"})),
+                "ReadWriteEmpty": (frozenset({"", "field_", "shared"}), frozenset({"shared"})),
+            }
+            for model_name, (field_names, optional_names) in expected_fields.items():
+                with _generated_model(output_file, f"empty_field_name_{model_name}", model_name) as model:
+                    if not is_typeddict(model):  # pragma: no cover
+                        pytest.fail(f"Expected {model_name} to be a TypedDict")
+                    if (actual_names := frozenset(model.__annotations__)) != field_names:  # pragma: no cover
+                        pytest.fail(f"Unexpected fields for {model_name}: {actual_names!r}")
+                    actual_optional_names = frozenset(
+                        name
+                        for name, annotation in model.__annotations__.items()
+                        if get_origin(annotation) is NotRequired
+                    )
+                    if actual_optional_names != optional_names:  # pragma: no cover
+                        pytest.fail(f"Unexpected optional fields for {model_name}: {actual_optional_names!r}")
+            return
+
+    pytest.fail(f"Unhandled output model type: {output_model_type}")  # pragma: no cover
+
+
+def test_main_jsonschema_empty_field_name_schema_validators(output_file: Path) -> None:
+    """Treat an empty property name as declared in direct and inherited schema validators."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "empty_field_name_schema_validators.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="empty_field_name_schema_validators.py",
+        extra_args=[
+            "--generate-schema-validators",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--use-annotated",
+            "--disable-timestamp",
+            "--formatters",
+            "builtin",
+        ],
+        force_exec_validation=True,
+    )
+
+    valid_payload = {"": "ok", "x_1": "7"}
+    expected_dump = {"": "ok", "x_1": 7}
+    for model_name in ("DirectEmptyPattern", "InheritedEmptyPattern"):
+        assert_generated_model_json_validation(
+            output_file,
+            module_name=f"empty_field_name_validator_{model_name}",
+            model_name=model_name,
+            valid_json=json.dumps(valid_payload),
+            invalid_json='{"":"ok","bad":1}',
+            expected_error_type="value_error",
+            expected_attribute_path=("field_",),
+            expected_attribute_value="ok",
+        )
+        with _generated_model(output_file, f"empty_field_name_dump_{model_name}", model_name) as model:
+            instance = model.model_validate(valid_payload)
+            if (dumped := instance.model_dump(by_alias=True, exclude_unset=True)) != expected_dump:  # pragma: no cover
+                pytest.fail(f"Empty alias was not preserved by {model_name}: {dumped!r}")
 
 
 def test_main_jsonschema_complex_one_of(output_file: Path) -> None:
@@ -4153,6 +4489,27 @@ def test_main_jsonschema_rejects_unsafe_python_import_extensions(
     )
 
 
+@pytest.mark.parametrize(
+    "fixture_name",
+    ["unsafe_custom_base_path_scalar.json", "unsafe_custom_base_path_list_nested.json"],
+)
+def test_main_jsonschema_rejects_unsafe_custom_base_path(
+    fixture_name: str,
+    output_file: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Reject unsafe scalar and nested list customBasePath values before writing output."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / fixture_name,
+        output_path=output_file,
+        input_file_type="jsonschema",
+        expected_exit=Exit.ERROR,
+        output_should_not_exist=True,
+        capsys=capsys,
+        expected_stderr_contains="customBasePath must be a dotted Python identifier path",
+    )
+
+
 @pytest.mark.parametrize("ref_template", ["../secret/leak.json", "{file_uri}"])
 def test_main_jsonschema_warns_local_ref_outside_base_path(
     ref_template: str,
@@ -4275,6 +4632,18 @@ def test_main_jsonschema_custom_base_path(output_file: Path) -> None:
         input_file_type="jsonschema",
         assert_func=assert_file_content,
         expected_file="custom_base_path.py",
+    )
+
+
+@pytest.mark.parametrize("fixture_name", ["custom_base_path.json", "custom_base_paths_list.json"])
+def test_generate_jsonschema_custom_base_path(fixture_name: str, output_file: Path) -> None:
+    """Test generate() preserves valid scalar, nested, and list customBasePath output."""
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / fixture_name,
+        output_path=output_file,
+        input_file_type=InputFileType.JsonSchema,
+        assert_func=assert_file_content,
+        expected_file=Path(fixture_name).with_suffix(".py"),
     )
 
 
@@ -5016,6 +5385,7 @@ def test_main_use_union_operator(output_dir: Path) -> None:
         (["--treat-dot-as-module"], "treat_dot_as_module"),
         (None, "treat_dot_not_as_module"),
         (["--no-treat-dot-as-module"], "treat_dot_not_as_module"),
+        (["--strict-dotted-module-names", "--no-treat-dot-as-module"], "treat_dot_not_as_module"),
     ],
 )
 def test_treat_dot_as_module(extra_args: list[str] | None, expected_suffix: str, output_dir: Path) -> None:
@@ -5439,6 +5809,33 @@ def test_main_jsonschema_false_schema_errors(schema: dict[str, object], output_f
     )
 
 
+@pytest.mark.parametrize(
+    "additional_properties",
+    [
+        pytest.param({"allOf": [False, {"type": "integer"}]}, id="direct-false"),
+        pytest.param(
+            {"allOf": [{"$ref": "#/$defs/Never"}, {"type": "integer", "minimum": 1}]},
+            id="ref-false",
+        ),
+    ],
+)
+def test_main_jsonschema_additional_properties_allof_false_schema_errors(
+    additional_properties: dict[str, object], output_file: Path
+) -> None:
+    """Reject false allOf branches while preserving annotated mapping constraints."""
+    _run_jsonschema_dict(
+        {
+            "title": "Payload",
+            "type": "object",
+            "$defs": {"Never": False},
+            "additionalProperties": additional_properties,
+        },
+        output_file,
+        expected_exit=Exit.ERROR,
+        extra_args=["--output-model-type", "pydantic_v2.BaseModel", "--use-annotated"],
+    )
+
+
 def test_main_jsonschema_anyof_ref_false_schema(output_file: Path) -> None:
     """Test anyOf skips local $ref branches that resolve to boolean false schemas."""
     expected = (
@@ -5461,6 +5858,311 @@ def test_main_jsonschema_anyof_ref_false_schema(output_file: Path) -> None:
         output_file,
         expected_output=expected,
         extra_args=["--output-model-type", "pydantic_v2.BaseModel"],
+    )
+
+
+_ADDITIONAL_PROPERTIES_CONSTRAINTS_VALID_JSON = (
+    '{"existingLocalValue":"kept","nestedMap":{"ok":1},'
+    '"titledMap":{"ok":9},"titledRefMap":{"ok":2},'
+    '"localTitleRefMap":{"ok":2},'
+    '"namedMap":{"ok":5},'
+    '"rootMap":{"ok":2},"nullableValueMap":{"nil":null,"ok":1},'
+    '"closedArrayValueMap":{"empty":[]},"allOfValueMap":{"ok":5},'
+    '"titledAllOfValueMap":{"ok":5},'
+    '"nullableAllOfValueMap":{"nil":null,"ok":5},'
+    '"unionValueMap":{"int":5,"text":"good"},'
+    '"objectValueMap":{"entry":{"key":"value"}},'
+    '"modeledValueMap":{"entry":{"value":1}},"titledValueMap":{"ok":2},'
+    '"modeledIrrelevantConstraintMap":{"entry":{"value":"ok"}},'
+    '"arrayIrrelevantConstraintMap":{"entry":[1]},'
+    '"heterogeneousValueMap":{"int":1,"text":"ok"},'
+    '"booleanIrrelevantConstraintMap":{"flag":true},"extra":3}'
+)
+
+
+@pytest.mark.skipif(
+    _uses_external_test_default_formatter() and not is_supported_in_black(PythonVersion.PY_311),
+    reason="Installed black doesn't support Python version 3.11",
+)
+@pytest.mark.parametrize(
+    ("output_model_type", "expected_file"),
+    [
+        pytest.param(
+            DataModelType.PydanticV2BaseModel,
+            "additional_properties_value_constraints_annotated_pydantic_v2.py",
+            id="pydantic-v2",
+        ),
+        pytest.param(
+            DataModelType.PydanticV2Dataclass,
+            "additional_properties_value_constraints_annotated_pydantic_v2_dataclass.py",
+            id="pydantic-v2-dataclass",
+        ),
+        pytest.param(
+            DataModelType.MsgspecStruct,
+            "additional_properties_value_constraints_annotated_msgspec.py",
+            id="msgspec",
+        ),
+        pytest.param(
+            DataModelType.DataclassesDataclass,
+            "additional_properties_value_constraints_annotated_dataclass.py",
+            id="dataclass",
+        ),
+        pytest.param(
+            DataModelType.TypingTypedDict,
+            "additional_properties_value_constraints_annotated_typed_dict.py",
+            id="typed-dict",
+        ),
+    ],
+)
+def test_main_jsonschema_additional_properties_value_constraints_annotated(
+    output_file: Path,
+    output_model_type: DataModelType,
+    expected_file: str,
+) -> None:
+    """Preserve constrained mapping values across every additionalProperties path."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "additional_properties_value_constraints_annotated.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file=expected_file,
+        extra_args=[
+            "--output-model-type",
+            output_model_type.value,
+            "--target-python-version",
+            "3.11",
+            "--use-title-as-name",
+            "--use-annotated",
+            "--disable-timestamp",
+        ],
+        force_exec_validation=True,
+    )
+
+    match output_model_type:
+        case DataModelType.PydanticV2BaseModel | DataModelType.PydanticV2Dataclass:
+            module_name = f"additional_properties_constraints_{output_model_type.name}"
+            assert_generated_model_json_validation(
+                output_file,
+                module_name=module_name,
+                model_name="Payload",
+                valid_json=_ADDITIONAL_PROPERTIES_CONSTRAINTS_VALID_JSON,
+                invalid_json=_ADDITIONAL_PROPERTIES_CONSTRAINTS_VALID_JSON.replace(
+                    '"nestedMap":{"ok":1}', '"nestedMap":{"bad":0}'
+                ),
+                expected_error_type="greater_than_equal",
+                expected_attribute_path=("nestedMap", "ok"),
+                expected_attribute_value=1,
+            )
+            assert_generated_model_json_validation(
+                output_file,
+                module_name=f"{module_name}_titled_ref",
+                model_name="Payload",
+                valid_json=_ADDITIONAL_PROPERTIES_CONSTRAINTS_VALID_JSON,
+                invalid_json=_ADDITIONAL_PROPERTIES_CONSTRAINTS_VALID_JSON.replace(
+                    '"titledRefMap":{"ok":2}', '"titledRefMap":{"bad":0}'
+                ),
+                expected_error_type="greater_than_equal",
+                expected_attribute_path=("titledRefMap", "ok"),
+                expected_attribute_value=2,
+            )
+            assert_generated_model_json_validation(
+                output_file,
+                module_name=f"{module_name}_local_title_ref",
+                model_name="Payload",
+                valid_json=_ADDITIONAL_PROPERTIES_CONSTRAINTS_VALID_JSON,
+                invalid_json=_ADDITIONAL_PROPERTIES_CONSTRAINTS_VALID_JSON.replace(
+                    '"localTitleRefMap":{"ok":2}', '"localTitleRefMap":{"bad":10}'
+                ),
+                expected_error_type="less_than_equal",
+                expected_attribute_path=("localTitleRefMap", "ok"),
+                expected_attribute_value=2,
+            )
+            assert_generated_model_json_invalid(
+                output_file,
+                module_name=f"{module_name}_root",
+                model_name="Payload",
+                invalid_json=_ADDITIONAL_PROPERTIES_CONSTRAINTS_VALID_JSON.replace(
+                    '"rootMap":{"ok":2}', '"rootMap":{"bad":10}'
+                ),
+                expected_error_type="less_than_equal",
+            )
+            invalid_cases = (
+                (
+                    '"nullableValueMap":{"nil":null,"ok":1}',
+                    '"nullableValueMap":null',
+                    "dict_type",
+                ),
+                (
+                    '"closedArrayValueMap":{"empty":[]}',
+                    '"closedArrayValueMap":{"empty":[1]}',
+                    "too_long",
+                ),
+                (
+                    '"allOfValueMap":{"ok":5}',
+                    '"allOfValueMap":{"bad":10}',
+                    "less_than_equal",
+                ),
+                (
+                    '"titledAllOfValueMap":{"ok":5}',
+                    '"titledAllOfValueMap":{"bad":10}',
+                    "less_than_equal",
+                ),
+                (
+                    '"nullableAllOfValueMap":{"nil":null,"ok":5}',
+                    '"nullableAllOfValueMap":{"bad":10}',
+                    "less_than_equal",
+                ),
+                (
+                    '"unionValueMap":{"int":5,"text":"good"}',
+                    '"unionValueMap":{"int":5,"text":"x"}',
+                    "int_parsing",
+                ),
+                (
+                    '"objectValueMap":{"entry":{"key":"value"}}',
+                    '"objectValueMap":{"entry":{}}',
+                    "too_short",
+                ),
+                (
+                    '"modeledValueMap":{"entry":{"value":1}}',
+                    '"modeledValueMap":{"entry":{}}',
+                    "missing",
+                ),
+                (
+                    '"titledMap":{"ok":9}',
+                    '"titledMap":{"bad":10}',
+                    "less_than_equal",
+                ),
+                (
+                    '"namedMap":{"ok":5}',
+                    '"namedMap":{"ok":10}',
+                    "less_than_equal",
+                ),
+                (
+                    '"namedMap":{"ok":5}',
+                    '"namedMap":{"Bad":5}',
+                    "string_pattern_mismatch",
+                ),
+            )
+            for index, (valid_fragment, invalid_fragment, expected_error_type) in enumerate(invalid_cases):
+                assert_generated_model_json_invalid(
+                    output_file,
+                    module_name=f"{module_name}_edge_{index}",
+                    model_name="Payload",
+                    invalid_json=_ADDITIONAL_PROPERTIES_CONSTRAINTS_VALID_JSON.replace(
+                        valid_fragment, invalid_fragment
+                    ),
+                    expected_error_type=expected_error_type,
+                )
+            if output_model_type is DataModelType.PydanticV2BaseModel:
+                assert_generated_model_json_invalid(
+                    output_file,
+                    module_name=f"{module_name}_extra",
+                    model_name="Payload",
+                    invalid_json=_ADDITIONAL_PROPERTIES_CONSTRAINTS_VALID_JSON.replace('"extra":3', '"extra":10'),
+                    expected_error_type="less_than_equal",
+                )
+            return
+        case DataModelType.MsgspecStruct:
+            import msgspec
+
+            with _generated_model(output_file, "additional_properties_constraints_msgspec", "Payload") as model:
+                instance = msgspec.json.decode(_ADDITIONAL_PROPERTIES_CONSTRAINTS_VALID_JSON.encode(), type=model)
+                if (actual := instance.nestedMap["ok"]) != 1:  # pragma: no cover
+                    pytest.fail(f"Expected nestedMap value to remain int 1, got {actual!r}")
+                invalid_fragments = (
+                    ('"nestedMap":{"ok":1}', '"nestedMap":{"bad":0}'),
+                    ('"titledRefMap":{"ok":2}', '"titledRefMap":{"bad":0}'),
+                    ('"localTitleRefMap":{"ok":2}', '"localTitleRefMap":{"bad":10}'),
+                    ('"closedArrayValueMap":{"empty":[]}', '"closedArrayValueMap":{"empty":[1]}'),
+                    ('"allOfValueMap":{"ok":5}', '"allOfValueMap":{"bad":10}'),
+                    ('"titledAllOfValueMap":{"ok":5}', '"titledAllOfValueMap":{"bad":10}'),
+                    (
+                        '"nullableAllOfValueMap":{"nil":null,"ok":5}',
+                        '"nullableAllOfValueMap":{"bad":10}',
+                    ),
+                    ('"objectValueMap":{"entry":{"key":"value"}}', '"objectValueMap":{"entry":{}}'),
+                    ('"modeledValueMap":{"entry":{"value":1}}', '"modeledValueMap":{"entry":{}}'),
+                    ('"titledMap":{"ok":9}', '"titledMap":{"bad":10}'),
+                    ('"namedMap":{"ok":5}', '"namedMap":{"ok":10}'),
+                )
+                for valid_fragment, invalid_fragment in invalid_fragments:
+                    with pytest.raises(msgspec.ValidationError):
+                        msgspec.json.decode(
+                            _ADDITIONAL_PROPERTIES_CONSTRAINTS_VALID_JSON.replace(
+                                valid_fragment, invalid_fragment
+                            ).encode(),
+                            type=model,
+                        )
+                with pytest.raises(msgspec.ValidationError):
+                    msgspec.json.decode(
+                        _ADDITIONAL_PROPERTIES_CONSTRAINTS_VALID_JSON.replace(
+                            '"nullableValueMap":{"nil":null,"ok":1}', '"nullableValueMap":null'
+                        ).encode(),
+                        type=model,
+                    )
+            return
+        case _:
+            return
+
+
+@pytest.mark.skipif(
+    _uses_external_test_default_formatter() and not is_supported_in_black(PythonVersion.PY_312),
+    reason="Installed black doesn't support Python version 3.12",
+)
+def test_main_jsonschema_additional_properties_value_constraints_annotated_py312(output_file: Path) -> None:
+    """Use runtime-compatible lightweight aliases for constrained mapping values on Python 3.12."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "additional_properties_value_constraints_annotated.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="additional_properties_value_constraints_annotated_pydantic_v2_py312.py",
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--target-python-version",
+            "3.12",
+            "--use-title-as-name",
+            "--use-annotated",
+            "--disable-timestamp",
+        ],
+    )
+
+
+@pytest.mark.skipif(
+    _uses_external_test_default_formatter() and not is_supported_in_black(PythonVersion.PY_311),
+    reason="Installed black doesn't support Python version 3.11",
+)
+def test_main_jsonschema_additional_properties_value_constraints_schema_validators(output_file: Path) -> None:
+    """Preserve constrained unmatched values in generated patternProperties validators."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "additional_properties_value_constraints_annotated.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="additional_properties_value_constraints_annotated_schema_validators.py",
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--target-python-version",
+            "3.11",
+            "--use-title-as-name",
+            "--use-annotated",
+            "--generate-schema-validators",
+            "--disable-timestamp",
+        ],
+        force_exec_validation=True,
+    )
+    valid_json = _ADDITIONAL_PROPERTIES_CONSTRAINTS_VALID_JSON.replace('"extra":3', '"pattern_value":0,"extra":3')
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="additional_properties_constraints_schema_validators",
+        model_name="Payload",
+        valid_json=valid_json,
+        invalid_json=valid_json.replace('"extra":3', '"extra":0'),
+        expected_error_type="greater_than_equal",
+        expected_attribute_path=("nestedMap", "ok"),
+        expected_attribute_value=1,
     )
 
 
@@ -6053,6 +6755,129 @@ def test_main_jsonschema_additional_properties_schema_with_properties(output_fil
         expected_error_type="int_type",
         expected_attribute_path=("__pydantic_extra__",),
         expected_attribute_value={"size": 1},
+    )
+
+
+@pytest.mark.parametrize(
+    ("input_name", "expected_file", "disable_future_imports", "old_style_template"),
+    [
+        pytest.param(
+            "additional_properties_schema_with_properties.json",
+            "additional_properties_schema_with_properties_legacy_custom_template.py",
+            False,
+            False,
+            id="scalar-future",
+        ),
+        pytest.param(
+            "additional_properties_schema_with_properties.json",
+            "additional_properties_schema_with_properties_py313_no_future_imports.py",
+            True,
+            False,
+            id="scalar-no-future",
+        ),
+        pytest.param(
+            "additional_properties_self_ref.json",
+            "additional_properties_self_ref_legacy_custom_template.py",
+            False,
+            False,
+            id="self-ref-future",
+        ),
+        pytest.param(
+            "additional_properties_self_ref.json",
+            "additional_properties_self_ref_py314.py",
+            True,
+            False,
+            id="self-ref-no-future",
+        ),
+        pytest.param(
+            "additional_properties_schema_with_properties.json",
+            "additional_properties_schema_with_properties_legacy_custom_template.py",
+            False,
+            True,
+            id="scalar-future-old-style",
+        ),
+    ],
+)
+def test_main_jsonschema_legacy_pydantic_extra_custom_template(
+    input_name: str,
+    expected_file: str,
+    disable_future_imports: bool,
+    old_style_template: bool,
+    output_file: Path,
+    tmp_path: Path,
+) -> None:
+    """Test pre-0.68.1 custom templates keep typed-extra runtime validation."""
+    mode_args = ["--disable-future-imports"] if disable_future_imports else []
+    template_dir = (DATA_PATH / "templates_pydantic_extra_pre_3593").relative_to(Path.cwd())
+    copy_files = None
+    if old_style_template:
+        copied_template = tmp_path / "pydantic_v2/BaseModel.jinja2"
+        copied_template.parent.mkdir()
+        copy_files = [(template_dir / "pydantic_v2/BaseModel.jinja2", copied_template)]
+        template_dir = tmp_path
+    with warnings.catch_warnings(record=True) as recorded_warnings:
+        warnings.simplefilter("always", UserWarning)
+        run_main_and_assert(
+            input_path=JSON_SCHEMA_DATA_PATH / input_name,
+            output_path=output_file,
+            input_file_type="jsonschema",
+            assert_func=assert_file_content,
+            expected_file=expected_file,
+            extra_args=[
+                "--output-model-type",
+                "pydantic_v2.BaseModel",
+                "--custom-template-dir",
+                str(template_dir),
+                *mode_args,
+            ],
+            copy_files=copy_files,
+            force_exec_validation=True,
+        )
+
+    warning_fragment = "was rewritten automatically for Pydantic typed-extra compatibility"
+    if disable_future_imports:
+        assert_warnings_do_not_contain(recorded_warnings, warning_fragment)
+    else:
+        assert_warnings_contain(recorded_warnings, warning_fragment)
+
+    validation_case: tuple[str, str, str, str, tuple[str, ...], object] | None = None
+    match input_name:
+        case "additional_properties_schema_with_properties.json":
+            validation_case = (
+                "KnownAndExtra",
+                '{"name":"known","size":1}',
+                '{"name":"known","size":[]}',
+                "int_type",
+                ("__pydantic_extra__",),
+                {"size": 1},
+            )
+        case "additional_properties_self_ref.json":
+            validation_case = (
+                "Node",
+                '{"name":"root","child":{"name":"leaf"}}',
+                '{"name":"root","child":{"name":"leaf","bad":1}}',
+                "model_type",
+                ("__pydantic_extra__", "child", "name"),
+                "leaf",
+            )
+    if validation_case is None:  # pragma: no cover
+        raise AssertionError(input_name)
+    model_name, valid_json, invalid_json, expected_error_type, expected_attribute_path, expected_attribute_value = (
+        validation_case
+    )
+
+    assert_generated_model_json_validation(
+        output_file,
+        module_name=(
+            f"legacy_pydantic_extra_{Path(input_name).stem}_{'no_future' if disable_future_imports else 'future'}"
+            f"{'_old_style' if old_style_template else ''}"
+        ),
+        model_name=model_name,
+        valid_json=valid_json,
+        invalid_json=invalid_json,
+        expected_error_type=expected_error_type,
+        expected_attribute_path=expected_attribute_path,
+        expected_attribute_value=expected_attribute_value,
     )
 
 
@@ -6713,12 +7538,17 @@ def test_main_jsonschema_property_names_allof_ref(output_file: Path) -> None:
 
 def test_main_jsonschema_property_names_ref_enum(output_file: Path) -> None:
     """Test propertyNames with $ref to enum definition uses enum type as dict key."""
+    expected_file = (
+        "property_names_ref_enum_legacy_pydantic.py"
+        if PYDANTIC_V2_ROOT_MODEL_DICT_KEY_FORWARD_REF_NEEDS_SORTING
+        else "property_names_ref_enum.py"
+    )
     run_main_and_assert(
         input_path=JSON_SCHEMA_DATA_PATH / "property_names_ref_enum.json",
         output_path=output_file,
         input_file_type="jsonschema",
         assert_func=assert_file_content,
-        expected_file="property_names_ref_enum.py",
+        expected_file=expected_file,
         extra_args=[
             "--output-model-type",
             "pydantic_v2.BaseModel",
@@ -9828,6 +10658,39 @@ def test_main_jsonschema_reuse_scope_tree_typeddict(output_dir: Path) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("output_model_type", "expected_directory"),
+    [
+        pytest.param(
+            "pydantic_v2.dataclass",
+            "reuse_scope_tree_pydantic_dataclass",
+            id="pydantic-dataclass",
+        ),
+        pytest.param("msgspec.Struct", "reuse_scope_tree_msgspec", id="msgspec"),
+    ],
+)
+def test_main_jsonschema_reuse_scope_tree_non_inheriting_outputs(
+    output_model_type: str,
+    expected_directory: str,
+    output_dir: Path,
+) -> None:
+    """Keep direct shared-model references for non-inheriting tree reuse outputs."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "reuse_scope_tree",
+        output_path=output_dir,
+        expected_directory=EXPECTED_JSON_SCHEMA_PATH / expected_directory,
+        input_file_type="jsonschema",
+        extra_args=[
+            "--reuse-model",
+            "--reuse-scope",
+            "tree",
+            "--output-model-type",
+            output_model_type,
+            "--disable-timestamp",
+        ],
+    )
+
+
 def test_main_jsonschema_empty_items_array(output_file: Path) -> None:
     """Test that arrays with empty items ({}) generate List[Any] instead of bare List."""
     run_main_and_assert(
@@ -10916,6 +11779,7 @@ def test_main_jsonschema_ref_with_additional_keywords(output_dir: Path) -> None:
     [
         ("typing.TypedDict", "reserved_field_name_schema_typed_dict.py"),
         ("dataclasses.dataclass", "reserved_field_name_schema_dataclass.py"),
+        ("pydantic_v2.dataclass", "reserved_field_name_schema_pydantic_dataclass.py"),
         ("pydantic_v2.BaseModel", "reserved_field_name_schema_pydantic.py"),
     ],
 )
@@ -10932,6 +11796,7 @@ TypedDict and dataclass preserve the name, while Pydantic renames with alias."""
     model_outputs={
         "typeddict": "main/jsonschema/reserved_field_name_schema_typed_dict.py",
         "dataclass": "main/jsonschema/reserved_field_name_schema_dataclass.py",
+        "pydantic_v2.dataclass": "main/jsonschema/reserved_field_name_schema_pydantic_dataclass.py",
         "pydantic_v2": "main/jsonschema/reserved_field_name_schema_pydantic.py",
     },
 )
@@ -10943,6 +11808,7 @@ def test_main_jsonschema_reserved_field_name(output_model: str, expected_file: s
     This demonstrates how 'schema' field is handled:
     - TypedDict: not renamed (schema is not reserved)
     - dataclass: not renamed (schema is not reserved)
+    - Pydantic dataclass: not renamed (schema is not reserved)
     - Pydantic: renamed to 'schema_' with alias (BaseModel.schema conflicts)
     """
     run_main_and_assert(
@@ -11161,6 +12027,69 @@ def test_main_use_default_factory_for_optional_nested_models(
             "--use-default-factory-for-optional-nested-models",
         ],
     )
+
+
+@pytest.mark.parametrize(
+    ("output_model", "expected_file"),
+    [
+        ("dataclasses.dataclass", "default_factory_forward_nested_models_dataclass.py"),
+        ("pydantic_v2.BaseModel", "default_factory_forward_nested_models_pydantic_v2.py"),
+        ("msgspec.Struct", "default_factory_forward_nested_models_msgspec.py"),
+    ],
+)
+def test_main_defer_forward_nested_model_default_factories(
+    output_model: str,
+    expected_file: str,
+    output_file: Path,
+) -> None:
+    """Defer only nested model factories whose classes are not yet declared."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "default_factory_forward_nested_models.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file=expected_file,
+        extra_args=[
+            "--disable-timestamp",
+            "--output-model-type",
+            output_model,
+            "--use-default-factory-for-optional-nested-models",
+        ],
+        force_exec_validation=True,
+        importable_module_name=f"generated_{Path(expected_file).stem}",
+        importable_module_attribute="Model",
+    )
+    match output_model:
+        case "msgspec.Struct":
+            from msgspec import UNSET
+
+            terminal_default = UNSET
+        case _:
+            terminal_default = None
+
+    recursive_fields = {
+        "Node": "child",
+        "CycleA": "b",
+        "CycleB": "a",
+    }
+    for model_name, field_name in recursive_fields.items():
+        with _generated_model(
+            output_file,
+            f"constructed_{Path(expected_file).stem}_{model_name}",
+            model_name,
+        ) as model:
+            if getattr(model(), field_name) is not terminal_default:  # pragma: no cover
+                pytest.fail(f"{model_name}.{field_name} did not retain its terminating default")
+
+    with _generated_model(
+        output_file,
+        f"constructed_{Path(expected_file).stem}_Model",
+        "Model",
+    ) as model:
+        instance = model()
+        actual_nested_types = tuple(type(getattr(instance, name)).__name__ for name in ("existing", "cycle", "node"))
+        if actual_nested_types != ("Existing", "CycleA", "Node"):  # pragma: no cover
+            pytest.fail(f"Model factories did not construct the expected nested types: {actual_nested_types!r}")
 
 
 @pytest.mark.parametrize(
@@ -11993,6 +12922,37 @@ def test_main_jsonschema_schema_id(
         )
 
 
+def test_generate_refreshes_custom_template_directory_between_calls(tmp_path: Path) -> None:
+    """A custom template directory created after generate() starts being used on the next call."""
+    custom_template_dir = tmp_path / "templates"
+    output_file = tmp_path / "output.py"
+    generate_kwargs = {
+        "custom_template_dir": custom_template_dir,
+    }
+
+    with freeze_time(TIMESTAMP):
+        for _ in range(2):
+            run_generate_file_and_assert(
+                input_path=JSON_SCHEMA_DATA_PATH / "pet_simple.json",
+                output_path=output_file,
+                input_file_type=InputFileType.JsonSchema,
+                assert_func=assert_file_content,
+                expected_file=EXPECTED_JSON_SCHEMA_PATH / "custom_template_refresh_default.py",
+                **generate_kwargs,
+            )
+        for index in range(257):
+            cached_path_exists(tmp_path / f"evict-{index}")
+        shutil.copytree(DATA_PATH / "templates_refresh" / "v1", custom_template_dir)
+        run_generate_file_and_assert(
+            input_path=JSON_SCHEMA_DATA_PATH / "pet_simple.json",
+            output_path=output_file,
+            input_file_type=InputFileType.JsonSchema,
+            assert_func=assert_file_content,
+            expected_file=EXPECTED_JSON_SCHEMA_PATH / "custom_template_refresh_v1.py",
+            **generate_kwargs,
+        )
+
+
 @pytest.mark.parametrize(
     ("output_model", "expected_output"),
     [
@@ -12136,8 +13096,8 @@ def test_main_jsonschema_non_dict_files_in_directory(output_dir: Path) -> None:
 
 
 def test_main_jsonschema_ref_to_json_list_file() -> None:
-    """Test that $ref to a JSON file containing a list raises TypeError."""
-    with pytest.raises(TypeError, match="Expected dict, got list"):
+    """Test that $ref to a JSON list file raises a concise input-format error."""
+    with pytest.raises(InvalidFileFormatError, match="Expected dict, got list"):
         generate(
             input_=JSON_SCHEMA_DATA_PATH / "ref_to_json_list" / "main.json",
             input_file_type=InputFileType.JsonSchema,
@@ -13449,6 +14409,26 @@ def test_unique_items_enum_set(output_file: Path) -> None:
             "--use-unique-items-as-set",
             "--use-standard-collections",
         ],
+    )
+
+
+def test_unique_items_set_typed_dict(output_file: Path) -> None:
+    """Test uniqueItems arrays use sets in TypedDict output."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "unique_items_typed_dict.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="unique_items_typed_dict.py",
+        extra_args=[
+            "--output-model-type",
+            "typing.TypedDict",
+            "--target-python-version",
+            "3.10",
+            "--use-unique-items-as-set",
+            "--use-standard-collections",
+        ],
+        force_exec_validation=True,
     )
 
 

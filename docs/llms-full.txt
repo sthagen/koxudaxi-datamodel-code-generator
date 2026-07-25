@@ -4,6 +4,12 @@ Source: https://datamodel-code-generator.koxudaxi.dev/
 
 🚀 Generate Python data models from schema definitions in seconds.
 
+<p>
+  <a class="md-button md-button--primary" href="getting-started.md">Getting Started</a>
+  <a class="md-button md-button--primary" href="playground.md">Open Playground</a>
+  <a class="md-button md-button--primary" href="https://koxudaxi.dev/?utm_source=dm_docs&utm_medium=top&utm_campaign=open_to_work">Lead maintainer available for work</a>
+</p>
+
 [![PyPI version](https://img.shields.io/pypi/v/datamodel-code-generator.svg)](https://pypi.python.org/pypi/datamodel-code-generator)
 [![Conda-forge](https://img.shields.io/conda/v/conda-forge/datamodel-code-generator)](https://anaconda.org/conda-forge/datamodel-code-generator)
 [![Downloads](https://api.pepy.tech/badge/datamodel-code-generator/month)](https://pepy.tech/projects/datamodel-code-generator)
@@ -35,10 +41,6 @@ in another Python file to a different output type.
 ## 🧪 Try It In Your Browser
 
 Generate models in your browser without installing anything.
-
-<p>
-  <a class="md-button md-button--primary" href="playground.md" target="_self">Open Playground</a>
-</p>
 
 !!! note "Playground privacy"
     Generation runs locally in your browser with Pyodide. Your schema and options are not sent to a backend. Shared
@@ -208,26 +210,37 @@ See [CI/CD Integration](ci-cd.md) for more options.
 
 ## 🏢 Used by
 
-These projects use datamodel-code-generator. See the linked examples for real-world usage.
+These public examples are grouped by how each project uses datamodel-code-generator.
 
-- [openai/codex](https://github.com/openai/codex) - *[Python SDK dev dependency](https://github.com/openai/codex/blob/cca36c5681d16c7dac6e3f385589b8cd4d3e78cd/sdk/python/pyproject.toml#L32-L33)*
-- [browser-use/browser-use](https://github.com/browser-use/browser-use) - *[Eval dependency](https://github.com/browser-use/browser-use/blob/de14b9aa31d167696a7ea7185d71876dbd7e6c94/pyproject.toml#L74-L79)*
+### Code generation and runtime integration
+
+- [openai/codex](https://github.com/openai/codex) - *[Generate public Python SDK types from protocol schemas](https://github.com/openai/codex/blob/205d37a20f742b0bf8e191622bd07c43f567ea49/sdk/python/scripts/update_sdk_artifacts.py#L558-L590)*
 - [modelcontextprotocol/python-sdk](https://github.com/modelcontextprotocol/python-sdk) - *[Generate MCP protocol models from vendored JSON Schemas](https://github.com/modelcontextprotocol/python-sdk/blob/main/scripts/gen_surface_types.py)*
-- [vllm-project/vllm](https://github.com/vllm-project/vllm) - *[Test dependency for model tests](https://github.com/vllm-project/vllm/blob/main/requirements/test.in)*
 - [modular/modular](https://github.com/modular/modular) - *[Generate MAX Serve KServe schemas from OpenAPI with datamodel-codegen](https://github.com/modular/modular/blob/0735fa29762a5c53d65a0456d0b53eac1472180f/max/python/max/serve/schemas/README.md#L20-L33)*
 - [apache/airflow](https://github.com/apache/airflow) - *[Generate OpenAPI datamodels for airflow-ctl and task-sdk via pyproject codegen config](https://github.com/apache/airflow/blob/f1ac27af8b53e7d3ca7ff710c4f4413599bd1535/airflow-ctl/pyproject.toml#L148-L172)*
-- [stanfordnlp/dspy](https://github.com/stanfordnlp/dspy) - *[Generate Pydantic models from JSON Schema for reliability tests](https://github.com/stanfordnlp/dspy/blob/main/tests/reliability/generate/utils.py)*
-- [PostHog/posthog](https://github.com/PostHog/posthog) - *[Generate models via npm run](https://github.com/PostHog/posthog/blob/e1a55b9cb38d01225224bebf8f0c1e28faa22399/package.json#L41)*
+- [PostHog/posthog](https://github.com/PostHog/posthog) - *[Generate Pydantic models from JSON Schema](https://github.com/PostHog/posthog/blob/master/bin/build-schema-python.sh#L5-L14)*
 - [airbytehq/airbyte](https://github.com/airbytehq/airbyte) - *[Generate Python, Java/Kotlin, and Typescript protocol models](https://github.com/airbytehq/airbyte-protocol/tree/main/protocol-models/bin)*
-- [apache/iceberg](https://github.com/apache/iceberg) - *[Generate Python code](https://github.com/apache/iceberg/blob/d2e1094ee0cc6239d43f63ba5114272f59d605d2/open-api/README.md?plain=1#L39)*
 - [open-metadata/OpenMetadata](https://github.com/open-metadata/OpenMetadata) - *[datamodel_generation.py](https://github.com/open-metadata/OpenMetadata/blob/main/scripts/datamodel_generation.py)*
 - [topoteretes/cognee](https://github.com/topoteretes/cognee) - *[Runtime generation of graph data models from JSON Schema](https://github.com/topoteretes/cognee/blob/main/cognee/shared/graph_model_utils.py)*
 - [e2b-dev/E2B](https://github.com/e2b-dev/E2B) - *[Generate MCP server TypedDict models via Makefile](https://github.com/e2b-dev/E2B/blob/main/packages/python-sdk/Makefile)*
-- [firebase/genkit](https://github.com/firebase/genkit) - *[Generate core typing models from JSON Schema](https://github.com/firebase/genkit/blob/main/py/bin/generate_schema_typing)*
 - [DataDog/integrations-core](https://github.com/DataDog/integrations-core) - *[Config models](https://github.com/DataDog/integrations-core/blob/master/docs/developer/meta/config-models.md)*
 - [open-telemetry/opentelemetry-python](https://github.com/open-telemetry/opentelemetry-python) - *[Generate SDK configuration dataclasses from JSON Schema](https://github.com/open-telemetry/opentelemetry-python/blob/main/tox.ini)*
 
+### Development, testing, and evaluation
+
+- [browser-use/browser-use](https://github.com/browser-use/browser-use) - *[Evaluation dependency](https://github.com/browser-use/browser-use/blob/de14b9aa31d167696a7ea7185d71876dbd7e6c94/pyproject.toml#L74-L79)*
+- [vllm-project/vllm](https://github.com/vllm-project/vllm) - *[Test dependency for MiniCPM3 tests](https://github.com/vllm-project/vllm/blob/46f01a50acd6862806ed67b88176c96c2b161142/requirements/test/cuda.in#L40)*
+- [stanfordnlp/dspy](https://github.com/stanfordnlp/dspy) - *[Generate Pydantic models from JSON Schema for reliability tests](https://github.com/stanfordnlp/dspy/blob/main/tests/reliability/generate/utils.py)*
+
 [See all dependents →](https://github.com/koxudaxi/datamodel-code-generator/network/dependents)
+
+---
+
+## 👥 Maintainers
+
+- [Koudai Aono](https://koxudaxi.dev/?utm_source=dm_docs&utm_medium=maintainer_section&utm_campaign=open_to_work) ([@koxudaxi](https://github.com/koxudaxi)) - Lead maintainer
+- [Bernát Gábor](https://github.com/gaborbernat) ([@gaborbernat](https://github.com/gaborbernat)) - Maintainer
+- [Antonio Spadaro](https://github.com/ilovelinux) ([@ilovelinux](https://github.com/ilovelinux)) - Maintainer
 
 ---
 
@@ -245,10 +258,10 @@ Install `datamodel-code-generator` and generate your first Pydantic v2 model.
     uv tool install datamodel-code-generator
     ```
 
-=== "pip"
+=== "conda"
 
     ```bash
-    pip install datamodel-code-generator
+    conda install -c conda-forge datamodel-code-generator
     ```
 
 === "uv (project)"
@@ -257,10 +270,10 @@ Install `datamodel-code-generator` and generate your first Pydantic v2 model.
     uv add --dev datamodel-code-generator
     ```
 
-=== "conda"
+=== "pip"
 
     ```bash
-    conda install -c conda-forge datamodel-code-generator
+    pip install datamodel-code-generator
     ```
 
 === "pipx"
@@ -272,11 +285,19 @@ Install `datamodel-code-generator` and generate your first Pydantic v2 model.
 === "uvx (one-shot)"
 
     ```bash
-    uvx datamodel-codegen --help
+    uvx --from datamodel-code-generator datamodel-codegen --help
     ```
 
 Use `uv tool install` when you want `datamodel-codegen` available as a standalone CLI. Use `uv add --dev` when a project
 or CI workflow should pin the generator version in its lockfile.
+
+!!! info "Distribution packages"
+    Community-maintained distribution packages are also available from
+    [Debian](https://packages.debian.org/search?keywords=datamodel-codegen&searchon=names&suite=all&section=all),
+    [Ubuntu](https://packages.ubuntu.com/search?keywords=datamodel-codegen&searchon=names&suite=all&section=all),
+    [nixpkgs](https://search.nixos.org/packages?query=datamodel-code-generator), and
+    [openSUSE Tumbleweed](https://software.opensuse.org/package/python-datamodel-code-generator).
+    Availability and versions vary by distribution.
 
 !!! note "Default output model"
     When `--output-model-type` is omitted, datamodel-code-generator generates Pydantic v2 BaseModel output
@@ -5268,7 +5289,7 @@ This pattern is ideal when:
 
 Source: https://datamodel-code-generator.koxudaxi.dev/module-exports/
 
-<!-- related-cli-options: --all-exports-scope, --all-exports-collision-strategy, --treat-dot-as-module -->
+<!-- related-cli-options: --all-exports-scope, --all-exports-collision-strategy, --treat-dot-as-module, --strict-dotted-module-names -->
 
 # Module Structure and Exports
 
@@ -5281,6 +5302,7 @@ When generating models to a directory structure, datamodel-code-generator can au
 | `--all-exports-scope` | Control which modules get `__all__` exports |
 | `--all-exports-collision-strategy` | Handle name collisions in recursive exports |
 | `--treat-dot-as-module` | Convert dots in names to nested modules |
+| `--strict-dotted-module-names` | Restrict automatic dotted-name inference to canonical Python identifiers |
 
 ---
 
@@ -5429,9 +5451,43 @@ models/
 ```
 
 This is useful for:
+
 - Organizing large schemas by namespace
 - Mirroring API versioning structure
 - Keeping related models together
+
+When writing plain Python text to stdout with the standard renderer and without
+an explicit `--treat-dot-as-module` setting, historical automatic module
+inference is preserved whenever the final concatenated result remains usable. A
+retry coalesces the stdout models into one flat namespace only when a
+non-canonical inferred module boundary leaves conflicting generated
+definitions, repeats a future import after generated code, hides a generated
+model with a later import, or emits a relative import that cannot resolve in
+standalone stdout. Existing root and canonical model names are reserved first.
+Directory output, JSON output, schema runtime validator or generic-base
+generation, custom rendering, and the Python API retain their existing default
+inference. Use directory or JSON output when module paths must be preserved.
+
+## `--strict-dotted-module-names`
+
+By default, automatic inference retains the historical behavior of treating dots
+as module separators. Enable `--strict-dotted-module-names` to infer a module path
+only when every raw segment, including the model name, is a canonical Python
+identifier. Hard keywords, numeric or empty segments, punctuation, and names that
+change under NFKC normalization fall back to a flat model name.
+
+```bash
+datamodel-codegen \
+  --input schema.json \
+  --output models.py \
+  --strict-dotted-module-names
+```
+
+This option affects automatic inference only. Explicit
+`--treat-dot-as-module` or `--no-treat-dot-as-module` takes precedence. The
+negative form, `--no-strict-dotted-module-names`, can disable a value enabled in
+`pyproject.toml`; it does not disable the narrow unusable-stdout repair described
+above. Use explicit `--treat-dot-as-module` when module boundaries must be kept.
 
 ---
 
@@ -5501,6 +5557,7 @@ If you encounter circular import errors:
 - [CLI Reference: `--all-exports-scope`](cli-reference/general-options.md#all-exports-scope)
 - [CLI Reference: `--all-exports-collision-strategy`](cli-reference/general-options.md#all-exports-collision-strategy)
 - [CLI Reference: `--treat-dot-as-module`](cli-reference/template-customization.md#treat-dot-as-module)
+- [CLI Reference: `--strict-dotted-module-names`](cli-reference/template-customization.md#strict-dotted-module-names)
 - [Model Reuse and Deduplication](model-reuse.md)
 
 ---
@@ -7657,6 +7714,7 @@ This guide covers how to use datamodel-code-generator with pipes and clipboard t
 
 !!! note
     The package name is `datamodel-code-generator`, and the CLI command is `datamodel-codegen`.
+    Because the names differ, pass the package explicitly with `uvx --from` or `pipx run --spec`.
 
 ---
 
@@ -7670,7 +7728,7 @@ You don't need to install datamodel-code-generator permanently. Use `uvx` or `pi
 
 ```bash
 # Basic usage
-uvx datamodel-codegen --input schema.json --output model.py
+uvx --from datamodel-code-generator datamodel-codegen --input schema.json --output model.py
 
 # With extras (e.g., HTTP support)
 uvx --from 'datamodel-code-generator[http]' datamodel-codegen --url https://example.com/api.yaml --output model.py
@@ -7684,7 +7742,7 @@ uvx --from 'datamodel-code-generator[graphql]' datamodel-codegen --input schema.
 [pipx](https://pipx.pypa.io/) also supports one-shot execution:
 
 ```bash
-pipx run datamodel-code-generator --input schema.json --output model.py
+pipx run --spec datamodel-code-generator datamodel-codegen --input schema.json --output model.py
 ```
 
 ---
@@ -7696,11 +7754,11 @@ datamodel-code-generator can read schema input from stdin, enabling powerful pip
 ```bash
 # Pipe JSON directly
 echo '{"type": "object", "properties": {"name": {"type": "string"}}}' | \
-  uvx datamodel-codegen --input-file-type jsonschema
+  uvx --from datamodel-code-generator datamodel-codegen --input-file-type jsonschema
 
 # Pipe from another command
 curl -s https://example.com/schema.json | \
-  uvx datamodel-codegen --input-file-type jsonschema --output model.py
+  uvx --from datamodel-code-generator datamodel-codegen --input-file-type jsonschema --output model.py
 ```
 
 ---
@@ -7713,13 +7771,13 @@ Combine stdin support with clipboard tools to quickly generate models from copie
 
 ```bash
 # Generate from clipboard and print to stdout
-pbpaste | uvx datamodel-codegen --input-file-type jsonschema
+pbpaste | uvx --from datamodel-code-generator datamodel-codegen --input-file-type jsonschema
 
 # Generate from clipboard and save to file
-pbpaste | uvx datamodel-codegen --input-file-type jsonschema --output model.py
+pbpaste | uvx --from datamodel-code-generator datamodel-codegen --input-file-type jsonschema --output model.py
 
 # Generate from clipboard and copy result back to clipboard
-pbpaste | uvx datamodel-codegen --input-file-type jsonschema | pbcopy
+pbpaste | uvx --from datamodel-code-generator datamodel-codegen --input-file-type jsonschema | pbcopy
 ```
 
 ### Linux (xclip/xsel)
@@ -7728,20 +7786,20 @@ pbpaste | uvx datamodel-codegen --input-file-type jsonschema | pbcopy
 
     ```bash
     # Generate from clipboard and print to stdout
-    xclip -selection clipboard -o | uvx datamodel-codegen --input-file-type jsonschema
+    xclip -selection clipboard -o | uvx --from datamodel-code-generator datamodel-codegen --input-file-type jsonschema
 
     # Generate and copy result to clipboard
-    xclip -selection clipboard -o | uvx datamodel-codegen --input-file-type jsonschema | xclip -selection clipboard
+    xclip -selection clipboard -o | uvx --from datamodel-code-generator datamodel-codegen --input-file-type jsonschema | xclip -selection clipboard
     ```
 
 === "xsel"
 
     ```bash
     # Generate from clipboard and print to stdout
-    xsel --clipboard --output | uvx datamodel-codegen --input-file-type jsonschema
+    xsel --clipboard --output | uvx --from datamodel-code-generator datamodel-codegen --input-file-type jsonschema
 
     # Generate and copy result to clipboard
-    xsel --clipboard --output | uvx datamodel-codegen --input-file-type jsonschema | xsel --clipboard --input
+    xsel --clipboard --output | uvx --from datamodel-code-generator datamodel-codegen --input-file-type jsonschema | xsel --clipboard --input
     ```
 
 !!! tip "Installing clipboard tools on Linux"
@@ -7763,10 +7821,10 @@ pbpaste | uvx datamodel-codegen --input-file-type jsonschema | pbcopy
 
     ```powershell
     # Generate from clipboard and print to stdout
-    Get-Clipboard | uvx datamodel-codegen --input-file-type jsonschema
+    Get-Clipboard | uvx --from datamodel-code-generator datamodel-codegen --input-file-type jsonschema
 
     # Generate and copy result to clipboard
-    Get-Clipboard | uvx datamodel-codegen --input-file-type jsonschema | Set-Clipboard
+    Get-Clipboard | uvx --from datamodel-code-generator datamodel-codegen --input-file-type jsonschema | Set-Clipboard
     ```
 
 === "Command Prompt"
@@ -7774,7 +7832,7 @@ pbpaste | uvx datamodel-codegen --input-file-type jsonschema | pbcopy
     ```batch
     REM Windows Command Prompt doesn't have a built-in paste command
     REM Use PowerShell from cmd:
-    powershell -command "Get-Clipboard" | uvx datamodel-codegen --input-file-type jsonschema
+    powershell -command "Get-Clipboard" | uvx --from datamodel-code-generator datamodel-codegen --input-file-type jsonschema
     ```
 
 !!! note "Windows clip command"
@@ -7791,13 +7849,13 @@ pbpaste | uvx datamodel-codegen --input-file-type jsonschema | pbcopy
 
 ```bash
 # macOS
-pbpaste | uvx datamodel-codegen --input-file-type jsonschema --output-model-type pydantic_v2.BaseModel
+pbpaste | uvx --from datamodel-code-generator datamodel-codegen --input-file-type jsonschema --output-model-type pydantic_v2.BaseModel
 
 # Linux
-xclip -selection clipboard -o | uvx datamodel-codegen --input-file-type jsonschema --output-model-type pydantic_v2.BaseModel
+xclip -selection clipboard -o | uvx --from datamodel-code-generator datamodel-codegen --input-file-type jsonschema --output-model-type pydantic_v2.BaseModel
 
 # Windows PowerShell
-Get-Clipboard | uvx datamodel-codegen --input-file-type jsonschema --output-model-type pydantic_v2.BaseModel
+Get-Clipboard | uvx --from datamodel-code-generator datamodel-codegen --input-file-type jsonschema --output-model-type pydantic_v2.BaseModel
 ```
 
 ### Generating from API documentation
@@ -7805,7 +7863,7 @@ Get-Clipboard | uvx datamodel-codegen --input-file-type jsonschema --output-mode
 ```bash
 # Fetch OpenAPI spec and generate models
 curl -s https://petstore3.swagger.io/api/v3/openapi.json | \
-  uvx datamodel-codegen --input-file-type openapi --output-model-type pydantic_v2.BaseModel --output petstore.py
+  uvx --from datamodel-code-generator datamodel-codegen --input-file-type openapi --output-model-type pydantic_v2.BaseModel --output petstore.py
 ```
 
 ### Generating from GitHub raw URLs
@@ -7815,11 +7873,11 @@ You can directly fetch schemas from GitHub repositories using raw URLs:
 ```bash
 # Fetch JSON Schema from GitHub and generate models
 curl -s https://raw.githubusercontent.com/OAI/OpenAPI-Specification/main/schemas/v3.0/schema.json | \
-  uvx datamodel-codegen --input-file-type jsonschema --output-model-type pydantic_v2.BaseModel
+  uvx --from datamodel-code-generator datamodel-codegen --input-file-type jsonschema --output-model-type pydantic_v2.BaseModel
 
 # Fetch OpenAPI spec from a GitHub repository
 curl -s https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json | \
-  uvx datamodel-codegen --input-file-type openapi --output-model-type pydantic_v2.BaseModel --output github_api.py
+  uvx --from datamodel-code-generator datamodel-codegen --input-file-type openapi --output-model-type pydantic_v2.BaseModel --output github_api.py
 ```
 
 !!! tip "Using the --url option"
@@ -7837,7 +7895,7 @@ curl -s https://raw.githubusercontent.com/github/rest-api-description/main/descr
 ```bash
 # Extract a specific schema definition and generate a model
 cat openapi.yaml | yq '.components.schemas.User' | \
-  uvx datamodel-codegen --input-file-type jsonschema
+  uvx --from datamodel-code-generator datamodel-codegen --input-file-type jsonschema
 ```
 
 ---
@@ -7846,8 +7904,8 @@ cat openapi.yaml | yq '.components.schemas.User' | \
 
 | Method | Command | Use Case |
 |--------|---------|----------|
-| **uvx** | `uvx datamodel-codegen` | One-liner usage, no installation |
-| **pipx run** | `pipx run datamodel-code-generator` | One-liner usage, alternative to uvx |
+| **uvx** | `uvx --from datamodel-code-generator datamodel-codegen` | One-liner usage, no installation |
+| **pipx run** | `pipx run --spec datamodel-code-generator datamodel-codegen` | One-liner usage, alternative to uvx |
 | **uv tool install** | `uv tool install datamodel-code-generator` | Standalone CLI installation |
 | **pipx install** | `pipx install datamodel-code-generator` | Global installation, frequent usage |
 | **uv add --dev** | `uv add --dev datamodel-code-generator` | Pinned project/CI dependency |
@@ -9487,10 +9545,10 @@ This documentation is auto-generated from test cases.
 | 🔧 [Typing Customization](typing-customization.md) | 30 | Type annotation and import behavior |
 | 🏷️ [Field Customization](field-customization.md) | 27 | Field naming and docstring behavior |
 | 🏗️ [Model Customization](model-customization.md) | 44 | Model generation behavior |
-| 🎨 [Template Customization](template-customization.md) | 25 | Output formatting and custom rendering |
+| 🎨 [Template Customization](template-customization.md) | 27 | Output formatting and custom rendering |
 | 📘 [OpenAPI-only Options](openapi-only-options.md) | 8 | OpenAPI-specific features |
 | 📋 [GraphQL-only Options](graphql-only-options.md) | 1 |  |
-| ⚙️ [General Options](general-options.md) | 18 | Utilities and meta options |
+| ⚙️ [General Options](general-options.md) | 20 | Utilities and meta options |
 | 📝 [Utility Options](utility-options.md) | 10 | Help, version, debug options |
 
 ## 🎯 Focused Topics
@@ -9500,7 +9558,7 @@ Use these pages when you know the workflow area but not the exact option name.
 | Topic | Options | Groups |
 |-------|---------|--------|
 | [Model Customization](topics/model-customization.md) | 23 | Model Naming, Model Reuse, Model Shape, Root Model |
-| [Template Customization](topics/template-customization.md) | 19 | Custom Templates, Generated Output, Imports, Output Formatting |
+| [Template Customization](topics/template-customization.md) | 21 | Custom Templates, Generated Output, Imports, Output Formatting |
 | [Typing Customization](topics/typing-customization.md) | 20 | Imports, Collection Types, Type Alias, Type Mapping, Type Syntax |
 | [OpenAPI](topics/openapi.md) | 7 | OpenAPI Naming, OpenAPI Paths, OpenAPI Scopes, Read Only Write Only |
 
@@ -9564,6 +9622,7 @@ These links are generated from CLI option metadata and summarize options that im
 - [`--collapse-root-models`](model-customization.md#collapse-root-models)
 - [`--collapse-root-models-name-strategy`](model-customization.md#collapse-root-models-name-strategy)
 - [`--custom-file-header`](template-customization.md#custom-file-header)
+- [`--custom-file-header-mode`](template-customization.md#custom-file-header-mode)
 - [`--custom-file-header-path`](template-customization.md#custom-file-header-path)
 - [`--custom-formatters`](template-customization.md#custom-formatters)
 - [`--custom-formatters-kwargs`](template-customization.md#custom-formatters-kwargs)
@@ -9597,6 +9656,7 @@ These links are generated from CLI option metadata and summarize options that im
 
 ### F {#f}
 
+- [`--fail-on-multi-module-stdout`](general-options.md#fail-on-multi-module-stdout)
 - [`--field-constraints`](field-customization.md#field-constraints)
 - [`--field-extra-keys`](field-customization.md#field-extra-keys)
 - [`--field-extra-keys-without-x-prefix`](field-customization.md#field-extra-keys-without-x-prefix)
@@ -9701,7 +9761,9 @@ These links are generated from CLI option metadata and summarize options that im
 - [`--skip-root-model`](model-customization.md#skip-root-model)
 - [`--snake-case-field`](field-customization.md#snake-case-field)
 - [`--special-field-name-prefix`](field-customization.md#special-field-name-prefix)
+- [`--strict-dotted-module-names`](template-customization.md#strict-dotted-module-names)
 - [`--strict-nullable`](model-customization.md#strict-nullable)
+- [`--strict-refs`](general-options.md#strict-refs)
 - [`--strict-types`](typing-customization.md#strict-types)
 - [`--strip-default-none`](model-customization.md#strip-default-none)
 
@@ -26905,6 +26967,7 @@ Source: https://datamodel-code-generator.koxudaxi.dev/cli-reference/template-cus
 | [`--additional-imports`](#additional-imports) | Add custom imports to generated output files. |
 | [`--class-decorators`](#class-decorators) | Add custom decorators to generated model classes. |
 | [`--custom-file-header`](#custom-file-header) | Add custom header text to the generated file. |
+| [`--custom-file-header-mode`](#custom-file-header-mode) | Choose how a custom file header combines with generated prov... |
 | [`--custom-file-header-path`](#custom-file-header-path) | Add custom header content from file to generated code. |
 | [`--custom-formatters`](#custom-formatters) | Apply custom Python code formatters to generated output. |
 | [`--custom-formatters-kwargs`](#custom-formatters-kwargs) | Pass custom arguments to custom formatters via inline JSON o... |
@@ -26921,6 +26984,7 @@ Source: https://datamodel-code-generator.koxudaxi.dev/cli-reference/template-cus
 | [`--no-use-type-checking-imports`](#no-use-type-checking-imports) | Keep generated model imports available at runtime when using... |
 | [`--schema-validator-base-class-name`](#schema-validator-base-class-name) | Set the generated shared Pydantic v2 schema runtime validato... |
 | [`--schema-validator-type`](#schema-validator-type) | Select the schema-derived runtime validator backend. |
+| [`--strict-dotted-module-names`](#strict-dotted-module-names) | Require canonical Python identifiers when inferring dotted m... |
 | [`--treat-dot-as-module`](#treat-dot-as-module) | Treat dots in schema names as module separators. |
 | [`--use-double-quotes`](#use-double-quotes) | Use double quotes for string literals in generated code. |
 | [`--use-exact-imports`](#use-exact-imports) | Import exact types instead of modules. |
@@ -27183,6 +27247,56 @@ headers, or other metadata to generated files.
             last_name: str = Field(..., alias='last-name')
             email_address: str | None = None
         ```
+
+---
+
+## `--custom-file-header-mode` {#custom-file-header-mode}
+
+Choose how a custom file header combines with generated provenance.
+
+The `prepend` mode places a license or copyright header before the generated filename,
+timestamp, version, and command metadata. The default `replace` mode preserves existing behavior.
+
+**Related:** [`--custom-file-header`](#custom-file-header), [`--custom-file-header-path`](#custom-file-header-path), [`--enable-version-header`](#enable-version-header)
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --custom-file-header "# Copyright {year}" --custom-file-header-mode prepend --disable-timestamp --enable-version-header # (1)!
+    ```
+
+    1. :material-arrow-left: `--custom-file-header-mode` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```json
+    {
+      "$schema": "http://json-schema.org/draft-07/schema",
+      "type": "object",
+      "properties": {"s": {"type": ["string"]}},
+      "required": ["s"]
+    }
+    ```
+
+    **Output:**
+
+    ```python
+    # Copyright {year}
+    #
+    # generated by datamodel-codegen:
+    #   filename:  simple_string.json
+    #   version:   0.0.0
+
+    from __future__ import annotations
+
+    from pydantic import BaseModel
+
+
+    class Model(BaseModel):
+        s: str
+    ```
 
 ---
 
@@ -30948,6 +31062,83 @@ additional validator backends without adding them in this release.
 
 ---
 
+## `--strict-dotted-module-names` {#strict-dotted-module-names}
+
+Require canonical Python identifiers when inferring dotted module paths.
+
+The `--strict-dotted-module-names` flag applies only to automatic module inference.
+
+**See also:** [Module Structure and Exports](../module-exports.md)
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --strict-dotted-module-names # (1)!
+    ```
+
+    1. :material-arrow-left: `--strict-dotted-module-names` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```yaml
+    openapi: 3.0.0
+    info:
+      title: Invalid dotted schema name
+      version: 1.0.0
+    paths: {}
+    components:
+      schemas:
+        Shipment:
+          type: object
+          properties:
+            trackingNumber:
+              type: string
+        SaveTrifectaV2.1:
+          type: object
+          properties:
+            shipment:
+              type: object
+              properties:
+                trackingNumber:
+                  type: string
+        SaveRequest:
+          type: object
+          properties:
+            shipment:
+              $ref: '#/components/schemas/Shipment'
+            trifecta:
+              $ref: '#/components/schemas/SaveTrifectaV2.1'
+    ```
+
+    **Output:**
+
+    ```python
+    # generated by datamodel-codegen:
+    #   filename:  invalid_dotted_schema_name.yaml
+    #   timestamp: 1985-10-26T08:21:00+00:00
+
+    from __future__ import annotations
+
+    from pydantic import BaseModel
+
+
+    class Shipment(BaseModel):
+        trackingNumber: str | None = None
+
+
+    class SaveTrifectaV21(BaseModel):
+        shipment: Shipment | None = None
+
+
+    class SaveRequest(BaseModel):
+        shipment: Shipment | None = None
+        trifecta: SaveTrifectaV21 | None = None
+    ```
+
+---
+
 ## `--treat-dot-as-module` {#treat-dot-as-module}
 
 Treat dots in schema names as module separators.
@@ -33917,6 +34108,7 @@ Source: https://datamodel-code-generator.koxudaxi.dev/cli-reference/general-opti
 | [`--allow-remote-refs`](#allow-remote-refs) | Enable fetching of `$ref` targets over HTTP/HTTPS. |
 | [`--check`](#check) | Verify generated code matches existing output without modify... |
 | [`--disable-warnings`](#disable-warnings) | Suppress warning messages during code generation. |
+| [`--fail-on-multi-module-stdout`](#fail-on-multi-module-stdout) | Fail instead of concatenating multiple modules in text stdou... |
 | [`--generate-cli-command`](#generate-cli-command) | Generate CLI command from pyproject.toml configuration. |
 | [`--generate-pyproject-config`](#generate-pyproject-config) | Generate pyproject.toml configuration from CLI arguments. |
 | [`--http-headers`](#http-headers) | Fetch schema from URL with custom HTTP headers. |
@@ -33927,6 +34119,7 @@ Source: https://datamodel-code-generator.koxudaxi.dev/cli-reference/general-opti
 | [`--ignore-pyproject`](#ignore-pyproject) | Ignore pyproject.toml configuration file. |
 | [`--module-split-mode`](#module-split-mode) | Split generated models into separate files, one per model cl... |
 | [`--shared-module-name`](#shared-module-name) | Customize the name of the shared module for deduplicated mod... |
+| [`--strict-refs`](#strict-refs) | Treat unresolved local `$ref` JSON pointers as errors. |
 | [`--watch`](#watch) | Watch input file(s) for changes and regenerate output automa... |
 | [`--watch-delay`](#watch-delay) | Set debounce delay in seconds for watch mode. |
 
@@ -35437,6 +35630,81 @@ or potential issues). Useful for clean output in CI/CD pipelines.
 
 ---
 
+## `--fail-on-multi-module-stdout` {#fail-on-multi-module-stdout}
+
+Fail instead of concatenating multiple modules in text stdout.
+
+The `--fail-on-multi-module-stdout` flag detects modular results while preserving
+the legacy default, single-module output, JSON output, and file output. It takes
+precedence over automatic unusable-stdout repair, rejecting the modular result
+instead of coalescing it.
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --fail-on-multi-module-stdout --disable-timestamp # (1)!
+    ```
+
+    1. :material-arrow-left: `--fail-on-multi-module-stdout` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```json
+    {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Person",
+      "type": "object",
+      "properties": {
+        "firstName": {
+          "type": "string",
+          "description": "The person's first name."
+        },
+        "lastName": {
+          "type": ["string", "null"],
+          "description": "The person's last name."
+        },
+        "age": {
+          "description": "Age in years which must be equal to or greater than zero.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "friends": {
+          "type": "array"
+        },
+        "comment": {
+          "type": "null"
+        }
+      }
+    }
+    ```
+
+    **Output:**
+
+    ```python
+    # generated by datamodel-codegen:
+    #   filename:  person.json
+
+    from __future__ import annotations
+
+    from typing import Any
+
+    from pydantic import BaseModel, Field, conint
+
+
+    class Person(BaseModel):
+        firstName: str | None = Field(None, description="The person's first name.")
+        lastName: str | None = Field(None, description="The person's last name.")
+        age: conint(ge=0) | None = Field(
+            None, description='Age in years which must be equal to or greater than zero.'
+        )
+        friends: list[Any] | None = None
+        comment: None = Field(None)
+    ```
+
+---
+
 ## `--generate-cli-command` {#generate-cli-command}
 
 Generate CLI command from pyproject.toml configuration.
@@ -36036,6 +36304,58 @@ Note: This option only affects modular output with tree-level model reuse.
 
 ---
 
+## `--strict-refs` {#strict-refs}
+
+Treat unresolved local `$ref` JSON pointers as errors.
+
+By default, an unresolved local pointer emits a warning and retains the generated
+fallback `Any` model. Enable this option in validation-sensitive workflows to stop
+generation instead. Existing empty schemas remain valid references.
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --strict-refs # (1)!
+    ```
+
+    1. :material-arrow-left: `--strict-refs` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```json
+    {
+      "$defs": {
+        "Empty": {}
+      },
+      "$ref": "#/$defs/Empty"
+    }
+    ```
+
+    **Output:**
+
+    ```python
+    # generated by datamodel-codegen:
+    #   filename:  empty_local_ref.json
+
+    from __future__ import annotations
+
+    from typing import Any
+
+    from pydantic import RootModel
+
+
+    class Empty(RootModel[Any]):
+        root: Any
+
+
+    class Model(RootModel[Empty]):
+        root: Empty
+    ```
+
+---
+
 ## `--watch` {#watch}
 
 Watch input file(s) for changes and regenerate output automatically.
@@ -36386,6 +36706,13 @@ Choose the command output format.
 The default output format is `text`. Use `json` when another program or LLM
 agent should inspect structured output.
 
+For backward compatibility, text stdout concatenates generated modules and does
+not preserve their paths. Use `--fail-on-multi-module-stdout` to reject that
+case, `--output <directory>` to preserve files, or `--output-format json` for
+structured stdout. The fail option takes precedence over automatic repair of an
+unusable modular stdout result, so an explicitly requested guard always rejects
+the modular result instead of coalescing it.
+
 In normal generation mode, `--output-format json` wraps generated modules in a
 structured payload on stdout. If `--output` is also supplied, files are still
 written to disk and the JSON payload mirrors the generated files. `--check`
@@ -36657,7 +36984,7 @@ Options are grouped from shared CLI metadata and link back to their generated re
 | Group | Options | Description |
 |-------|---------|-------------|
 | [Custom Templates](#custom-templates) | 3 | Custom templates and extra template data. |
-| [Generated Output](#generated-output) | 7 | Generated file headers and reproducible output. |
+| [Generated Output](#generated-output) | 9 | Generated file headers and reproducible output. |
 | [Imports](#imports) | 4 | Generated imports and type-checking import behavior. |
 | [Output Formatting](#output-formatting) | 5 | Formatter selection, quote style, and string wrapping. |
 
@@ -36679,11 +37006,13 @@ Generated file headers and reproducible output.
 |--------|-------------|
 | [`--class-decorators`](../template-customization.md#class-decorators) | Add custom decorators to generated model classes. |
 | [`--custom-file-header`](../template-customization.md#custom-file-header) | Add custom header text to the generated file. |
+| [`--custom-file-header-mode`](../template-customization.md#custom-file-header-mode) | Choose how a custom file header combines with generated provenance. |
 | [`--custom-file-header-path`](../template-customization.md#custom-file-header-path) | Add custom header content from file to generated code. |
 | [`--disable-timestamp`](../template-customization.md#disable-timestamp) | Disable timestamp in generated file header for reproducible output. |
 | [`--enable-command-header`](../template-customization.md#enable-command-header) | Include command-line options in file header for reproducibility. |
 | [`--enable-generated-header-marker`](../template-customization.md#enable-generated-header-marker) | Include the @generated marker in file header for generated-code tooling. |
 | [`--enable-version-header`](../template-customization.md#enable-version-header) | Include tool version information in file header. |
+| [`--strict-dotted-module-names`](../template-customization.md#strict-dotted-module-names) | Require canonical Python identifiers when inferring dotted module paths. |
 
 ## Imports {#imports}
 
@@ -36995,6 +37324,7 @@ datamodel-codegen [OPTIONS]
 | [`--additional-imports`](template-customization.md#additional-imports) | Add custom imports to generated output files. |
 | [`--class-decorators`](template-customization.md#class-decorators) | Add custom decorators to generated model classes. |
 | [`--custom-file-header`](template-customization.md#custom-file-header) | Add custom header text to the generated file. |
+| [`--custom-file-header-mode`](template-customization.md#custom-file-header-mode) | Choose how a custom file header combines with generated provenance. |
 | [`--custom-file-header-path`](template-customization.md#custom-file-header-path) | Add custom header content from file to generated code. |
 | [`--custom-formatters`](template-customization.md#custom-formatters) | Apply custom Python code formatters to generated output. |
 | [`--custom-formatters-kwargs`](template-customization.md#custom-formatters-kwargs) | Pass custom arguments to custom formatters via inline JSON or a JSON file path. |
@@ -37011,6 +37341,7 @@ datamodel-codegen [OPTIONS]
 | [`--no-use-type-checking-imports`](template-customization.md#no-use-type-checking-imports) | Keep generated model imports available at runtime when using Ruff fixes. |
 | [`--schema-validator-base-class-name`](template-customization.md#schema-validator-base-class-name) | Set the generated shared Pydantic v2 schema runtime validator base class name. |
 | [`--schema-validator-type`](template-customization.md#schema-validator-type) | Select the schema-derived runtime validator backend. |
+| [`--strict-dotted-module-names`](template-customization.md#strict-dotted-module-names) | Require canonical Python identifiers when inferring dotted module paths. |
 | [`--treat-dot-as-module`](template-customization.md#treat-dot-as-module) | Treat dots in schema names as module separators. |
 | [`--use-double-quotes`](template-customization.md#use-double-quotes) | Use double quotes for string literals in generated code. |
 | [`--use-exact-imports`](template-customization.md#use-exact-imports) | Import exact types instead of modules. |
@@ -37047,6 +37378,7 @@ datamodel-codegen [OPTIONS]
 | [`--allow-remote-refs`](general-options.md#allow-remote-refs) | Enable fetching of `$ref` targets over HTTP/HTTPS. |
 | [`--check`](general-options.md#check) | Verify generated code matches existing output without modifying files. |
 | [`--disable-warnings`](general-options.md#disable-warnings) | Suppress warning messages during code generation. |
+| [`--fail-on-multi-module-stdout`](general-options.md#fail-on-multi-module-stdout) | Fail instead of concatenating multiple modules in text stdout. |
 | [`--generate-cli-command`](general-options.md#generate-cli-command) | Generate CLI command from pyproject.toml configuration. |
 | [`--generate-pyproject-config`](general-options.md#generate-pyproject-config) | Generate pyproject.toml configuration from CLI arguments. |
 | [`--http-headers`](general-options.md#http-headers) | Fetch schema from URL with custom HTTP headers. |
@@ -37057,6 +37389,7 @@ datamodel-codegen [OPTIONS]
 | [`--ignore-pyproject`](general-options.md#ignore-pyproject) | Ignore pyproject.toml configuration file. |
 | [`--module-split-mode`](general-options.md#module-split-mode) | Split generated models into separate files, one per model class. |
 | [`--shared-module-name`](general-options.md#shared-module-name) | Customize the name of the shared module for deduplicated models. |
+| [`--strict-refs`](general-options.md#strict-refs) | Treat unresolved local `$ref` JSON pointers as errors. |
 | [`--watch`](general-options.md#watch) | Watch input file(s) for changes and regenerate output automatically. |
 | [`--watch-delay`](general-options.md#watch-delay) | Set debounce delay in seconds for watch mode. |
 
@@ -37106,6 +37439,7 @@ All options sorted alphabetically:
 - [`--collapse-root-models`](model-customization.md#collapse-root-models) - Inline root model definitions instead of creating separate w...
 - [`--collapse-root-models-name-strategy`](model-customization.md#collapse-root-models-name-strategy) - Select which name to keep when collapsing root models with o...
 - [`--custom-file-header`](template-customization.md#custom-file-header) - Add custom header text to the generated file.
+- [`--custom-file-header-mode`](template-customization.md#custom-file-header-mode) - Choose how a custom file header combines with generated prov...
 - [`--custom-file-header-path`](template-customization.md#custom-file-header-path) - Add custom header content from file to generated code.
 - [`--custom-formatters`](template-customization.md#custom-formatters) - Apply custom Python code formatters to generated output.
 - [`--custom-formatters-kwargs`](template-customization.md#custom-formatters-kwargs) - Pass custom arguments to custom formatters via inline JSON o...
@@ -37130,6 +37464,7 @@ All options sorted alphabetically:
 - [`--external-ref-mapping`](base-options.md#external-ref-mapping) - Map external `$ref` files to Python packages.
 - [`--extra-fields`](field-customization.md#extra-fields) - Configure how generated models handle extra fields not defin...
 - [`--extra-template-data`](template-customization.md#extra-template-data) - Pass custom template variables via inline JSON or a JSON fil...
+- [`--fail-on-multi-module-stdout`](general-options.md#fail-on-multi-module-stdout) - Fail instead of concatenating multiple modules in text stdou...
 - [`--field-constraints`](field-customization.md#field-constraints) - Generate Field() with validation constraints from schema.
 - [`--field-extra-keys`](field-customization.md#field-extra-keys) - Include specific extra keys in Field() definitions.
 - [`--field-extra-keys-without-x-prefix`](field-customization.md#field-extra-keys-without-x-prefix) - Include schema extension keys in Field() without requiring '...
@@ -37201,7 +37536,9 @@ All options sorted alphabetically:
 - [`--skip-root-model`](model-customization.md#skip-root-model) - Skip generation of root model when schema contains nested de...
 - [`--snake-case-field`](field-customization.md#snake-case-field) - Convert field names to snake_case format.
 - [`--special-field-name-prefix`](field-customization.md#special-field-name-prefix) - Prefix to add to special field names (like reserved keywords...
+- [`--strict-dotted-module-names`](template-customization.md#strict-dotted-module-names) - Require canonical Python identifiers when inferring dotted m...
 - [`--strict-nullable`](model-customization.md#strict-nullable) - Treat default field as a non-nullable field.
+- [`--strict-refs`](general-options.md#strict-refs) - Treat unresolved local `$ref` JSON pointers as errors.
 - [`--strict-types`](typing-customization.md#strict-types) - Enable strict type validation for specified Python types.
 - [`--strip-default-none`](model-customization.md#strip-default-none) - Remove fields with None as default value from generated mode...
 - [`--target-pydantic-version`](model-customization.md#target-pydantic-version) - Target Pydantic version for generated code compatibility.
@@ -37553,6 +37890,13 @@ Choose the command output format.
 
 The default output format is `text`. Use `json` when another program or LLM
 agent should inspect structured output.
+
+For backward compatibility, text stdout concatenates generated modules and does
+not preserve their paths. Use `--fail-on-multi-module-stdout` to reject that
+case, `--output <directory>` to preserve files, or `--output-format json` for
+structured stdout. The fail option takes precedence over automatic repair of an
+unusable modular stdout result, so an explicitly requested guard always rejects
+the modular result instead of coalescing it.
 
 In normal generation mode, `--output-format json` wraps generated modules in a
 structured payload on stdout. If `--output` is also supplied, files are still
@@ -38514,16 +38858,16 @@ classDiagram
 
 | Config model | Field count | Purpose |
 | --- | ---: | --- |
-| `BaseGenerateConfig` | 139 | Shared generation options. |
-| `GenerateConfig` | 154 | Public `generate()` configuration. |
-| `ParserConfig` | 135 | Base parser dependency injection and parser options. |
-| `JSONSchemaParserConfig` | 137 | JSON Schema parser options. |
-| `OpenAPIParserConfig` | 143 | OpenAPI-specific parser options. |
-| `AsyncAPIParserConfig` | 144 | AsyncAPI-specific parser options. |
-| `XMLSchemaParserConfig` | 138 | XML Schema-specific parser options. |
-| `ProtobufParserConfig` | 138 | Protocol Buffers-specific parser options. |
-| `AvroParserConfig` | 137 | Avro-specific parser options. |
-| `GraphQLParserConfig` | 138 | GraphQL-specific parser options. |
+| `BaseGenerateConfig` | 142 | Shared generation options. |
+| `GenerateConfig` | 157 | Public `generate()` configuration. |
+| `ParserConfig` | 137 | Base parser dependency injection and parser options. |
+| `JSONSchemaParserConfig` | 139 | JSON Schema parser options. |
+| `OpenAPIParserConfig` | 145 | OpenAPI-specific parser options. |
+| `AsyncAPIParserConfig` | 146 | AsyncAPI-specific parser options. |
+| `XMLSchemaParserConfig` | 140 | XML Schema-specific parser options. |
+| `ProtobufParserConfig` | 140 | Protocol Buffers-specific parser options. |
+| `AvroParserConfig` | 139 | Avro-specific parser options. |
+| `GraphQLParserConfig` | 140 | GraphQL-specific parser options. |
 
 ### Formatter Names
 

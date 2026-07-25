@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import ast
+import inspect
 import os
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -49,6 +52,46 @@ def test_jsonschema_parser_import_does_not_load_inactive_model_generators() -> N
 
 
 @pytest.mark.allow_direct_assert
+def test_generation_import_does_not_load_pydantic_v2_dependency_policy() -> None:
+    """Keep the generic generation index independent from the Pydantic v2 backend and version gate."""
+    module_names = (
+        "datamodel_code_generator.model.pydantic_v2",
+        "datamodel_code_generator.model.pydantic_v2.version",
+    )
+    code = (
+        "import sys\n"
+        "import datamodel_code_generator.parser.generation\n"
+        f"module_names = {module_names!r}\n"
+        "print('\\n'.join(name for name in module_names if name in sys.modules))\n"
+    )
+
+    assert _run_import_probe(code) == "\n"
+
+
+@pytest.mark.allow_direct_assert
+def test_field_assignment_checker_does_not_load_output_model_generators() -> None:
+    """Resolving an output-owned ordering hook should not import concrete backends."""
+    module_names = (
+        "datamodel_code_generator.model.dataclass",
+        "datamodel_code_generator.model.msgspec",
+    )
+    code = (
+        "import sys\n"
+        "from datamodel_code_generator.parser.base import Parser\n"
+        "class ExternalModel:\n"
+        "    @staticmethod\n"
+        "    def FIELD_ASSIGNMENT_CHECKER(field):\n"
+        "        return field == 'assigned'\n"
+        "checker = Parser._get_field_assignment_checker(ExternalModel())\n"
+        "assert checker('assigned') is True\n"
+        f"module_names = {module_names!r}\n"
+        "print('\\n'.join(name for name in module_names if name in sys.modules))\n"
+    )
+
+    assert _run_import_probe(code) == "\n"
+
+
+@pytest.mark.allow_direct_assert
 def test_parser_model_compatibility_attributes_remain_available() -> None:
     """Parser modules should keep moved compatibility attributes available."""
     code = (
@@ -85,3 +128,19 @@ def test_parser_model_compatibility_attributes_reject_unknown_names() -> None:
         _ = base.missing_model
     with pytest.raises(AttributeError, match="MissingTypedDictModel"):
         _ = jsonschema.MissingTypedDictModel
+
+
+@pytest.mark.allow_direct_assert
+def test_parser_behavior_capabilities_have_no_concrete_helper_dependencies() -> None:
+    """Keep output-specific field and reuse behavior behind DataModel capabilities."""
+    from datamodel_code_generator.parser import base
+
+    checker_tree = ast.parse(textwrap.dedent(inspect.getsource(base.Parser._get_field_assignment_checker)))
+    tree_reuse_source = inspect.getsource(vars(base.Parser)["_Parser__create_shared_module_from_duplicates"])
+
+    assert not any(isinstance(node, (ast.Import, ast.ImportFrom)) for node in ast.walk(checker_tree))
+    assert not any(
+        isinstance(node, ast.Attribute) and node.attr == "has_field_assignment" for node in ast.walk(checker_tree)
+    )
+    assert "_is_pydantic_v2_base_model" not in tree_reuse_source
+    assert "_is_dataclass_data_model" not in tree_reuse_source

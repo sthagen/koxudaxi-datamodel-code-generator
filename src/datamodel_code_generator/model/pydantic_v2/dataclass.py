@@ -8,11 +8,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from datamodel_code_generator.model import DataModel, DataModelFieldBase, _rebuild_model_with_datamodel_namespace
-from datamodel_code_generator.model.base import UNDEFINED
-from datamodel_code_generator.model.dataclass import _DataclassReuseMixin, has_field_assignment
+from datamodel_code_generator.model import dataclass as _dataclass_module
+from datamodel_code_generator.model.base import UNDEFINED, _has_field_assignment
+from datamodel_code_generator.model.dataclass import _DataclassReuseMixin
 from datamodel_code_generator.model.pydantic_v2._config import (
     ConfigAttribute,
     build_base_config_parameters,
+)
+from datamodel_code_generator.model.pydantic_v2._output_context import (
+    ANNOTATED_CONSTRAINTS_CONTEXT as _ANNOTATED_CONSTRAINTS_CONTEXT,
 )
 from datamodel_code_generator.model.pydantic_v2.base_model import (
     Constraints as _Constraints,
@@ -27,7 +31,12 @@ from datamodel_code_generator.model.pydantic_v2.imports import (
     IMPORT_CONFIG_DICT,
     IMPORT_PYDANTIC_DATACLASS,
 )
-from datamodel_code_generator.model.pydantic_v2.version import PYDANTIC_V2_DATACLASS_ALIAS_NEEDS_FALLBACK
+from datamodel_code_generator.model.pydantic_v2.version import (
+    PYDANTIC_V2_DATACLASS_ALIAS_NEEDS_FALLBACK,
+    _get_dict_key_reference_classes_capability,
+)
+
+has_field_assignment = _dataclass_module.has_field_assignment
 
 if TYPE_CHECKING:
     from collections import defaultdict
@@ -45,9 +54,13 @@ class DataClass(_DataclassReuseMixin, DataModel):
 
     TEMPLATE_FILE_PATH: ClassVar[str] = "pydantic_v2/dataclass.jinja2"
     DEFAULT_IMPORTS: ClassVar[tuple[Import, ...]] = (IMPORT_PYDANTIC_DATACLASS,)
+    USES_DATACLASS_ARGUMENTS: ClassVar[bool] = True
     REQUIRES_RUNTIME_IMPORTS_WITH_RUFF_CHECK: ClassVar[bool] = True
     SUPPORTS_DISCRIMINATOR: ClassVar[bool] = True
     SUPPORTS_KW_ONLY: ClassVar[bool] = True
+    SUPPORTS_ANNOTATED_CONSTRAINTS: ClassVar[bool] = True
+    ANNOTATED_CONSTRAINTS_CONTEXT: ClassVar[object | None] = _ANNOTATED_CONSTRAINTS_CONTEXT
+    _INCLUDE_DICT_KEY_REFERENCE_CLASSES = _get_dict_key_reference_classes_capability()
     # frozen/allow_mutation are handled as dataclass decorator arguments, not ConfigDict
     _CONFIG_ATTRIBUTES_V2: ClassVar[list[ConfigAttribute]] = [
         ConfigAttribute("allow_population_by_field_name", "populate_by_name", False),  # noqa: FBT003
@@ -83,7 +96,7 @@ class DataClass(_DataclassReuseMixin, DataModel):
         """Initialize pydantic v2 dataclass with sorted fields and ConfigDict support."""
         super().__init__(
             reference=reference,
-            fields=sorted(fields, key=has_field_assignment),
+            fields=sorted(fields, key=_has_field_assignment),
             decorators=decorators,
             base_classes=base_classes,
             custom_base_class=custom_base_class,

@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import os
 import sys
+import warnings
 from collections import OrderedDict, defaultdict
 from collections.abc import Callable, Iterator, Mapping
 from datetime import datetime, timezone
@@ -26,6 +27,7 @@ from typing import (
 )
 from urllib.parse import ParseResult
 
+from datamodel_code_generator._process_state import PROCESS_STATE_LOCK
 from datamodel_code_generator.enums import (
     DEFAULT_SHARED_MODULE_NAME,
     MAX_VERSION,
@@ -38,6 +40,7 @@ from datamodel_code_generator.enums import (
     AsyncAPIVersion,
     ClassNameAffixScope,
     CollapseRootModelsNameStrategy,
+    CustomFileHeaderMode,
     DataclassArguments,
     DataModelType,
     FieldTypeCollisionStrategy,
@@ -153,23 +156,33 @@ _IGNORED_TEXT_PREFIX_CHARS: frozenset[str] = frozenset({"\ufeff", " ", "\t", "\r
 _PARSER_SOURCE_DATA_CACHE_MAX_SIZE = 128
 _ParserSourceDataCacheKey: TypeAlias = tuple[Path, str, str, str]
 _ParserSourceDataSeenKey: TypeAlias = tuple[Path, str]
-_parser_source_data_cache: OrderedDict[_ParserSourceDataCacheKey, YamlValue] = OrderedDict()
+# Serialized snapshots isolate mutable callers and are faster to restore than reparsing source text.
+_parser_source_data_cache: OrderedDict[_ParserSourceDataCacheKey, bytes] = OrderedDict()
 _parser_source_data_seen_keys: OrderedDict[_ParserSourceDataSeenKey, None] = OrderedDict()
 _parser_source_data_cache_lock = RLock()
+_parsed_source_cache_enable_count = 0
 _enable_parsed_source_cache = False
 
 
 def enable_parsed_source_cache() -> Callable[[], None]:
     """Enable the process-local parsed source cache and return a restore callback."""
-    global _enable_parsed_source_cache  # noqa: PLW0603
+    global _enable_parsed_source_cache, _parsed_source_cache_enable_count  # noqa: PLW0603
 
-    previous = _enable_parsed_source_cache
-    _enable_parsed_source_cache = True
+    with _parser_source_data_cache_lock:
+        _parsed_source_cache_enable_count += 1
+        _enable_parsed_source_cache = True
+    restored = False
 
     def restore() -> None:
-        global _enable_parsed_source_cache  # noqa: PLW0603
+        nonlocal restored
+        global _enable_parsed_source_cache, _parsed_source_cache_enable_count  # noqa: PLW0603
 
-        _enable_parsed_source_cache = previous
+        with _parser_source_data_cache_lock:
+            if restored:
+                return
+            restored = True
+            _parsed_source_cache_enable_count -= 1
+            _enable_parsed_source_cache = _parsed_source_cache_enable_count > 0
 
     return restore
 
@@ -327,15 +340,26 @@ def _load_parser_source_data_from_path_bytes(resolved_path: Path, data: bytes, e
 
 def _load_cached_parser_source_data(cache_key: _ParserSourceDataCacheKey) -> YamlValue | None:
     with _parser_source_data_cache_lock:
-        if cache_key in _parser_source_data_cache:
-            _parser_source_data_cache.move_to_end(cache_key)
-            return _parser_source_data_cache[cache_key]
-    return None
+        if (cached_data := _parser_source_data_cache.get(cache_key)) is None:
+            return None
+        _parser_source_data_cache.move_to_end(cache_key)
+
+    import marshal  # noqa: PLC0415
+
+    # Entries are process-local values emitted by marshal.dumps below, never external bytes.
+    return marshal.loads(cached_data)  # noqa: S302
 
 
 def _store_parser_source_data(cache_key: _ParserSourceDataCacheKey, parsed_data: YamlValue) -> YamlValue:
+    import marshal  # noqa: PLC0415
+
+    try:
+        cached_data = marshal.dumps(parsed_data)
+    except Exception:  # noqa: BLE001
+        # Values outside the primitive YamlValue shape remain valid uncached input.
+        return parsed_data
     with _parser_source_data_cache_lock:
-        _parser_source_data_cache[cache_key] = parsed_data
+        _parser_source_data_cache[cache_key] = cached_data
         _parser_source_data_cache.move_to_end(cache_key)
         while len(_parser_source_data_cache) > _PARSER_SOURCE_DATA_CACHE_MAX_SIZE:
             _parser_source_data_cache.popitem(last=False)
@@ -457,13 +481,44 @@ def chdir(path: Path | None) -> Iterator[None]:
     """Change working directory and return to previous on exit."""
     if path is None:
         yield
-    else:
+        return
+    with PROCESS_STATE_LOCK:
         prev_cwd = Path.cwd()
         try:
             os.chdir(path if path.is_dir() else path.parent)
             yield
         finally:
             os.chdir(prev_cwd)
+
+
+def _absolute_generation_path(path: Path | None, base_path: Path) -> Path | None:
+    """Resolve a relative generation path against an explicit base."""
+    if path is None or path.is_absolute():
+        return path
+    return base_path / path
+
+
+def _settings_path_from(base_path: Path, settings_path: Path | None) -> Path:
+    """Resolve formatter settings from one explicit context root."""
+    if settings_path is None:
+        return base_path
+    if settings_path.is_absolute():
+        return settings_path
+    return base_path / settings_path
+
+
+def _output_context_path(output: Path | None, caller_cwd: Path) -> Path:
+    """Return the directory observed by legacy output-context consumers."""
+    if output is None:
+        return caller_cwd
+    return (output if output.is_dir() else output.parent).resolve()
+
+
+def _uses_legacy_process_state(config: GenerateConfig) -> bool:
+    """Return whether generation may observe the process working directory."""
+    return bool(
+        config.custom_template_dir or getattr(config, "custom_class_name_generator", None) or config.custom_formatters
+    )
 
 
 def is_openapi(data: Mapping[str, Any]) -> bool:
@@ -520,6 +575,68 @@ class Error(Exception):
     def __str__(self) -> str:
         """Return string representation."""
         return self.message
+
+
+def _normalized_absolute_path(path: Path, *, resolve_aliases: bool = False) -> Path:
+    """Return a normalized absolute path, resolving aliases only when needed."""
+    expanded_path = path.expanduser()
+    if resolve_aliases:
+        return expanded_path.resolve(strict=False)
+    return Path(os.path.abspath(expanded_path))  # noqa: PTH100
+
+
+def _validate_generation_path_conflicts(
+    input_: Path | str | ParseResult | Mapping[str, Any] | list[Any],
+    output: Path | None,
+    model_metadata: Path | None,
+) -> None:
+    if output is None and model_metadata is None:
+        return
+
+    absolute_output: Path | None = None
+    absolute_metadata: Path | None = None
+    if output is not None and model_metadata is not None:
+        absolute_output = _normalized_absolute_path(output)
+        if absolute_output == (absolute_metadata := _normalized_absolute_path(model_metadata)):
+            msg = f"Output and model metadata paths must be different: {absolute_output}"
+            raise Error(msg)
+        if _normalized_absolute_path(output, resolve_aliases=True) == _normalized_absolute_path(
+            model_metadata, resolve_aliases=True
+        ) or (absolute_output.exists() and absolute_metadata.exists() and absolute_output.samefile(absolute_metadata)):
+            msg = f"Output and model metadata paths must be different: {absolute_output}"
+            raise Error(msg)
+
+    match input_:
+        case Path() as input_path:
+            input_paths = (input_path,)
+        case [Path(), *_] as input_paths:
+            pass
+        case _:
+            return
+
+    targets = tuple(
+        (label, target := absolute or _normalized_absolute_path(path), target.exists())
+        for label, path, absolute in (
+            ("Output", output, absolute_output),
+            ("Model metadata", model_metadata, absolute_metadata),
+        )
+        if path is not None
+    )
+    for input_path in input_paths:
+        absolute_input = _normalized_absolute_path(input_path)
+        if input_path.is_dir():
+            continue
+        for label, target, target_exists in targets:
+            if target == absolute_input and input_path.exists():
+                msg = f"{label} path must not overwrite an input path: {target}"
+                raise Error(msg)
+            if target_exists and target.samefile(input_path):
+                msg = f"{label} path must not overwrite an input path: {target}"
+                raise Error(msg)
+
+
+class DanglingRefWarning(UserWarning):
+    """Warn that a local JSON pointer target was not found."""
 
 
 class InvalidClassNameError(Error):
@@ -589,15 +706,19 @@ class InvalidFileFormatError(Error):
         self,
         original_error: Exception,
         input_file_type: InputFileType | None = None,
+        *,
+        source: str | Path | None = None,
     ) -> None:
-        """Initialize with original error and optional input file type."""
+        """Initialize with original error, input file type, and source context."""
         self.original_error = original_error
         self.input_file_type = input_file_type
+        self.source = source
         error_detail = f"{type(original_error).__name__}: {original_error}"
+        source_detail = f" at {source}" if source is not None else ""
         if input_file_type is not None:
-            message = f"Invalid file format for {input_file_type.value}: {error_detail}"
+            message = f"Invalid file format for {input_file_type.value}{source_detail}: {error_detail}"
         else:
-            message = f"Invalid file format: {error_detail}"
+            message = f"Invalid file format{source_detail}: {error_detail}"
         super().__init__(message=message)
 
 
@@ -676,48 +797,101 @@ def _find_future_import_insertion_point(header: str) -> int:
     return pos
 
 
+def _format_file_header(
+    header_prefix: str,
+    header_suffix: str | None,
+    filename: str | None,
+) -> str:
+    """Format a per-file header, skipping all work for replace mode."""
+    if header_suffix is None:
+        return header_prefix
+    safe_filename = filename.replace("\n", " ").replace("\r", " ") if filename else ""
+    return f"{header_prefix}{safe_filename}{header_suffix}"
+
+
+def _build_file_header_parts(custom_file_header: str | None, config: GenerateConfig) -> tuple[str, str | None]:
+    """Build shared file-header parts, using a None suffix for replace mode."""
+    match config.custom_file_header_mode:
+        case CustomFileHeaderMode.Replace if custom_file_header:
+            return custom_file_header, None
+
+    generated_marker = "@generated" if config.enable_generated_header_marker else "generated"
+    header_prefix = f"""\
+# {generated_marker} by datamodel-codegen:
+#   filename:  """
+    header_suffix = ""
+    if not config.disable_timestamp:
+        timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        header_suffix += f"\n#   timestamp: {timestamp}"
+    if config.enable_version_header:
+        header_suffix += f"\n#   version:   {get_version()}"
+    if config.enable_command_header and config.command_line:
+        safe_command_line = config.command_line.replace("\n", " ").replace("\r", " ")
+        header_suffix += f"\n#   command:   {safe_command_line}"
+    if custom_file_header:
+        custom_header = custom_file_header.rstrip("\r\n")
+        header_prefix = f"{custom_header}\n#\n{header_prefix}"
+    return header_prefix, header_suffix
+
+
+def _extract_leading_future_imports(body: str, future_imports: str) -> tuple[str, str]:
+    """Extract generated future imports after leading comments or a module docstring."""
+    future_start = 0
+    while (
+        not body.startswith("from __future__ import ", future_start)
+        and (line_end := body.find("\n", future_start)) >= 0
+    ):
+        if (leading_line := body[future_start:line_end].lstrip()) and not leading_line.startswith("#"):
+            if not leading_line.lstrip("rubfRUBF").startswith(("'", '"')):
+                break
+            future_start = _find_future_import_insertion_point(body)
+            break
+        future_start = line_end + 1
+    if not body.startswith("from __future__ import ", future_start):
+        return body, future_imports
+
+    future_end = future_start
+    while body.startswith("from __future__ import ", future_end):
+        future_end = body.find("\n", future_end) + 1 or len(body)
+    if not future_imports:
+        future_imports = body[future_start:future_end].rstrip()
+    body_without_future = (f"{body[:future_start]}{body[future_end:]}" if future_start else body[future_end:]).lstrip(
+        "\n"
+    )
+    return body_without_future, future_imports
+
+
 def _build_module_content(
     body: str,
     header: str,
-    custom_file_header: str | None,
     *,
+    has_custom_file_header: bool,
     future_imports: str = "",
 ) -> str:
     """Build module content by combining header and body.
 
     Handles future imports extraction and placement when custom_file_header is provided.
     """
-    lines: list[str] = []
+    if not body:
+        return header
+    if not has_custom_file_header:
+        return f"{header}\n\n{body.rstrip()}"
 
-    if custom_file_header and body:
-        # Extract future imports from body for correct placement after custom_file_header
-        body_without_future = body
-        extracted_future = future_imports
-        body_lines = body.split("\n")
-        future_indices = [i for i, line in enumerate(body_lines) if line.strip().startswith("from __future__")]
-        if future_indices:
-            if not extracted_future:
-                extracted_future = "\n".join(body_lines[i] for i in future_indices)
-            remaining_lines = [line for i, line in enumerate(body_lines) if i not in future_indices]
-            body_without_future = "\n".join(remaining_lines).lstrip("\n")
+    # Custom formatters may add comments or a module docstring before the import.
+    body_without_future, extracted_future = _extract_leading_future_imports(body, future_imports)
 
-        if extracted_future:
-            insertion_point = _find_future_import_insertion_point(custom_file_header)
-            header_before = custom_file_header[:insertion_point].rstrip()
-            header_after = custom_file_header[insertion_point:].strip()
-            if header_after:
-                content = header_before + "\n" + extracted_future + "\n\n" + header_after
-            else:
-                content = header_before + "\n\n" + extracted_future
-            lines.extend((content, "", body_without_future.rstrip()))
-        else:
-            lines.extend((custom_file_header, "", body.rstrip()))
+    if not extracted_future:
+        return f"{header}\n\n{body.rstrip()}"
+
+    insertion_point = _find_future_import_insertion_point(header)
+    header_before = header[:insertion_point].rstrip()
+    header_after = header[insertion_point:].strip()
+    if header_after:
+        content = header_before + "\n" + extracted_future + "\n\n" + header_after
     else:
-        lines.append(header)
-        if body:
-            lines.extend(("", body.rstrip()))
+        content = header_before + "\n\n" + extracted_future
 
-    return "\n".join(lines)
+    return f"{content}\n\n{body_without_future.rstrip()}"
 
 
 @_lru_cache(maxsize=1)
@@ -1194,6 +1368,7 @@ def _emit_results(  # noqa: PLR0912, PLR0913, PLR0915
     *,
     defer_formatting: bool,
     data_model_types: Any,
+    settings_path: Path,
 ) -> str | GeneratedModules | None:
     if not input_filename:  # pragma: no cover
         match input_:
@@ -1209,37 +1384,34 @@ def _emit_results(  # noqa: PLR0912, PLR0913, PLR0915
     if not results:
         msg = "Models not found in the input data"
         raise Error(msg)
-    timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
-    if custom_file_header is None and config.custom_file_header_path:
-        custom_file_header = config.custom_file_header_path.read_text(encoding=config.encoding)
+    if custom_file_header is None and (custom_file_header_path := config.custom_file_header_path):
+        custom_file_header = custom_file_header_path.read_text(encoding=config.encoding)
 
-    generated_marker = "@generated" if config.enable_generated_header_marker else "generated"
-    header = f"""\
-# {generated_marker} by datamodel-codegen:
-#   filename:  {{}}"""
-    if not config.disable_timestamp:
-        header += f"\n#   timestamp: {timestamp}"
-    if config.enable_version_header:
-        header += f"\n#   version:   {get_version()}"
-    if config.enable_command_header and config.command_line:
-        safe_command_line = config.command_line.replace("\n", " ").replace("\r", " ")
-        header += f"\n#   command:   {safe_command_line}"
+    has_custom_file_header = bool(custom_file_header)
+    header_prefix, header_suffix = _build_file_header_parts(custom_file_header, config)
 
     # When output is None, return generated code as string(s) instead of writing to files
     if config.output is None:
         if isinstance(results, str):
             # Single-file output: return str
-            safe_filename = input_filename.replace("\n", " ").replace("\r", " ") if input_filename else ""
-            effective_header = custom_file_header or header.format(safe_filename)
-            return _build_module_content(results, effective_header, custom_file_header)
+            effective_header = _format_file_header(header_prefix, header_suffix, input_filename)
+            return _build_module_content(
+                results,
+                effective_header,
+                has_custom_file_header=has_custom_file_header,
+            )
         # Multiple modules: return GeneratedModules dict
         generated: GeneratedModules = {}
         for name, result in sorted(results.items()):
             source_filename = str(result.source.as_posix() if result.source else input_filename)
-            safe_filename = source_filename.replace("\n", " ").replace("\r", " ") if source_filename else ""
-            effective_header = custom_file_header or header.format(safe_filename)
-            generated[name] = _build_module_content(result.body, effective_header, custom_file_header)
+            effective_header = _format_file_header(header_prefix, header_suffix, source_filename)
+            generated[name] = _build_module_content(
+                result.body,
+                effective_header,
+                has_custom_file_header=has_custom_file_header,
+                future_imports=result.future_imports,
+            )
         return generated
 
     # When output is a Path, write to file system
@@ -1266,12 +1438,16 @@ def _emit_results(  # noqa: PLR0912, PLR0913, PLR0915
         if not path.parent.exists():
             path.parent.mkdir(parents=True)
 
-        safe_filename = filename.replace("\n", " ").replace("\r", " ") if filename else ""
-        effective_header = custom_file_header or header.format(safe_filename)
+        effective_header = _format_file_header(header_prefix, header_suffix, filename)
         with path.open("wt", encoding=config.encoding) as file:
-            if custom_file_header and body:
+            if has_custom_file_header and body:
                 file.write(
-                    _build_module_content(body, effective_header, custom_file_header, future_imports=future_imports)
+                    _build_module_content(
+                        body,
+                        effective_header,
+                        has_custom_file_header=True,
+                        future_imports=future_imports,
+                    )
                     + "\n"
                 )
             else:
@@ -1301,7 +1477,7 @@ def _emit_results(  # noqa: PLR0912, PLR0913, PLR0915
         )
         code_formatter = CodeFormatter(
             config.target_python_version,
-            config.settings_path,
+            settings_path,
             config.wrap_string_literal,
             skip_string_normalization=not config.use_double_quotes,
             known_third_party=data_model_types.known_third_party,
@@ -1325,7 +1501,7 @@ def _write_model_metadata(metadata_path: Path, metadata: ModelMetadata | None, e
     metadata_path.write_text(f"{dump_model_metadata(metadata)}\n", encoding=encoding)
 
 
-def generate(  # noqa: PLR0912, PLR0914, PLR0915
+def generate(
     input_: Path | str | ParseResult | Mapping[str, Any] | list[Any],
     *,
     config: GenerateConfig | None = None,
@@ -1358,12 +1534,43 @@ def generate(  # noqa: PLR0912, PLR0914, PLR0915
         raise ValueError(msg)
 
     if config is None:
-        from datamodel_code_generator.config import GenerateConfig, _rebuild_generate_config  # noqa: PLC0415
+        from datamodel_code_generator.config import GenerateConfig as _GenerateConfig  # noqa: PLC0415
+        from datamodel_code_generator.config import _rebuild_generate_config  # noqa: PLC0415
 
         _rebuild_generate_config()
-        config = GenerateConfig.model_validate(options)
+        config = _GenerateConfig.model_validate(options)
     config = _apply_generate_config_preset(config)
     config = _apply_missing_sentinel_config(config)
+
+    if config.output is not None and _uses_legacy_process_state(config):
+        with PROCESS_STATE_LOCK:
+            return _generate(input_, config, Path.cwd(), use_output_cwd=config.output is not None)
+    with PROCESS_STATE_LOCK:
+        caller_cwd = Path.cwd()
+    return _generate(input_, config, caller_cwd, use_output_cwd=False)
+
+
+def _generate(  # noqa: PLR0912, PLR0914, PLR0915
+    input_: Path | str | ParseResult | Mapping[str, Any] | list[Any],
+    config: GenerateConfig,
+    caller_cwd: Path,
+    *,
+    use_output_cwd: bool,
+) -> str | GeneratedModules | None:
+    """Generate models after capturing all process-relative state."""
+    caller_path_updates = {
+        field: absolute_path
+        for field in ("output", "emit_model_metadata", "custom_file_header_path")
+        if (absolute_path := _absolute_generation_path(getattr(config, field), caller_cwd))
+        is not getattr(config, field)
+    }
+    if caller_path_updates:
+        config = config.model_copy(update=caller_path_updates)
+    output_context_path = _output_context_path(config.output, caller_cwd)
+    if (http_local_ref_path := _absolute_generation_path(config.http_local_ref_path, output_context_path)) is not (
+        config.http_local_ref_path
+    ):
+        config = config.model_copy(update={"http_local_ref_path": http_local_ref_path})
 
     _validate_output_datetime_class(config.output_model_type, config.output_datetime_class)
     _validate_alias_generator(config.output_model_type, config.alias_generator)
@@ -1373,11 +1580,19 @@ def generate(  # noqa: PLR0912, PLR0914, PLR0915
     input_file_type = config.input_file_type
     extra_template_data: defaultdict[str, dict[str, Any]] | None = None
     if config.extra_template_data is not None:
-        extra_template_data = defaultdict(dict, config.extra_template_data)
+        from datamodel_code_generator._template_data import copy_template_data  # noqa: PLC0415
+
+        memo: dict[int, Any] = {}
+        extra_template_data = defaultdict(
+            dict,
+            ((key, copy_template_data(value, memo)) for key, value in config.extra_template_data.items()),
+        )
+        del memo
     dataclass_arguments = config.dataclass_arguments
     custom_file_header = config.custom_file_header
     skip_root_model = config.skip_root_model
     source_override: Mapping[str, Any] | None = None
+    diagnostic_source_path: Path | None = None
 
     if (
         isinstance(input_, list)
@@ -1388,6 +1603,17 @@ def generate(  # noqa: PLR0912, PLR0914, PLR0915
             "List input is only supported for file path lists or input_file_type=InputFileType.MCPTools."
         )
         raise Error(msg)  # pragma: no cover
+
+    match input_:
+        case Path() as input_path if not input_path.is_absolute():
+            input_ = (caller_cwd / input_path.expanduser()).resolve()
+        case [Path(), *_] as input_paths if input_file_type != InputFileType.MCPTools:
+            if any(not path.is_absolute() for path in input_paths):
+                input_ = [
+                    path if path.is_absolute() else (caller_cwd / path.expanduser()).resolve() for path in input_paths
+                ]
+
+    _validate_generation_path_conflicts(input_, config.output, config.emit_model_metadata)
 
     remote_text_cache: DefaultPutDict[str, str] = DefaultPutDict()
     match input_:
@@ -1418,8 +1644,6 @@ def generate(  # noqa: PLR0912, PLR0914, PLR0915
         if config.keyword_only:
             dataclass_arguments["kw_only"] = True
 
-    if isinstance(input_, Path) and not input_.is_absolute():
-        input_ = input_.expanduser().resolve()
     if input_file_type == InputFileType.Auto and isinstance(input_, Mapping):
         msg = (
             "input_file_type=Auto is not supported for dict input. "
@@ -1458,7 +1682,7 @@ def generate(  # noqa: PLR0912, PLR0914, PLR0915
             else:
                 input_text_ = input_text
         except FileNotFoundError as exc:
-            msg = "File not found"
+            msg = f"File not found: {input_}"
             raise Error(msg) from exc
 
         try:
@@ -1476,6 +1700,7 @@ def generate(  # noqa: PLR0912, PLR0914, PLR0915
             # Only for OpenAPI/JsonSchema (RAW_DATA_TYPES are transformed by genson)
             if isinstance(input_, Path) and input_.is_file() and input_file_type not in RAW_DATA_TYPES:
                 input_text = input_text_
+                diagnostic_source_path = Path(input_.name)
 
     with _warn_on_input_string_path_failure(input_):
         input_text = _normalize_raw_input(input_, input_text, input_file_type, config)
@@ -1503,46 +1728,150 @@ def generate(  # noqa: PLR0912, PLR0914, PLR0915
         skip_root_model=skip_root_model,
         remote_text_cache=remote_text_cache,
     )
+    if additional_options["base_path"] is None and not isinstance(source, Path):
+        additional_options["base_path"] = caller_cwd
 
     jsonschema_version, openapi_version, asyncapi_version, xmlschema_version, protobuf_version = (
         _resolve_schema_versions(input_file_type, config.schema_version)
     )
 
-    with _warn_on_input_string_path_failure(input_):
-        parser = _build_parser(
-            input_file_type,
-            source,
-            config,
-            additional_options,
-            data_model_types,
-            jsonschema_version=jsonschema_version,
-            openapi_version=openapi_version,
-            asyncapi_version=asyncapi_version,
-            xmlschema_version=xmlschema_version,
-            protobuf_version=protobuf_version,
-        )
+    def build_parser(
+        active_config: GenerateConfig,
+        parser_source: Any,
+        parser_options: ParserConfigDict,
+        active_data_model_types: Any,
+        reference_cache: Any | None = None,
+    ) -> Any:
+        """Build one fresh parser using the caller's reference-resolution base."""
+        with _warn_on_input_string_path_failure(input_):
+            active_parser = _build_parser(
+                input_file_type,
+                parser_source,
+                active_config,
+                parser_options,
+                active_data_model_types,
+                jsonschema_version=jsonschema_version,
+                openapi_version=openapi_version,
+                asyncapi_version=asyncapi_version,
+                xmlschema_version=xmlschema_version,
+                protobuf_version=protobuf_version,
+            )
+        if reference_cache is not None and hasattr(active_parser, "remote_object_cache"):
+            active_parser.remote_object_cache = reference_cache
+        active_parser._diagnostic_source_path = diagnostic_source_path  # noqa: SLF001
+        return active_parser
 
-    with chdir(config.output):
+    def parse_with_disposal(active_parser: Any, active_config: GenerateConfig) -> Any:
+        """Parse with one parser and dispose it if parsing fails."""
+        if not use_output_cwd:
+            active_parser._formatter_cwd = output_context_path  # noqa: SLF001
         try:
             with _warn_on_input_string_path_failure(input_):
-                results = parser.parse(
-                    settings_path=config.settings_path,
-                    disable_future_imports=config.disable_future_imports,
-                    all_exports_scope=config.all_exports_scope,
-                    all_exports_collision_strategy=config.all_exports_collision_strategy,
-                    module_split_mode=config.module_split_mode,
-                    collect_model_metadata=config.emit_model_metadata is not None,
+                active_results = active_parser.parse(
+                    settings_path=parser_settings_path,
+                    disable_future_imports=active_config.disable_future_imports,
+                    all_exports_scope=active_config.all_exports_scope,
+                    all_exports_collision_strategy=active_config.all_exports_collision_strategy,
+                    module_split_mode=active_config.module_split_mode,
+                    collect_model_metadata=active_config.emit_model_metadata is not None,
                 )
-        except Exception:
-            with contextlib.suppress(BaseException):
-                parser._dispose()  # noqa: SLF001
-            raise
         except BaseException:
             with contextlib.suppress(BaseException):
-                parser._dispose()  # noqa: SLF001
+                active_parser._dispose()  # noqa: SLF001
             raise
-    model_metadata = parser.model_metadata
-    parser._dispose()  # noqa: SLF001
+        finally:
+            if not use_output_cwd:
+                active_parser.__dict__.pop("_formatter_cwd", None)
+        return active_results
+
+    parser_settings_path = (
+        config.settings_path if use_output_cwd else _settings_path_from(output_context_path, config.settings_path)
+    )
+    emit_settings_path = _settings_path_from(caller_cwd, config.settings_path)
+    parser = build_parser(config, source, additional_options, data_model_types)
+    with chdir(config.output if use_output_cwd else None):
+        results = parse_with_disposal(parser, config)
+        model_metadata = parser.model_metadata
+        repair_modules = parser.invalid_dotted_stdout_repair_modules
+        repair_state = (
+            (
+                parser.generated_model_inventory,
+                parser.source_data_fingerprint,
+                parser.remote_text_cache,
+                getattr(parser, "remote_object_cache", None),
+                parser.base_path,
+            )
+            if repair_modules
+            else None
+        )
+        parser._dispose()  # noqa: SLF001
+        del parser
+
+        if repair_state is not None:
+            (
+                legacy_inventory,
+                legacy_source_fingerprint,
+                retry_remote_text_cache,
+                retry_reference_cache,
+                retry_base_path,
+            ) = repair_state
+            retry_config = config.model_copy(
+                update={
+                    "repair_invalid_dotted_stdout": False,
+                    "forced_invalid_dotted_stdout_repair_modules": repair_modules,
+                }
+            )
+            retry_parse: tuple[Any, Any] | None = None
+            retry_options: ParserConfigDict | None = None
+            with contextlib.suppress(Exception), warnings.catch_warnings():
+                warnings.simplefilter("ignore", DanglingRefWarning)
+                retry_data_model_types, retry_source, retry_defer_formatting, retry_options = (
+                    _prepare_parser_common_options(
+                        input_,
+                        input_text,
+                        input_file_type,
+                        source_override,
+                        retry_config,
+                        extra_template_data,
+                        dataclass_arguments,
+                        skip_root_model=skip_root_model,
+                        remote_text_cache=retry_remote_text_cache,
+                    )
+                )
+                retry_options["base_path"] = retry_base_path
+                retry_parser = build_parser(
+                    retry_config,
+                    retry_source,
+                    retry_options,
+                    retry_data_model_types,
+                    retry_reference_cache,
+                )
+                retry_results = parse_with_disposal(retry_parser, retry_config)
+                retry_parse = retry_parser, retry_results
+
+            # This is a compatibility repair: retain the completed legacy result if it cannot be proven safe.
+            if retry_parse is not None:
+                retry_parser, retry_results = retry_parse
+                try:
+                    if (
+                        isinstance(retry_results, str)
+                        and retry_results
+                        and retry_parser.stdout_result_usable
+                        and retry_parser.generated_model_inventory == legacy_inventory
+                        and retry_parser.source_data_fingerprint == legacy_source_fingerprint
+                    ):
+                        results = retry_results
+                        model_metadata = retry_parser.model_metadata
+                        data_model_types = retry_data_model_types
+                        defer_formatting = retry_defer_formatting
+                finally:
+                    retry_parser._dispose()  # noqa: SLF001
+                del retry_parser
+
+            del retry_reference_cache, retry_remote_text_cache
+            del retry_options
+
+    del additional_options, extra_template_data
     generated = _emit_results(
         results,
         input_,
@@ -1551,6 +1880,7 @@ def generate(  # noqa: PLR0912, PLR0914, PLR0915
         config,
         defer_formatting=defer_formatting,
         data_model_types=data_model_types,
+        settings_path=emit_settings_path,
     )
     if config.emit_model_metadata is not None:
         _write_model_metadata(config.emit_model_metadata, model_metadata, config.encoding)
@@ -1690,6 +2020,8 @@ __all__ = [
     "AsyncAPIVersion",
     "ClassNameAffixScope",
     "CollapseRootModelsNameStrategy",
+    "CustomFileHeaderMode",
+    "DanglingRefWarning",
     "DateClassType",
     "DatetimeClassType",
     "DefaultPutDict",

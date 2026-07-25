@@ -160,9 +160,12 @@ Formatting, custom templates, and generated file headers.
 - `--enable-generated-header-marker`: Enable @generated marker on file headers
 - `--treat-dot-as-module`: Treat dotted schema names as module paths, creating nested directory structures (e.g., 'foo.bar.Model' becomes 'foo/bar.py'). Use --no-treat-dot-as-module to keep dots in names as underscores for single-file output.
 - `--no-treat-dot-as-module`: Treat dotted schema names as module paths, creating nested directory structures (e.g., 'foo.bar.Model' becomes 'foo/bar.py'). Use --no-treat-dot-as-module to keep dots in names as underscores for single-file output.
+- `--strict-dotted-module-names`: Only infer dotted schema names as module paths when every segment is a canonical Python identifier. This applies only to automatic inference and does not override --treat-dot-as-module or --no-treat-dot-as-module.
+- `--no-strict-dotted-module-names`: Only infer dotted schema names as module paths when every segment is a canonical Python identifier. This applies only to automatic inference and does not override --treat-dot-as-module or --no-treat-dot-as-module.
 - `--use-exact-imports`: import exact types instead of modules, for example: "from .foo import Bar" instead of "from . import foo" with "foo.Bar"
 - `--custom-file-header`: Custom file header
 - `--custom-file-header-path`: Custom file header file path
+- `--custom-file-header-mode`: How to combine a custom file header with the generated header (default: replace) Choices: `replace`, `prepend`.
 - `--custom-template-dir`: Custom template directory
 - `--extra-template-data`: Extra template data for output models as inline JSON or a JSON file path. For OpenAPI and Jsonschema the keys are the spec path of the object, or the name of the object if you want to apply the template data to multiple objects with the same name. If you are using another input file type (e.g. GraphQL), the key is the name of the object. The value is a dictionary of the template data to add.
 - `--validators`: Validators configuration as inline JSON or a JSON file path. Defines field validators for Pydantic v2 models. Keys are model names, values contain validator definitions with field, function, and mode.
@@ -204,6 +207,7 @@ General utility, HTTP, checking, and project integration options.
 
 - `--allow-remote-refs`: Allow fetching remote $ref references over HTTP/HTTPS. Currently remote fetching is allowed by default but emits a deprecation warning. Pass --allow-remote-refs to opt in without warning, or --no-allow-remote-refs to block remote fetching. In a future version, remote fetching will be disabled by default.
 - `--no-allow-remote-refs`: Allow fetching remote $ref references over HTTP/HTTPS. Currently remote fetching is allowed by default but emits a deprecation warning. Pass --allow-remote-refs to opt in without warning, or --no-allow-remote-refs to block remote fetching. In a future version, remote fetching will be disabled by default.
+- `--strict-refs`: Treat unresolved local $ref JSON pointers as errors instead of generating fallback Any models.
 - `--allow-private-network`: Allow HTTP(S) schema requests to private, loopback, link-local, or otherwise non-public network hosts. By default these targets are blocked to reduce server-side request forgery (SSRF) risk. If a trusted internal schema endpoint is blocked, verify the URL and pass this option; otherwise use a local schema file or public endpoint. Pass --no-allow-private-network to override a configuration file that enables it.
 - `--no-allow-private-network`: Allow HTTP(S) schema requests to private, loopback, link-local, or otherwise non-public network hosts. By default these targets are blocked to reduce server-side request forgery (SSRF) risk. If a trusted internal schema endpoint is blocked, verify the URL and pass this option; otherwise use a local schema file or public endpoint. Pass --no-allow-private-network to override a configuration file that enables it.
 - `--http-headers`: Set headers in HTTP requests to the remote host. (example: "Authorization: Basic dXNlcjpwYXNz")
@@ -223,6 +227,7 @@ General utility, HTTP, checking, and project integration options.
 - `--help` (alias: `-h`): show this help message and exit
 - `--no-color`: disable colorized output
 - `--output-format`: Format for command output (default: text). Use json for structured output when supported. Choices: `text`, `json`.
+- `--fail-on-multi-module-stdout`: Return an error instead of concatenating multiple generated modules in text stdout. This does not affect single-module, JSON, or file output.
 - `--output-format-json-schema`: Output JSON Schema for the selected JSON output or JSON configuration format and exit. Choices: `config`, `generate-prompt`, `generation`, `model-metadata`, `structured-output`.
 - `--generate-pyproject-config`: Generate pyproject.toml configuration from the provided CLI arguments and exit
 - `--generate-cli-command`: Generate CLI command from pyproject.toml configuration and exit

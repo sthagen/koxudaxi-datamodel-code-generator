@@ -25,6 +25,9 @@ from datamodel_code_generator.imports import (
     IMPORT_ULID,
     IMPORT_UUID,
 )
+from datamodel_code_generator.model.pydantic_v2._output_context import (
+    ANNOTATED_CONSTRAINTS_CONTEXT as _ANNOTATED_CONSTRAINTS_CONTEXT,
+)
 from datamodel_code_generator.model.pydantic_v2.imports import (
     IMPORT_ANYURL,
     IMPORT_AWARE_DATETIME,
@@ -440,6 +443,13 @@ class _PydanticDataTypeManager(_DataTypeManagerBase):
 class PydanticV2DataType(DataType):
     """Pydantic v2-specific DataType with SerializeAsAny support."""
 
+    _CONSTRAINED_TYPE_TO_BASE: ClassVar[dict[str, str]] = {"constr": "str"}
+    _BASE_TYPE_HINT_CONTAINER_ORDER: ClassVar[tuple[str, ...]] = ("list", "set", "dict")
+
+    @staticmethod
+    def _wrap_discriminator_type_hint(type_: str, discriminator: str) -> str:
+        return f"Annotated[{type_}, Field(discriminator={discriminator!r})]"
+
     def _should_wrap_with_serialize_as_any(self) -> bool:
         if not self.use_serialize_as_any:
             return False
@@ -474,6 +484,9 @@ class PydanticV2DataType(DataType):
 
 class DataTypeManager(_PydanticDataTypeManager):
     """Type manager for Pydantic v2 with pattern key support."""
+
+    SUPPORTS_ANNOTATED_CONSTRAINTS: ClassVar[bool] = True
+    ANNOTATED_CONSTRAINTS_CONTEXT: ClassVar[object | None] = _ANNOTATED_CONSTRAINTS_CONTEXT
 
     def __init__(  # noqa: PLR0913, PLR0917
         self,

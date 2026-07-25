@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypeVar
 
 from datamodel_code_generator.imports import IMPORT_OPTIONAL, Import
 from datamodel_code_generator.model import DataModel, DataModelFieldBase, _rebuild_model_with_datamodel_namespace
+from datamodel_code_generator.model._constraints import PatternConstraints as _Constraints
 from datamodel_code_generator.model.base import UNDEFINED, BaseClassDataType, _nested_model_default_factory
 from datamodel_code_generator.model.imports import (
     IMPORT_MSGSPEC_CONVERT,
@@ -20,12 +21,10 @@ from datamodel_code_generator.model.imports import (
     IMPORT_MSGSPEC_UNSET,
     IMPORT_MSGSPEC_UNSETTYPE,
 )
-from datamodel_code_generator.model.pydantic_base import (
-    PatternConstraints as _Constraints,
-)
 from datamodel_code_generator.model.type_alias import TypeAliasBase
 from datamodel_code_generator.model.types import DataTypeManager as _DataTypeManager
 from datamodel_code_generator.python_literal import represent_python_value
+from datamodel_code_generator.reference import ModelType
 from datamodel_code_generator.types import (
     NONE,
     chain_as_tuple,
@@ -42,6 +41,7 @@ class _UNSET:
 
 
 UNSET = _UNSET()
+_ANNOTATED_CONSTRAINTS_CONTEXT: object = object()
 
 
 if TYPE_CHECKING:
@@ -101,8 +101,17 @@ class Struct(DataModel):
     BASE_CLASS_NAME: ClassVar[str] = "Struct"
     BASE_CLASS_ALIAS: ClassVar[str] = "_Struct"
     DEFAULT_IMPORTS: ClassVar[tuple[Import, ...]] = ()
+    FIELD_ASSIGNMENT_CHECKER = staticmethod(has_field_assignment)
+    FIELD_NAME_MODEL_TYPE: ClassVar[ModelType] = ModelType.MSGSPEC
     SUPPORTS_DISCRIMINATOR: ClassVar[bool] = True
+    SUPPORTS_INHERITED_DISCRIMINATOR_ENUM: ClassVar[bool] = True
     SUPPORTS_KW_ONLY: ClassVar[bool] = True
+    REQUIRES_MODEL_LEVEL_KW_ONLY: ClassVar[bool] = True
+    SUPPORTS_BOOLEAN_LITERAL: ClassVar[bool] = False
+    REQUIRES_TAGGED_UNION_DISCRIMINATOR: ClassVar[bool] = True
+    SUPPORTS_ANNOTATED_CONSTRAINTS: ClassVar[bool] = True
+    ANNOTATED_CONSTRAINTS_CONTEXT: ClassVar[object | None] = _ANNOTATED_CONSTRAINTS_CONTEXT
+    REQUIRES_EXPLICIT_DEFERRED_ANNOTATIONS_FOR_FORWARD_REFS: ClassVar[bool] = True
     CONFIG_MAPPING: ClassVar[dict[tuple[str, Any], tuple[str, Any] | None]] = {
         ("allow_mutation", False): ("frozen", True),
         ("extra_fields", "forbid"): ("forbid_unknown_fields", True),
@@ -156,6 +165,20 @@ class Struct(DataModel):
         """Add keyword argument to base class constructor."""
         self.extra_template_data["base_class_kwargs"][name] = value
 
+    def apply_discriminator_tag(self, field: DataModelFieldBase, field_name: str, value: Any) -> None:
+        """Configure msgspec's tag and exclude the discriminator from instance fields."""
+        self.add_base_class_kwarg("tag_field", f"'{field_name}'")
+        self.add_base_class_kwarg("tag", repr(value))
+        field.extras["is_classvar"] = True
+
+    def has_keyword_only_definition(self) -> bool:
+        """Return whether msgspec's class declaration already enables keyword-only fields."""
+        return self.extra_template_data["base_class_kwargs"].get("kw_only") in {True, "True"}
+
+    def enable_model_keyword_only(self) -> None:
+        """Enable msgspec's class-level keyword-only option."""
+        self.add_base_class_kwarg("kw_only", "True")
+
     @classmethod
     def create_base_class_model(
         cls,
@@ -205,6 +228,8 @@ class Constraints(_Constraints):
 class DataModelField(DataModelFieldBase):
     """Field implementation for msgspec Struct models."""
 
+    SUPPORTS_ANNOTATED_CONSTRAINTS: ClassVar[bool] = True
+    ANNOTATED_CONSTRAINTS_CONTEXT: ClassVar[object | None] = _ANNOTATED_CONSTRAINTS_CONTEXT
     _FIELD_KEYS: ClassVar[set[str]] = {
         "default",
         "default_factory",
@@ -247,7 +272,7 @@ class DataModelField(DataModelFieldBase):
             return data_types[0]
         return self.data_type.__class__(
             data_types=data_types,
-            use_union_operator=self.data_type.use_union_operator,
+            use_union_operator=self._use_union_operator,
             preserve_union_member_order=True,
         )
 
@@ -398,7 +423,7 @@ class DataModelField(DataModelFieldBase):
     def __str__(self) -> str:  # noqa: PLR0912
         """Generate field() call or default value representation."""
         data: dict[str, Any] = {k: v for k, v in self.extras.items() if k in self._FIELD_KEYS}
-        if self.alias:
+        if self.alias is not None:
             data["name"] = self.alias
 
         if self.default is not UNDEFINED and self.default is not None:
@@ -589,6 +614,9 @@ class DataModelField(DataModelFieldBase):
 
 class DataTypeManager(_DataTypeManager):
     """Type manager for msgspec Struct models."""
+
+    SUPPORTS_ANNOTATED_CONSTRAINTS: ClassVar[bool] = True
+    ANNOTATED_CONSTRAINTS_CONTEXT: ClassVar[object | None] = _ANNOTATED_CONSTRAINTS_CONTEXT
 
 
 _rebuild_model_with_datamodel_namespace(DataModelField)
