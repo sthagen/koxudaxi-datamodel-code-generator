@@ -22,11 +22,10 @@ from datamodel_code_generator import (
     snooper_to_methods,
 )
 from datamodel_code_generator._format_types import DatetimeClassType
-from datamodel_code_generator.model.enum import SPECIALIZED_ENUM_TYPE_MATCH, Enum
+from datamodel_code_generator.model.enum import SPECIALIZED_ENUM_TYPE_MATCH, Enum, EnumMemberValue
 from datamodel_code_generator.parser.base import (
     DataType,
     Parser,
-    escape_characters,
 )
 from datamodel_code_generator.reference import ModelType, Reference
 from datamodel_code_generator.types import Types
@@ -261,7 +260,7 @@ class GraphQLParser(Parser["GraphQLParserConfig", "JsonSchemaFeatures"]):
         exclude_field_names: set[str] = set()
 
         for value_name, value in enum_object.values.items():
-            default = f"'{value_name.translate(escape_characters)}'" if isinstance(value_name, str) else value_name
+            default = EnumMemberValue(value_name) if isinstance(value_name, str) else value_name
 
             field_name = self.model_resolver.get_valid_field_name(
                 value_name, excludes=exclude_field_names, model_type=ModelType.ENUM
@@ -356,27 +355,20 @@ class GraphQLParser(Parser["GraphQLParserConfig", "JsonSchemaFeatures"]):
         default = self._get_default(field, final_data_type, required=required)
         has_default = has_schema_default
 
-        effective_default, effective_has_default = self.model_resolver.resolve_default_value(
+        effective_default, effective_has_default, use_default_with_required = self._effective_default_state(
             original_field_name,
             default,
-            has_default,
+            has_default=has_default,
+            required=required,
             class_name=class_name,
         )
-
-        use_default_with_required = required and self.apply_default_values_for_required_fields and effective_has_default
 
         extras = {} if self.default_field_extras is None else self.default_field_extras.copy()
 
         if field.description is not None:  # pragma: no cover
             extras["description"] = field.description
 
-        # Handle multiple aliases (Pydantic v2 AliasChoices)
-        single_alias: str | None = None
-        validation_aliases: list[str] | None = None
-        if isinstance(alias, list):
-            validation_aliases = alias
-        else:
-            single_alias = alias
+        single_alias, validation_aliases = self._split_field_alias(alias)
         return self.data_model_field_type(
             name=field_name,
             default=effective_default,

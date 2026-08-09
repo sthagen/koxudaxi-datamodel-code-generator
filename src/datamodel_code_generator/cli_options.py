@@ -164,6 +164,7 @@ CLI_OPTION_META: dict[str, CLIOptionMeta] = {
     "--input": CLIOptionMeta(name="--input", category=OptionCategory.BASE),
     "--output": CLIOptionMeta(name="--output", category=OptionCategory.BASE),
     "--emit-model-metadata": CLIOptionMeta(name="--emit-model-metadata", category=OptionCategory.BASE),
+    "--http-backend": CLIOptionMeta(name="--http-backend", category=OptionCategory.BASE),
     "--url": CLIOptionMeta(name="--url", category=OptionCategory.BASE),
     "--input-model": CLIOptionMeta(name="--input-model", category=OptionCategory.BASE),
     "--input-model-ref-strategy": CLIOptionMeta(name="--input-model-ref-strategy", category=OptionCategory.BASE),
@@ -531,6 +532,13 @@ CLI_OPTION_META: dict[str, CLIOptionMeta] = {
         topic=OptionTopic.TYPING_CUSTOMIZATION,
         group=OptionGroup.TYPE_ALIAS,
     ),
+    "--use-type-alias-type": CLIOptionMeta(
+        name="--use-type-alias-type",
+        category=OptionCategory.TYPING,
+        topic=OptionTopic.TYPING_CUSTOMIZATION,
+        group=OptionGroup.TYPE_ALIAS,
+        implies=(CLIOptionRelation(option="--use-type-alias", value=True),),
+    ),
     "--use-root-model-type-alias": CLIOptionMeta(
         name="--use-root-model-type-alias",
         category=OptionCategory.TYPING,
@@ -628,8 +636,24 @@ CLI_OPTION_META: dict[str, CLIOptionMeta] = {
         topic=OptionTopic.TYPING_CUSTOMIZATION,
         group=OptionGroup.COLLECTION_TYPES,
     ),
+    "--use-tuple-for-fixed-length-arrays": CLIOptionMeta(
+        name="--use-tuple-for-fixed-length-arrays",
+        category=OptionCategory.TYPING,
+        topic=OptionTopic.TYPING_CUSTOMIZATION,
+        group=OptionGroup.COLLECTION_TYPES,
+    ),
+    "--use-total-false-for-typed-dict": CLIOptionMeta(
+        name="--use-total-false-for-typed-dict",
+        category=OptionCategory.TYPING,
+    ),
     "--use-closed-typed-dict": CLIOptionMeta(name="--use-closed-typed-dict", category=OptionCategory.TYPING),
     "--no-use-closed-typed-dict": CLIOptionMeta(name="--no-use-closed-typed-dict", category=OptionCategory.TYPING),
+    "--import-overrides": CLIOptionMeta(
+        name="--import-overrides",
+        category=OptionCategory.TYPING,
+        topic=OptionTopic.TYPING_CUSTOMIZATION,
+        group=OptionGroup.IMPORTS,
+    ),
     "--type-mappings": CLIOptionMeta(
         name="--type-mappings",
         category=OptionCategory.TYPING,

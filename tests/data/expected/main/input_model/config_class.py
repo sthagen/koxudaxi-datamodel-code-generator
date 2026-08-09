@@ -77,6 +77,9 @@ Formatter: TypeAlias = Literal['builtin', 'black', 'isort', 'ruff-check', 'ruff-
 GraphQLScope: TypeAlias = Literal['schema']
 
 
+HTTPBackend: TypeAlias = Literal['auto', 'httpx', 'httpx2']
+
+
 InputFileType: TypeAlias = Literal[
     'auto',
     'openapi',
@@ -213,12 +216,15 @@ class BaseGenerateConfig(TypedDict):
     use_operation_id_as_name: NotRequired[bool]
     use_unique_items_as_set: NotRequired[bool]
     use_tuple_for_fixed_items: NotRequired[bool]
+    use_tuple_for_fixed_length_arrays: NotRequired[bool]
+    use_total_false_for_typed_dict: NotRequired[bool]
     use_closed_typed_dict: NotRequired[bool]
     allof_merge_mode: NotRequired[AllOfMergeMode]
     allof_class_hierarchy: NotRequired[AllOfClassHierarchy]
     allow_remote_refs: NotRequired[bool | None]
     strict_refs: NotRequired[bool]
     allow_private_network: NotRequired[bool]
+    http_backend: NotRequired[HTTPBackend]
     http_headers: NotRequired[Sequence[tuple[str, str]] | None]
     http_local_ref_path: NotRequired[str | None]
     http_ignore_tls: NotRequired[bool]
@@ -238,6 +244,7 @@ class BaseGenerateConfig(TypedDict):
     skip_root_model: NotRequired[bool]
     use_root_model_sequence_interface: NotRequired[bool]
     use_type_alias: NotRequired[bool]
+    use_type_alias_type: NotRequired[bool]
     use_root_model_type_alias: NotRequired[bool]
     special_field_name_prefix: NotRequired[str | None]
     remove_special_field_name_prefix: NotRequired[bool]
@@ -271,6 +278,7 @@ class BaseGenerateConfig(TypedDict):
     duplicate_name_suffix: NotRequired[dict[str, str] | None]
     dataclass_arguments: NotRequired[DataclassArguments | None]
     disable_future_imports: NotRequired[bool]
+    import_overrides: NotRequired[dict[str, str] | None]
     type_mappings: NotRequired[list[str] | None]
     type_overrides: NotRequired[dict[str, str] | None]
     read_only_write_only_model_type: NotRequired[ReadOnlyWriteOnlyModelType | None]

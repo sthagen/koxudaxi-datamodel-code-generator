@@ -7,6 +7,7 @@ import inspect
 import json
 import platform
 import sys
+import tokenize
 import warnings
 from argparse import ArgumentTypeError, BooleanOptionalAction, Namespace
 from collections import defaultdict
@@ -23,14 +24,17 @@ from packaging import version
 
 import datamodel_code_generator
 from datamodel_code_generator import (
+    _COMMENT_ONLY_HEADER_FAST_PATH_LIMIT,
     AllExportsScope,
     CustomFileHeaderMode,
     DanglingRefWarning,
     DataModelType,
     Error,
     GeneratedModules,
+    HTTPBackend,
     InputFileType,
     SchemaParseError,
+    _find_future_import_insertion_point,
     _generate_config_values,
     _get_internal_parser_config_model,
     chdir,
@@ -92,6 +96,7 @@ assert_file_content = create_assert_file_content(EXPECTED_MAIN_PATH)
 BLACK_VERSION = version.parse(black.__version__)
 BLACK_LT_233 = version.parse("23.3.0") > BLACK_VERSION
 BLACK_LT_24 = version.parse("24.0.0") > BLACK_VERSION
+CLI_OPTION_SUGGESTIONS_PATH = EXPECTED_MAIN_PATH / "cli_option_suggestions"
 
 
 class _GenerateParseAbort(BaseException):
@@ -451,6 +456,43 @@ def test_show_help(no_color: bool, capsys: pytest.CaptureFixture[str]) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("args", "expected_stderr_name"),
+    [
+        (["--output-model-tipe"], "output_model_type.txt"),
+        (["--output-model-tipe=pydantic_v2.BaseModel"], "output_model_type_with_value.txt"),
+        (["--output-model-tipe", "--input-file-tipe"], "multiple_options.txt"),
+        (["--output-model-tipe", "--output-model-tipe"], "deduplicated_option.txt"),
+        (["--not-a-valid-option"], "unknown_option.txt"),
+        (["not-an-option"], "positional_argument.txt"),
+        (["--", "--output-model-tipe"], "option_terminator.txt"),
+        (["--output-model-type"], "missing_option_value.txt"),
+    ],
+    ids=[
+        "close-match",
+        "close-match-with-value",
+        "multiple-options",
+        "deduplicated-option",
+        "no-match",
+        "positional",
+        "option-terminator",
+        "missing-value",
+    ],
+)
+def test_invalid_cli_option_suggestions(
+    args: list[str], expected_stderr_name: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Suggest close option names without changing unrelated parser errors."""
+    run_main_with_system_exit(args, expected_code=Exit.ERROR)
+    assert_output(
+        capsys
+        .readouterr()
+        .err.replace("usage: \n", "usage:\n")
+        .replace(f"{arg_parser.prog}: error:", "pytest: error:"),
+        CLI_OPTION_SUGGESTIONS_PATH / expected_stderr_name,
+    )
+
+
 def test_show_help_when_no_input(mocker: MockerFixture) -> None:
     """Test help display when no input is provided."""
     print_help_mock = mocker.patch("datamodel_code_generator.__main__.arg_parser.print_help")
@@ -752,6 +794,20 @@ def test_practical_preset_pydantic_v2(output_file: Path) -> None:
     )
 
 
+@freeze_time(TIMESTAMP)
+def test_practical_preset_keeps_homogeneous_fixed_length_arrays_as_lists(output_file: Path) -> None:
+    """Keep existing practical presets independent from the new tuple option."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "fixed_length_array_tuples.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        extra_args=["--preset", "practical-py310-20260619"],
+        assert_func=assert_file_content,
+        expected_file="openapi/fixed_length_array_tuples_practical_preset.py",
+        force_exec_validation=True,
+    )
+
+
 def test_standard_preset_requires_matching_target_python_version(
     output_file: Path,
     capsys: pytest.CaptureFixture[str],
@@ -885,9 +941,12 @@ def test_cli_pyproject_ignores_generate_only_options(output_file: Path, tmp_path
 def test_prepare_cli_config_args_applies_derived_flags() -> None:
     """CLI-only implied flags are applied before the single validation path."""
     prepared_args = _prepare_cli_config_args({"output_model_type": DataModelType.MsgspecStruct.value})
+    alias_args = _prepare_cli_config_args({"use_type_alias_type": True})
 
     assert prepared_args["use_annotated"] is True
     assert prepared_args["field_constraints"] is True
+    assert alias_args == {"use_type_alias_type": True, "use_type_alias": True}
+    assert GenerateConfig(use_type_alias_type=True).use_type_alias is True
     assert _prepare_cli_config_args({}) == {}
 
 
@@ -904,6 +963,14 @@ def test_create_config_empty_pyproject_uses_single_validated_cli_config() -> Non
 
     assert config.input == (JSON_SCHEMA_DATA_PATH / "force_optional_required.json").resolve()
     assert config.field_constraints is True
+
+
+@pytest.mark.allow_direct_assert
+def test_create_config_http_backend_uses_auto_and_allows_explicit_overrides() -> None:
+    """HTTP backend policy is shared by defaults, pyproject, and CLI overrides."""
+    assert _create_config({}, {}).http_backend is HTTPBackend.AUTO
+    assert _create_config({"http_backend": "httpx2"}, {}).http_backend is HTTPBackend.HTTPX2
+    assert _create_config({"http_backend": "httpx2"}, {"http_backend": "httpx"}).http_backend is HTTPBackend.HTTPX
 
 
 @pytest.mark.allow_direct_assert
@@ -1756,6 +1823,100 @@ def test_dataclass_arguments_invalid(json_str: str, match: str) -> None:
 
 
 @pytest.mark.cli_doc(
+    options=["--import-overrides"],
+    option_description="""Override modules for generated imports by symbol name.
+
+The mapping applies to imports in generated output regardless of their original module, except for
+`__future__` imports. This is useful for routing typing helpers through a project compatibility module
+across Python target versions.
+""",
+    input_schema="jsonschema/datetime.json",
+    cli_args=[
+        "--output-model-type",
+        "typing.TypedDict",
+        "--target-python-version",
+        "3.10",
+        "--import-overrides",
+        '{"TypedDict": "my_project.typing_compat", "NotRequired": "my_project.typing_compat"}',
+    ],
+    golden_output="main/import_overrides.py",
+    primary=True,
+)
+@freeze_time(TIMESTAMP)
+def test_import_overrides(output_file: Path) -> None:
+    """Route generated typing imports through a compatibility module."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "datetime.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=[
+            "--output-model-type",
+            "typing.TypedDict",
+            "--target-python-version",
+            "3.10",
+            "--import-overrides",
+            '{"TypedDict": "my_project.typing_compat", "NotRequired": "my_project.typing_compat"}',
+        ],
+        skip_code_validation=True,
+    )
+    validate_generated_code(output_file.read_text(encoding="utf-8"), str(output_file))
+
+
+@freeze_time(TIMESTAMP)
+def test_generate_import_overrides(output_file: Path) -> None:
+    """Route generated imports through the public generate API."""
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "datetime.json",
+        output_path=output_file,
+        input_file_type=InputFileType.JsonSchema,
+        assert_func=assert_file_content,
+        expected_file="import_overrides.py",
+        output_model_type=DataModelType.TypingTypedDict,
+        target_python_version=PythonVersion.PY_310,
+        import_overrides={
+            "NotRequired": "my_project.typing_compat",
+            "TypedDict": "my_project.typing_compat",
+        },
+    )
+
+
+@freeze_time(TIMESTAMP)
+def test_import_overrides_preserve_alias(output_file: Path) -> None:
+    """Preserve generated import aliases while replacing their modules."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=[
+            "--use-generic-base-class",
+            "--allow-population-by-field-name",
+            "--import-overrides",
+            str(DATA_PATH / "config" / "import_overrides.json"),
+        ],
+    )
+
+
+@freeze_time(TIMESTAMP)
+def test_import_overrides_apply_to_additional_imports(output_file: Path) -> None:
+    """Override explicitly included imports without rewriting future imports."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="import_overrides_additional_import.py",
+        extra_args=[
+            "--additional-imports",
+            "typing_extensions.TypeAlias",
+            "--import-overrides",
+            '{"TypeAlias": "typing", "annotations": "custom.future"}',
+        ],
+    )
+
+
+@pytest.mark.cli_doc(
     options=["--type-overrides"],
     option_description="""Replace schema model types with custom Python types via JSON mapping.
 
@@ -1858,6 +2019,40 @@ def test_type_overrides_scoped(output_file: Path) -> None:
             "--type-overrides",
             '{"User.address": "my_app.Address"}',
         ],
+    )
+
+
+@pytest.mark.parametrize(
+    ("collapse_args", "expected_file"),
+    [
+        pytest.param([], "reuse_type_overrides.py", id="inherit"),
+        pytest.param(["--collapse-reuse-models"], "reuse_type_overrides_collapsed.py", id="collapse"),
+    ],
+)
+def test_type_overrides_preserved_during_module_reuse(
+    collapse_args: list[str],
+    expected_file: str,
+    output_file: Path,
+) -> None:
+    """Keep scoped and model-level overrides outside module reuse optimizations."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "reuse_type_overrides.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file=expected_file,
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--formatters",
+            "builtin",
+            "--reuse-model",
+            *collapse_args,
+            "--type-overrides",
+            '{"B.value": "datetime.date", "D": "datetime.datetime"}',
+            "--disable-timestamp",
+        ],
+        force_exec_validation=True,
     )
 
 
@@ -3892,6 +4087,95 @@ def test_generate_custom_file_header_prepend_after_formatter_docstring() -> None
     )
 
 
+def test_generate_custom_file_header_prepend_after_formatter_parenthesized_docstring() -> None:
+    """Extract future imports after a parenthesized formatter docstring."""
+    run_generate_and_assert(
+        input_=JSON_SCHEMA_DATA_PATH / "simple_string.json",
+        input_file_type=InputFileType.JsonSchema,
+        formatters=[],
+        custom_formatters=["tests.data.python.custom_formatters.add_parenthesized_docstring"],
+        custom_file_header='"""Module docstring."""\n\nimport sys',
+        custom_file_header_mode=CustomFileHeaderMode.Prepend,
+        disable_timestamp=True,
+        expected_file=(
+            EXPECTED_MAIN_PATH / "generate_custom_file_header_prepend_after_formatter_parenthesized_docstring.py"
+        ),
+    )
+
+
+@pytest.mark.allow_direct_assert
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        pytest.param("\n", 1, id="blank"),
+        pytest.param("# comment\r\n", len("# comment\r\n"), id="comment-crlf"),
+        pytest.param(
+            "#!/usr/bin/env python\n# coding: utf-8\n",
+            len("#!/usr/bin/env python\n# coding: utf-8\n"),
+            id="shebang-encoding",
+        ),
+        pytest.param(
+            ' \t\f# comment with """quotes""";\r\n# lf with \'quotes\';\n# cr with semicolon;\r\f# no newline',
+            len(' \t\f# comment with """quotes""";\r\n# lf with \'quotes\';\n# cr with semicolon;\r\f# no newline'),
+            id="comment-fast-path-mixed-newlines",
+        ),
+        pytest.param(
+            "#" + "x" * (_COMMENT_ONLY_HEADER_FAST_PATH_LIMIT - 1),
+            _COMMENT_ONLY_HEADER_FAST_PATH_LIMIT,
+            id="comment-fast-path-limit",
+        ),
+        pytest.param(
+            "#" + "x" * _COMMENT_ONLY_HEADER_FAST_PATH_LIMIT,
+            _COMMENT_ONLY_HEADER_FAST_PATH_LIMIT + 1,
+            id="comment-over-fast-path-limit",
+        ),
+        pytest.param("# comment\r\nimport os\r\n", len("# comment\r\n"), id="comment-prefixed-statement"),
+        pytest.param("r'''doc'''\r\n\r\nimport os\r\n", len("r'''doc'''\r\n\r\n"), id="raw-docstring-crlf"),
+        pytest.param('"""doc"""\r\rimport os\r', len('"""doc"""\r\r'), id="docstring-cr"),
+        pytest.param('\f"""doc"""\n\nimport os\n', len('\f"""doc"""\n\n'), id="docstring-form-feed"),
+        pytest.param('"""doc"""\n  ', len('"""doc"""\n  '), id="docstring-trailing-blank-no-newline"),
+        pytest.param("u'doc'\n\nimport os\n", len("u'doc'\n\n"), id="unicode-docstring"),
+        pytest.param('"""doc""";\nimport os\n', len('"""doc""";\n'), id="semicolon-docstring"),
+        pytest.param(
+            '("""doc"""); # comment\nimport os\n',
+            len('("""doc"""); # comment\n'),
+            id="parenthesized-semicolon-docstring",
+        ),
+        pytest.param('"""doc"""; import os\n', len('"""doc""";'), id="semicolon-second-statement"),
+        pytest.param(
+            '"""doc"""; ' + "\\" + "\nimport os\n",
+            0,
+            id="semicolon-line-continuation",
+        ),
+        pytest.param("b'doc'\n", 0, id="bytes-expression"),
+        pytest.param("f'doc'\n", 0, id="f-string-expression"),
+        pytest.param('"doc"()\n', 0, id="string-postfix-call"),
+        pytest.param('("doc")()\n', 0, id="parenthesized-string-postfix-call"),
+        pytest.param("()\n", 0, id="expression"),
+        pytest.param("import os\n", 0, id="statement"),
+        pytest.param("(\n", 0, id="unclosed-opening-group"),
+        pytest.param("'''unterminated", 0, id="malformed"),
+    ],
+)
+def test_future_import_insertion_point_handles_tokenizer_boundaries(header: str, expected: int) -> None:
+    """Blank, expression, and malformed headers have deterministic insertion points."""
+    assert _find_future_import_insertion_point(header) == expected
+
+
+@pytest.mark.allow_direct_assert
+def test_future_import_insertion_point_handles_runtime_tokenizer_syntax_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Treat runtime-specific tokenizer SyntaxError as malformed external input."""
+
+    def raise_syntax_error(_readline: Any) -> Any:
+        raise SyntaxError
+
+    monkeypatch.setattr(tokenize, "generate_tokens", raise_syntax_error)
+
+    assert _find_future_import_insertion_point("(") == 0
+
+
 def test_custom_file_header_prepend_preserves_future_import_text(output_file: Path) -> None:
     """Preserve future-import text inside generated schema descriptions."""
     run_main_and_assert(
@@ -3920,6 +4204,75 @@ def test_generate_returns_string_with_custom_file_header_and_code() -> None:
         input_file_type=InputFileType.JsonSchema,
         custom_file_header=custom_header,
         expected_file=EXPECTED_MAIN_PATH / "generate_returns_string_with_custom_file_header_and_code.py",
+    )
+
+
+def test_generate_custom_file_header_preserves_runtime_target_tokenizer_boundary() -> None:
+    """Keep 3.10/3.12/3.14 runtime tokenizers behind the target-syntax boundary."""
+    run_generate_and_assert(
+        input_=JSON_SCHEMA_DATA_PATH / "simple_string.json",
+        input_file_type=InputFileType.JsonSchema,
+        custom_file_header_path=DATA_PATH / "custom_file_header_with_newer_target_syntax.txt",
+        target_python_version=PythonVersion.PY_312,
+        formatters=[],
+        expected_file=EXPECTED_MAIN_PATH / "generate_custom_file_header_with_newer_target_syntax.py",
+    )
+
+
+def test_generate_custom_file_header_does_not_treat_fstring_as_docstring() -> None:
+    """Place future imports before an f-string expression."""
+    run_generate_and_assert(
+        input_=JSON_SCHEMA_DATA_PATH / "simple_string.json",
+        input_file_type=InputFileType.JsonSchema,
+        custom_file_header_path=DATA_PATH / "custom_file_header_with_fstring.txt",
+        target_python_version=PythonVersion.PY_312,
+        formatters=[],
+        expected_file=EXPECTED_MAIN_PATH / "generate_custom_file_header_with_fstring.py",
+    )
+
+
+def test_generate_custom_file_header_does_not_treat_postfix_call_as_docstring() -> None:
+    """Place future imports before a call on a parenthesized string expression."""
+    run_generate_and_assert(
+        input_=JSON_SCHEMA_DATA_PATH / "simple_string.json",
+        input_file_type=InputFileType.JsonSchema,
+        custom_file_header_path=DATA_PATH / "custom_file_header_with_postfix_call.txt",
+        formatters=[],
+        expected_file=EXPECTED_MAIN_PATH / "generate_custom_file_header_with_postfix_call.py",
+    )
+
+
+def test_generate_custom_file_header_with_form_feed() -> None:
+    """Preserve a docstring preceded by form-feed whitespace."""
+    run_generate_and_assert(
+        input_=JSON_SCHEMA_DATA_PATH / "simple_string.json",
+        input_file_type=InputFileType.JsonSchema,
+        custom_file_header_path=DATA_PATH / "custom_file_header_with_form_feed.txt",
+        formatters=[],
+        expected_file=EXPECTED_MAIN_PATH / "generate_custom_file_header_with_form_feed.py",
+    )
+
+
+def test_generate_custom_file_header_comments_only_fast_path() -> None:
+    """Preserve comment contents while placing future imports without tokenization."""
+    run_generate_and_assert(
+        input_=JSON_SCHEMA_DATA_PATH / "simple_string.json",
+        input_file_type=InputFileType.JsonSchema,
+        custom_file_header_path=DATA_PATH / "custom_file_header_fast_path.txt",
+        formatters=[],
+        expected_file=EXPECTED_MAIN_PATH / "generate_custom_file_header_comments_only.py",
+    )
+
+
+def test_generate_custom_file_header_with_parenthesized_docstring() -> None:
+    """Place future imports after a parenthesized, concatenated docstring."""
+    run_generate_and_assert(
+        input_=JSON_SCHEMA_DATA_PATH / "simple_string.json",
+        input_file_type=InputFileType.JsonSchema,
+        custom_file_header_path=DATA_PATH / "custom_file_header_with_parenthesized_docstring.txt",
+        target_python_version=PythonVersion.PY_312,
+        formatters=[],
+        expected_file=EXPECTED_MAIN_PATH / "generate_custom_file_header_with_parenthesized_docstring.py",
     )
 
 

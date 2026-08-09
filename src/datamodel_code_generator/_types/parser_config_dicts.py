@@ -21,6 +21,7 @@ if TYPE_CHECKING:
         CollapseRootModelsNameStrategy,
         DataclassArguments,
         FieldTypeCollisionStrategy,
+        HTTPBackend,
         JsonSchemaVersion,
         NamingStrategy,
         OpenAPIScope,
@@ -121,12 +122,15 @@ class ParserConfigDict(TypedDict):
     use_operation_id_as_name: NotRequired[bool]
     use_unique_items_as_set: NotRequired[bool]
     use_tuple_for_fixed_items: NotRequired[bool]
+    use_tuple_for_fixed_length_arrays: NotRequired[bool]
+    use_total_false_for_typed_dict: NotRequired[bool]
     use_closed_typed_dict: NotRequired[bool]
     allof_merge_mode: NotRequired[AllOfMergeMode]
     allof_class_hierarchy: NotRequired[AllOfClassHierarchy]
     allow_remote_refs: NotRequired[bool | None]
     strict_refs: NotRequired[bool]
     allow_private_network: NotRequired[bool]
+    http_backend: NotRequired[HTTPBackend]
     http_headers: NotRequired[Sequence[tuple[str, str]] | None]
     http_local_ref_path: NotRequired[Path | None]
     http_ignore_tls: NotRequired[bool]
@@ -178,6 +182,7 @@ class ParserConfigDict(TypedDict):
     naming_strategy: NotRequired[NamingStrategy | None]
     duplicate_name_suffix: NotRequired[dict[str, str] | None]
     dataclass_arguments: NotRequired[DataclassArguments | None]
+    import_overrides: NotRequired[dict[str, str] | None]
     type_mappings: NotRequired[list[str] | None]
     type_overrides: NotRequired[dict[str, str] | None]
     read_only_write_only_model_type: NotRequired[ReadOnlyWriteOnlyModelType | None]

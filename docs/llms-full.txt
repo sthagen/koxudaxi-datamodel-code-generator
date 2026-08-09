@@ -139,6 +139,10 @@ pip install 'datamodel-code-generator[http]'
 datamodel-codegen --url https://example.com/api/openapi.yaml --output model.py
 ```
 
+The `http` extra is the stable, non-deprecated backend. For the experimental
+HTTPX2 alternative, pass `--http-backend httpx2`; see
+[HTTP backend selection](faq.md#http-backend-selection).
+
 ### ⚙️ Use with pyproject.toml
 
 ```toml title="pyproject.toml"
@@ -4778,14 +4782,12 @@ datamodel-codegen --input schema.json --output-model-type msgspec.Struct --outpu
 ```
 
 ```python
-from msgspec import Struct, field
-from typing import Union, UnsetType
-from msgspec import UNSET
+from msgspec import Struct, UNSET, UnsetType
 
 class Pet(Struct):
     id: int
     name: str
-    tag: Union[str, UnsetType] = UNSET
+    tag: str | UnsetType = UNSET
 ```
 
 ### When to use
@@ -6388,6 +6390,10 @@ Some IDEs don't fully understand `from __future__ import annotations`.
 
 Source: https://datamodel-code-generator.koxudaxi.dev/root-model-and-type-alias/
 
+<!-- related-cli-options: --use-type-alias, --use-type-alias-type, --target-python-version -->
+
+# 📦 Root Models and Type Aliases
+
 When a schema defines a simple type (not an object with properties), `datamodel-code-generator` creates a root model. If you don't want to introduce a new level of attribute access (`.root`) or want to use generated types as plain Python types in non-Pydantic code, you can use the `--use-type-alias` flag to generate type aliases instead of root models.
 
 ## ⚠️ Notes and Limitations
@@ -6408,10 +6414,16 @@ The type of type alias generated depends on the output model type and target Pyt
 | **dataclasses** | `type` statement | `TypeAlias` |
 | **msgspec** | `type` statement | `TypeAlias` |
 
+Use `--use-type-alias-type` to force `TypeAliasType` for TypedDict,
+dataclass, and msgspec output targeting Python 3.10 or 3.11. This option
+implies `--use-type-alias`, so the two flags do not need to be combined.
+Python 3.12 and newer still use the native `type` statement.
+
 ### 🤔 Why the difference?
 
 - **Pydantic v2** requires `TypeAliasType` because it cannot properly handle `TypeAlias` annotations
 - **Other output types** (TypedDict, dataclasses, msgspec) use `TypeAlias` for better compatibility with libraries that may not expect `TypeAliasType` objects
+- **`--use-type-alias-type`** opts into runtime `TypeAliasType` objects for those output types on Python 3.10-3.11
 - **Python 3.12+** uses the native `type` statement for all output types
 
 ## 📝 Example
@@ -6517,6 +6529,7 @@ class User(BaseModel):
 ## 📖 See Also
 
 - 🖥️ [CLI Reference: `--use-type-alias`](cli-reference/typing-customization.md#use-type-alias) - Detailed CLI option documentation
+- 🖥️ [CLI Reference: `--use-type-alias-type`](cli-reference/typing-customization.md#use-type-alias-type) - Force runtime type alias objects before Python 3.12
 - 🎯 [CLI Reference: `--target-python-version`](cli-reference/model-customization.md#target-python-version) - Control Python version-specific syntax
 
 ---
@@ -7930,9 +7943,40 @@ You can generate models with `datamodel_code_generator.generate` using parameter
 
 ### 📦 Installation
 
+The base package is sufficient when all inputs and references are local. To
+load an HTTP(S) input or resolve a remote `$ref`, install the stable HTTP extra:
+
 ```bash
 pip install 'datamodel-code-generator[http]'
 ```
+
+The `http` extra uses HTTPX and is supported and not deprecated. The
+experimental HTTPX2 backend is available separately:
+
+```bash
+pip install 'datamodel-code-generator[httpx2]'
+```
+
+The experimental extra is not included in `datamodel-code-generator[all]`.
+The default `HTTPBackend.AUTO` policy selects stable HTTPX when its client
+module is installed, including when both extras are installed, and selects
+HTTPX2 only when that module is absent. Require HTTPX2 with
+`--http-backend httpx2`, `http_backend = "httpx2"` under
+`[tool.datamodel-codegen]`, or the public API:
+
+```python
+from urllib.parse import urlparse
+
+from datamodel_code_generator import HTTPBackend, generate
+
+result = generate(
+    urlparse("https://example.com/schema.json"),
+    http_backend=HTTPBackend.HTTPX2,
+)
+```
+
+See [HTTP backend selection](faq.md#http-backend-selection) for the complete
+automatic and explicit selection rules.
 
 ### 📝 Getting Generated Code as String
 
@@ -8556,6 +8600,17 @@ Source: https://datamodel-code-generator.koxudaxi.dev/pyproject_toml/
 # ⚙️ pyproject.toml Configuration
 
 datamodel-code-generator can be configured using `pyproject.toml`. The tool automatically searches for `pyproject.toml` in the current directory and parent directories (stopping at the git repository root).
+
+HTTP client selection uses the same values as `--http-backend`. For example,
+the experimental HTTPX2 pair can be required explicitly:
+
+```toml
+[tool.datamodel-codegen]
+http-backend = "httpx2"
+```
+
+The default is `"auto"`, which prefers stable HTTPX. See
+[HTTP backend selection](faq.md#http-backend-selection).
 
 ## 🚀 Basic Usage
 
@@ -9541,8 +9596,8 @@ This documentation is auto-generated from test cases.
 
 | Category | Options | Description |
 |----------|---------|-------------|
-| 📁 [Base Options](base-options.md) | 12 | Input/output configuration |
-| 🔧 [Typing Customization](typing-customization.md) | 30 | Type annotation and import behavior |
+| 📁 [Base Options](base-options.md) | 13 | Input/output configuration |
+| 🔧 [Typing Customization](typing-customization.md) | 34 | Type annotation and import behavior |
 | 🏷️ [Field Customization](field-customization.md) | 27 | Field naming and docstring behavior |
 | 🏗️ [Model Customization](model-customization.md) | 44 | Model generation behavior |
 | 🎨 [Template Customization](template-customization.md) | 27 | Output formatting and custom rendering |
@@ -9559,7 +9614,7 @@ Use these pages when you know the workflow area but not the exact option name.
 |-------|---------|--------|
 | [Model Customization](topics/model-customization.md) | 23 | Model Naming, Model Reuse, Model Shape, Root Model |
 | [Template Customization](topics/template-customization.md) | 21 | Custom Templates, Generated Output, Imports, Output Formatting |
-| [Typing Customization](topics/typing-customization.md) | 20 | Imports, Collection Types, Type Alias, Type Mapping, Type Syntax |
+| [Typing Customization](topics/typing-customization.md) | 23 | Imports, Collection Types, Type Alias, Type Mapping, Type Syntax |
 | [OpenAPI](topics/openapi.md) | 7 | OpenAPI Naming, OpenAPI Paths, OpenAPI Scopes, Read Only Write Only |
 
 ## 🔗 Option Relationships
@@ -9570,6 +9625,7 @@ These links are generated from CLI option metadata and summarize options that im
 |--------|------|-----------|--------|------|
 | [`--use-annotated`](typing-customization.md#use-annotated) | Implies | Always | [`--field-constraints`](field-customization.md#field-constraints) enabled | - |
 | [`--use-specialized-enum`](typing-customization.md#use-specialized-enum) | Requires | Always | [`--target-python-version`](model-customization.md#target-python-version) = `3.11+` | `--use-specialized-enum` requires `--target-python-version` 3.11 or higher. |
+| [`--use-type-alias-type`](typing-customization.md#use-type-alias-type) | Implies | Always | [`--use-type-alias`](typing-customization.md#use-type-alias) enabled | - |
 | [`--original-field-name-delimiter`](field-customization.md#original-field-name-delimiter) | Requires | Always | [`--snake-case-field`](field-customization.md#snake-case-field) enabled | `--original-field-name-delimiter` can not be used without `--snake-case-field`. |
 | [`--allow-extra-fields`](model-customization.md#allow-extra-fields) | Implies | Always | [`--extra-fields`](field-customization.md#extra-fields) = `allow` | - |
 | [`--collapse-root-models-name-strategy`](model-customization.md#collapse-root-models-name-strategy) | Requires | Always | [`--collapse-root-models`](model-customization.md#collapse-root-models) enabled | `--collapse-root-models-name-strategy` requires `--collapse-root-models`. |
@@ -9677,6 +9733,7 @@ These links are generated from CLI option metadata and summarize options that im
 ### H {#h}
 
 - [`--help`](utility-options.md#help)
+- [`--http-backend`](base-options.md#http-backend)
 - [`--http-headers`](general-options.md#http-headers)
 - [`--http-ignore-tls`](general-options.md#http-ignore-tls)
 - [`--http-local-ref-path`](general-options.md#http-local-ref-path)
@@ -9687,6 +9744,7 @@ These links are generated from CLI option metadata and summarize options that im
 
 - [`--ignore-enum-constraints`](typing-customization.md#ignore-enum-constraints)
 - [`--ignore-pyproject`](general-options.md#ignore-pyproject)
+- [`--import-overrides`](typing-customization.md#import-overrides)
 - [`--include-path-parameters`](openapi-only-options.md#include-path-parameters)
 - [`--infer-union-variant-names`](field-customization.md#infer-union-variant-names)
 - [`--input`](base-options.md#input)
@@ -9813,8 +9871,11 @@ These links are generated from CLI option metadata and summarize options that im
 - [`--use-status-code-in-response-name`](openapi-only-options.md#use-status-code-in-response-name)
 - [`--use-subclass-enum`](model-customization.md#use-subclass-enum)
 - [`--use-title-as-name`](field-customization.md#use-title-as-name)
+- [`--use-total-false-for-typed-dict`](typing-customization.md#use-total-false-for-typed-dict)
 - [`--use-tuple-for-fixed-items`](typing-customization.md#use-tuple-for-fixed-items)
+- [`--use-tuple-for-fixed-length-arrays`](typing-customization.md#use-tuple-for-fixed-length-arrays)
 - [`--use-type-alias`](typing-customization.md#use-type-alias)
+- [`--use-type-alias-type`](typing-customization.md#use-type-alias-type)
 - [`--use-type-checking-imports`](template-customization.md#use-type-checking-imports)
 - [`--use-union-operator`](typing-customization.md#use-union-operator)
 - [`--use-unique-items-as-set`](typing-customization.md#use-unique-items-as-set)
@@ -9844,6 +9905,7 @@ Source: https://datamodel-code-generator.koxudaxi.dev/cli-reference/base-options
 | [`--emit-model-metadata`](#emit-model-metadata) | Write a separate JSON map from source schema references to t... |
 | [`--encoding`](#encoding) | Specify character encoding for input and output files. |
 | [`--external-ref-mapping`](#external-ref-mapping) | Map external `$ref` files to Python packages. |
+| [`--http-backend`](#http-backend) | Select the HTTP client backend for remote schemas. |
 | [`--input`](#input) | Specify the input schema file path. |
 | [`--input-file-type`](#input-file-type) | Specify the input file type for code generation. |
 | [`--input-model`](#input-model) | Import a Python type or dict schema from a module or Python ... |
@@ -9852,7 +9914,7 @@ Source: https://datamodel-code-generator.koxudaxi.dev/cli-reference/base-options
 | [`--preset`](#preset) | Apply an immutable built-in option preset. |
 | [`--schema-version`](#schema-version) | Schema version to use for parsing. |
 | [`--schema-version-mode`](#schema-version-mode) | Schema version validation mode. |
-| [`--url`](#url) | Fetch schema from URL with custom HTTP headers. |
+| [`--url`](#url) | Fetch a schema from a URL with custom HTTP headers. |
 
 ---
 
@@ -10122,6 +10184,65 @@ instead of generating duplicate classes from external schema files.
     class ErrorResponse(BaseModel):
         error: Error
         timestamp: AwareDatetime
+    ```
+
+---
+
+## `--http-backend` {#http-backend}
+
+Select the HTTP client backend for remote schemas.
+
+`--http-backend auto` selects stable HTTPX when its client module is installed
+and selects experimental HTTPX2 only when that module is absent. Explicit
+`httpx` or `httpx2` selections require that exact backend. Explicit selections
+and paired dependency errors do not fall back.
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --http-backend auto # (1)!
+    ```
+
+    1. :material-arrow-left: `--http-backend` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```json
+    {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Pet",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        }
+      }
+    }
+    ```
+
+    **Output:**
+
+    ```python
+    # generated by datamodel-codegen:
+    #   filename:  http://localhost/schema.json
+
+    from __future__ import annotations
+
+    from pydantic import BaseModel
+
+
+    class Pet(BaseModel):
+        id: int | None = None
+        name: str | None = None
+        tag: str | None = None
     ```
 
 ---
@@ -10788,12 +10909,11 @@ The `--schema-version-mode` option controls how schema version validation is per
 
 ## `--url` {#url}
 
-Fetch schema from URL with custom HTTP headers.
+Fetch a schema from a URL with custom HTTP headers.
 
 The `--url` flag specifies a remote URL to fetch the schema from instead of
-a local file. The `--http-headers` flag adds custom HTTP headers to the request,
-useful for authentication (e.g., Bearer tokens) or custom API requirements.
-Format: `HeaderName:HeaderValue`.
+a local file. The `--http-headers` flag adds request headers in
+`HeaderName:HeaderValue` format.
 
 !!! tip "Usage"
 
@@ -16247,7 +16367,7 @@ The `--target-python-version` flag controls Python version-specific syntax:
 
 This affects import statements and type annotation syntax in generated code.
 
-**See also:** [CI/CD Integration](../ci-cd.md), [Output Model Types](../output-model-types.md), [Python Version Compatibility](../python-version-compatibility.md)
+**See also:** [CI/CD Integration](../ci-cd.md), [Output Model Types](../output-model-types.md), [Python Version Compatibility](../python-version-compatibility.md), [Root Models and Type Aliases](../root-model-and-type-alias.md)
 
 !!! tip "Usage"
 
@@ -21865,6 +21985,7 @@ Source: https://datamodel-code-generator.koxudaxi.dev/cli-reference/typing-custo
 | [`--enum-field-as-literal`](#enum-field-as-literal) | Convert all enum fields to Literal types instead of Enum cla... |
 | [`--enum-field-as-literal-map`](#enum-field-as-literal-map) | Override enum/literal generation per-field via JSON mapping. |
 | [`--ignore-enum-constraints`](#ignore-enum-constraints) | Ignore enum constraints and use base string type instead of ... |
+| [`--import-overrides`](#import-overrides) | Override modules for generated imports by symbol name. |
 | [`--no-use-closed-typed-dict`](#no-use-closed-typed-dict) | Disable PEP 728 TypedDict closed/extra_items generation. |
 | [`--no-use-specialized-enum`](#no-use-specialized-enum) | Disable specialized Enum classes for Python 3.11+ code gener... |
 | [`--no-use-standard-collections`](#no-use-standard-collections) | Use typing.Dict/List instead of built-in dict/list for conta... |
@@ -21885,8 +22006,11 @@ Source: https://datamodel-code-generator.koxudaxi.dev/cli-reference/typing-custo
 | [`--use-specialized-enum`](#use-specialized-enum) | Generate StrEnum/IntEnum for string/integer enums (Python 3.... |
 | [`--use-standard-collections`](#use-standard-collections) | Use built-in dict/list instead of typing.Dict/List. |
 | [`--use-standard-primitive-types`](#use-standard-primitive-types) | Use Python standard library types for string formats instead... |
+| [`--use-total-false-for-typed-dict`](#use-total-false-for-typed-dict) | Generate TypedDict declarations with `total=False`. |
 | [`--use-tuple-for-fixed-items`](#use-tuple-for-fixed-items) | Generate tuple types for arrays with items array syntax. |
+| [`--use-tuple-for-fixed-length-arrays`](#use-tuple-for-fixed-length-arrays) | Generate tuple types for homogeneous fixed-length arrays. |
 | [`--use-type-alias`](#use-type-alias) | Use TypeAlias instead of root models for type definitions (e... |
+| [`--use-type-alias-type`](#use-type-alias-type) | Use runtime TypeAliasType objects for aliases before Python ... |
 | [`--use-union-operator`](#use-union-operator) | Use | operator for Union types (PEP 604). |
 | [`--use-unique-items-as-set`](#use-unique-items-as-set) | Generate set types for arrays with uniqueItems constraint. |
 
@@ -22167,23 +22291,23 @@ even in multiple inheritance scenarios where two parent schemas define the same 
 
 
         class Thing(Entity):
-            type: str | None = 'playground:Thing'
+            type: str
             type_list: list[str] | None = ['playground:Thing']
             name: constr(min_length=1) = Field(..., description='The things name')
 
 
         class Location(Entity2):
-            type: str | None = 'playground:Location'
-            type_list: list[str] | None = ['playground:Location']
+            type: str
+            type_list: list[str]
             address: constr(min_length=5) = Field(
                 ..., description='The address of the location'
             )
 
 
         class Person(Thing, Location):
-            name: constr(min_length=1) | None = Field(None, description="The person's name")
-            type: str | None = 'playground:Person'
-            type_list: list[str] | None = ['playground:Person']
+            name: constr(min_length=1) = Field(..., description="The person's name")
+            type: str
+            type_list: list[str]
         ```
 
     === "Without Option"
@@ -23609,6 +23733,71 @@ defined enum members.
         class EnumWithOneField(Enum):
             FIELD = 'FIELD'
         ```
+
+---
+
+## `--import-overrides` {#import-overrides}
+
+Override modules for generated imports by symbol name.
+
+The mapping applies to imports in generated output regardless of their original module, except for
+`__future__` imports. This is useful for routing typing helpers through a project compatibility module
+across Python target versions.
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --output-model-type typing.TypedDict --target-python-version 3.10 --import-overrides '{"TypedDict": "my_project.typing_compat", "NotRequired": "my_project.typing_compat"}' # (1)!
+    ```
+
+    1. :material-arrow-left: `--import-overrides` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```json
+    {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "User": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "example": "ken"
+            },
+            "birthDay": {
+              "type": "string",
+              "format": "date-time",
+              "example": "2016-08-29T09:12:33.001Z"
+            }
+          }
+        }
+      }
+    }
+    ```
+
+    **Output:**
+
+    ```python
+    # generated by datamodel-codegen:
+    #   filename:  datetime.json
+    #   timestamp: 1985-10-26T08:21:00+00:00
+
+    from __future__ import annotations
+
+    from typing import Any, TypeAlias
+
+    from my_project.typing_compat import NotRequired, TypedDict
+
+    Model: TypeAlias = Any
+
+
+    class User(TypedDict):
+        name: NotRequired[str]
+        birthDay: NotRequired[str]
+    ```
 
 ---
 
@@ -26281,6 +26470,254 @@ output types. Pydantic already uses these types by default.
 
 ---
 
+## `--use-total-false-for-typed-dict` {#use-total-false-for-typed-dict}
+
+Generate TypedDict declarations with `total=False`.
+
+Optional fields are left unwrapped, while required fields are marked with
+`Required[...]`. This can substantially reduce generated code when most fields
+are optional.
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --output-model-type typing.TypedDict --use-total-false-for-typed-dict --use-frozen-field # (1)!
+    ```
+
+    1. :material-arrow-left: `--use-total-false-for-typed-dict` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```json
+    {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$defs": {
+        "ClassModel": {
+          "type": "object",
+          "properties": {
+            "required_value": {
+              "type": "string"
+            },
+            "optional_value": {
+              "type": "integer"
+            },
+            "required_read_only": {
+              "type": "boolean",
+              "readOnly": true
+            },
+            "optional_read_only": {
+              "type": "number",
+              "readOnly": true
+            }
+          },
+          "required": [
+            "required_value",
+            "required_read_only"
+          ]
+        },
+        "BaseModel": {
+          "type": "object",
+          "properties": {
+            "base_required": {
+              "type": "string"
+            },
+            "base_optional": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "base_required"
+          ]
+        },
+        "FunctionalModel": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/BaseModel"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "invalid-key": {
+                  "type": "string"
+                },
+                "child_optional": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "invalid-key"
+              ]
+            }
+          ]
+        },
+        "ClosedModel": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "closed_required": {
+              "type": "string"
+            },
+            "closed_optional": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "closed_required"
+          ]
+        },
+        "ExtraItemsModel": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "properties": {
+            "extra_required": {
+              "type": "string"
+            },
+            "extra_optional": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "extra_required"
+          ]
+        }
+      },
+      "type": "object",
+      "properties": {
+        "class_model": {
+          "$ref": "#/$defs/ClassModel"
+        },
+        "functional_model": {
+          "$ref": "#/$defs/FunctionalModel"
+        },
+        "closed_model": {
+          "$ref": "#/$defs/ClosedModel"
+        },
+        "extra_items_model": {
+          "$ref": "#/$defs/ExtraItemsModel"
+        }
+      },
+      "required": [
+        "class_model"
+      ]
+    }
+    ```
+
+    **Output:**
+
+    === "Python 3.10"
+
+        ```python
+        # generated by datamodel-codegen:
+        #   filename:  use_total_false_for_typed_dict.json
+        #   timestamp: 2019-07-26T00:00:00+00:00
+
+        from __future__ import annotations
+
+        from typing_extensions import ReadOnly, Required, TypedDict
+
+
+        class ClassModel(TypedDict, total=False):
+            required_value: Required[str]
+            optional_value: int
+            required_read_only: Required[ReadOnly[bool]]
+            optional_read_only: ReadOnly[float]
+
+
+        class BaseModel(TypedDict, total=False):
+            base_required: Required[str]
+            base_optional: int
+
+
+        FunctionalModel = TypedDict(
+            'FunctionalModel',
+            {
+                'base_required': Required[str],
+                'base_optional': int,
+                'invalid-key': Required[str],
+                'child_optional': bool,
+            },
+            total=False,
+        )
+
+
+        class ClosedModel(TypedDict, total=False, closed=True):
+            closed_required: Required[str]
+            closed_optional: int
+
+
+        class ExtraItemsModel(TypedDict, total=False, extra_items=int):
+            extra_required: Required[str]
+            extra_optional: bool
+
+
+        class Model(TypedDict, total=False):
+            class_model: Required[ClassModel]
+            functional_model: FunctionalModel
+            closed_model: ClosedModel
+            extra_items_model: ExtraItemsModel
+        ```
+
+    === "Python 3.11"
+
+        ```python
+        # generated by datamodel-codegen:
+        #   filename:  use_total_false_for_typed_dict.json
+        #   timestamp: 2019-07-26T00:00:00+00:00
+
+        from __future__ import annotations
+
+        from typing import Required
+
+        from typing_extensions import ReadOnly, TypedDict
+
+
+        class ClassModel(TypedDict, total=False):
+            required_value: Required[str]
+            optional_value: int
+            required_read_only: Required[ReadOnly[bool]]
+            optional_read_only: ReadOnly[float]
+
+
+        class BaseModel(TypedDict, total=False):
+            base_required: Required[str]
+            base_optional: int
+
+
+        FunctionalModel = TypedDict(
+            'FunctionalModel',
+            {
+                'base_required': Required[str],
+                'base_optional': int,
+                'invalid-key': Required[str],
+                'child_optional': bool,
+            },
+            total=False,
+        )
+
+
+        class ClosedModel(TypedDict, total=False, closed=True):
+            closed_required: Required[str]
+            closed_optional: int
+
+
+        class ExtraItemsModel(TypedDict, total=False, extra_items=int):
+            extra_required: Required[str]
+            extra_optional: bool
+
+
+        class Model(TypedDict, total=False):
+            class_model: Required[ClassModel]
+            functional_model: FunctionalModel
+            closed_model: ClosedModel
+            extra_items_model: ExtraItemsModel
+        ```
+
+---
+
 ## `--use-tuple-for-fixed-items` {#use-tuple-for-fixed-items}
 
 Generate tuple types for arrays with items array syntax.
@@ -26334,6 +26771,152 @@ with `minItems == maxItems == len(items)`, generate a tuple type instead of a li
 
 ---
 
+## `--use-tuple-for-fixed-length-arrays` {#use-tuple-for-fixed-length-arrays}
+
+Generate tuple types for homogeneous fixed-length arrays.
+
+When `--use-tuple-for-fixed-length-arrays` is enabled and an array has one
+`items` schema with `minItems == maxItems`, generate a tuple type instead of a
+list. An empty fixed-length array becomes `tuple[()]`.
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --use-tuple-for-fixed-length-arrays --output-model-type pydantic_v2.BaseModel # (1)!
+    ```
+
+    1. :material-arrow-left: `--use-tuple-for-fixed-length-arrays` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```yaml
+    openapi: 3.0.3
+    info:
+      title: Fixed length array tuples
+      version: 1.0.0
+    paths: {}
+    components:
+      schemas:
+        FixedLengthArrayTuples:
+          type: object
+          required:
+            - vector
+            - allOfVector
+            - allOfEmpty
+            - empty
+            - inlineObject
+            - refValues
+            - range
+            - minimumOnly
+          properties:
+            vector:
+              type: array
+              minItems: 3
+              maxItems: 3
+              items:
+                type: number
+                format: double
+            allOfVector:
+              allOf:
+                - type: array
+                  minItems: 2
+                  maxItems: 2
+                  items:
+                    type: string
+            allOfEmpty:
+              allOf:
+                - type: array
+                  minItems: 0
+                  maxItems: 0
+                  items:
+                    type: string
+            empty:
+              type: array
+              minItems: 0
+              maxItems: 0
+              items:
+                type: number
+                format: double
+            inlineObject:
+              type: array
+              minItems: 2
+              maxItems: 2
+              items:
+                type: object
+                required:
+                  - value
+                properties:
+                  value:
+                    type: string
+            refValues:
+              type: array
+              minItems: 3
+              maxItems: 3
+              items:
+                $ref: '#/components/schemas/RefValue'
+            range:
+              type: array
+              minItems: 2
+              maxItems: 4
+              items:
+                type: integer
+            minimumOnly:
+              type: array
+              minItems: 3
+              items:
+                type: string
+        RefValue:
+          type: object
+          required:
+            - id
+          properties:
+            id:
+              type: integer
+    ```
+
+    **Output:**
+
+    ```python
+    # generated by datamodel-codegen:
+    #   filename:  fixed_length_array_tuples.yaml
+    #   timestamp: 2019-07-26T00:00:00+00:00
+
+    from __future__ import annotations
+
+    from pydantic import BaseModel, Field, RootModel
+
+
+    class AllOfVector(RootModel[tuple[str, str]]):
+        root: tuple[str, str]
+
+
+    class AllOfEmpty(RootModel[tuple[()]]):
+        root: tuple[()]
+
+
+    class InlineObjectItem(BaseModel):
+        value: str
+
+
+    class RefValue(BaseModel):
+        id: int
+
+
+    class FixedLengthArrayTuples(BaseModel):
+        vector: tuple[float, float, float]
+        allOfVector: AllOfVector
+        allOfEmpty: AllOfEmpty
+        empty: tuple[()]
+        inlineObject: tuple[InlineObjectItem, InlineObjectItem]
+        refValues: tuple[RefValue, RefValue, RefValue]
+        range: list[int] = Field(..., max_length=4, min_length=2)
+        minimumOnly: list[str] = Field(..., min_length=3)
+    ```
+
+---
+
 ## `--use-type-alias` {#use-type-alias}
 
 Use TypeAlias instead of root models for type definitions (experimental).
@@ -26345,7 +26928,7 @@ syntax. This feature is experimental.
 
 **Related:** [`--target-python-version`](model-customization.md#target-python-version)
 
-**See also:** [Model Reuse and Deduplication](../model-reuse.md)
+**See also:** [Model Reuse and Deduplication](../model-reuse.md), [Root Models and Type Aliases](../root-model-and-type-alias.md)
 
 !!! tip "Usage"
 
@@ -26530,6 +27113,142 @@ syntax. This feature is experimental.
             typename__: Literal['ModelWithTypeAliasField'] | None = Field(
                 'ModelWithTypeAliasField', alias='__typename'
             )
+        ```
+
+---
+
+## `--use-type-alias-type` {#use-type-alias-type}
+
+Use runtime TypeAliasType objects for aliases before Python 3.12 (experimental).
+
+The `--use-type-alias-type` flag implies `--use-type-alias` and forces
+`TypeAliasType` for every output model type on Python 3.10-3.11. Python 3.12+
+continues to use native `type` statements.
+
+**See also:** [Root Models and Type Aliases](../root-model-and-type-alias.md)
+
+**Option relationships:**
+
+- **Implies:** [`--use-type-alias`](typing-customization.md#use-type-alias) enabled
+
+!!! tip "Usage"
+
+    ```bash
+    datamodel-codegen --input schema.json --output-model-type typing.TypedDict --use-type-alias-type --target-python-version 3.10 # (1)!
+    ```
+
+    1. :material-arrow-left: `--use-type-alias-type` - the option documented here
+
+??? example "Examples"
+
+    **Input Schema:**
+
+    ```json
+    {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "SimpleString": {
+          "type": "string"
+        },
+        "UnionType": {
+          "anyOf": [
+            {"type": "string"},
+            {"type": "integer"}
+          ]
+        },
+        "ArrayType": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "AnnotatedType": {
+          "title": "MyAnnotatedType",
+          "description": "An annotated union type",
+          "anyOf": [
+            {"type": "string"},
+            {"type": "boolean"}
+          ]
+        },
+        "ModelWithTypeAliasField": {
+          "type": "object",
+          "properties": {
+            "simple_field": {"$ref": "#/definitions/SimpleString"},
+            "union_field": {"$ref": "#/definitions/UnionType"},
+            "array_field": {"$ref": "#/definitions/ArrayType"},
+            "annotated_field": {"$ref": "#/definitions/AnnotatedType"}
+          }
+        }
+      }
+    }
+    ```
+
+    **Output:**
+
+    === "Python 3.10"
+
+        ```python
+        # generated by datamodel-codegen:
+        #   filename:  type_alias.json
+        #   timestamp: 2019-07-26T00:00:00+00:00
+
+        from __future__ import annotations
+
+        from typing import Any, TypedDict
+
+        from typing_extensions import NotRequired, TypeAliasType
+
+        Model = TypeAliasType("Model", Any)
+
+
+        SimpleString = TypeAliasType("SimpleString", str)
+
+
+        UnionType = TypeAliasType("UnionType", str | int)
+
+
+        ArrayType = TypeAliasType("ArrayType", list[str])
+
+
+        AnnotatedType = TypeAliasType("AnnotatedType", str | bool)
+
+
+        class ModelWithTypeAliasField(TypedDict):
+            simple_field: NotRequired[SimpleString]
+            union_field: NotRequired[UnionType]
+            array_field: NotRequired[ArrayType]
+            annotated_field: NotRequired[AnnotatedType]
+        ```
+
+    === "Python 3.12"
+
+        ```python
+        # generated by datamodel-codegen:
+        #   filename:  type_alias.json
+        #   timestamp: 2019-07-26T00:00:00+00:00
+
+        from __future__ import annotations
+
+        from typing import Any, NotRequired, TypedDict
+
+        type Model = Any
+
+
+        type SimpleString = str
+
+
+        type UnionType = str | int
+
+
+        type ArrayType = list[str]
+
+
+        type AnnotatedType = str | bool
+
+
+        class ModelWithTypeAliasField(TypedDict):
+            simple_field: NotRequired[SimpleString]
+            union_field: NotRequired[UnionType]
+            array_field: NotRequired[ArrayType]
+            annotated_field: NotRequired[AnnotatedType]
         ```
 
 ---
@@ -34111,7 +34830,7 @@ Source: https://datamodel-code-generator.koxudaxi.dev/cli-reference/general-opti
 | [`--fail-on-multi-module-stdout`](#fail-on-multi-module-stdout) | Fail instead of concatenating multiple modules in text stdou... |
 | [`--generate-cli-command`](#generate-cli-command) | Generate CLI command from pyproject.toml configuration. |
 | [`--generate-pyproject-config`](#generate-pyproject-config) | Generate pyproject.toml configuration from CLI arguments. |
-| [`--http-headers`](#http-headers) | Fetch schema from URL with custom HTTP headers. |
+| [`--http-headers`](#http-headers) | Fetch a schema from a URL with custom HTTP headers. |
 | [`--http-ignore-tls`](#http-ignore-tls) | Disable TLS certificate verification for HTTPS requests. |
 | [`--http-local-ref-path`](#http-local-ref-path) | Resolve HTTP references from local schema files. |
 | [`--http-query-parameters`](#http-query-parameters) | Add query parameters to HTTP requests for remote schemas. |
@@ -35773,12 +36492,11 @@ a working CLI command into a reusable configuration file.
 
 ## `--http-headers` {#http-headers}
 
-Fetch schema from URL with custom HTTP headers.
+Fetch a schema from a URL with custom HTTP headers.
 
 The `--url` flag specifies a remote URL to fetch the schema from instead of
-a local file. The `--http-headers` flag adds custom HTTP headers to the request,
-useful for authentication (e.g., Bearer tokens) or custom API requirements.
-Format: `HeaderName:HeaderValue`.
+a local file. The `--http-headers` flag adds request headers in
+`HeaderName:HeaderValue` format.
 
 !!! tip "Usage"
 
@@ -37051,9 +37769,9 @@ Options are grouped from shared CLI metadata and link back to their generated re
 
 | Group | Options | Description |
 |-------|---------|-------------|
-| [Imports](#imports) | 1 | Generated imports and type-checking import behavior. |
-| [Collection Types](#collection-types) | 5 | Collection and tuple/set generation. |
-| [Type Alias](#type-alias) | 2 | TypeAlias and root-model alias output. |
+| [Imports](#imports) | 2 | Generated imports and type-checking import behavior. |
+| [Collection Types](#collection-types) | 6 | Collection and tuple/set generation. |
+| [Type Alias](#type-alias) | 3 | TypeAlias and root-model alias output. |
 | [Type Mapping](#type-mapping) | 9 | Scalar, date/time, and custom type mapping. |
 | [Type Syntax](#type-syntax) | 3 | Modern annotation syntax and Annotated usage. |
 
@@ -37064,6 +37782,7 @@ Generated imports and type-checking import behavior.
 | Option | Description |
 |--------|-------------|
 | [`--disable-future-imports`](../typing-customization.md#disable-future-imports) | Prevent automatic addition of __future__ imports in generated code. |
+| [`--import-overrides`](../typing-customization.md#import-overrides) | Override modules for generated imports by symbol name. |
 
 ## Collection Types {#collection-types}
 
@@ -37075,6 +37794,7 @@ Collection and tuple/set generation.
 | [`--use-generic-container-types`](../typing-customization.md#use-generic-container-types) | Use generic container types (Sequence, Mapping) for type hinting. |
 | [`--use-standard-collections`](../typing-customization.md#use-standard-collections) | Use built-in dict/list instead of typing.Dict/List. |
 | [`--use-tuple-for-fixed-items`](../typing-customization.md#use-tuple-for-fixed-items) | Generate tuple types for arrays with items array syntax. |
+| [`--use-tuple-for-fixed-length-arrays`](../typing-customization.md#use-tuple-for-fixed-length-arrays) | Generate tuple types for homogeneous fixed-length arrays. |
 | [`--use-unique-items-as-set`](../typing-customization.md#use-unique-items-as-set) | Generate set types for arrays with uniqueItems constraint. |
 
 ## Type Alias {#type-alias}
@@ -37085,6 +37805,7 @@ TypeAlias and root-model alias output.
 |--------|-------------|
 | [`--use-root-model-type-alias`](../typing-customization.md#use-root-model-type-alias) | Generate RootModel as type alias format for better mypy support. |
 | [`--use-type-alias`](../typing-customization.md#use-type-alias) | Use TypeAlias instead of root models for type definitions (experimental). |
+| [`--use-type-alias-type`](../typing-customization.md#use-type-alias-type) | Use runtime TypeAliasType objects for aliases before Python 3.12 (experimental). |
 
 ## Type Mapping {#type-mapping}
 
@@ -37191,6 +37912,7 @@ datamodel-codegen [OPTIONS]
 | [`--emit-model-metadata`](base-options.md#emit-model-metadata) | Write a separate JSON map from source schema references to the final generated m... |
 | [`--encoding`](base-options.md#encoding) | Specify character encoding for input and output files. |
 | [`--external-ref-mapping`](base-options.md#external-ref-mapping) | Map external `$ref` files to Python packages. |
+| [`--http-backend`](base-options.md#http-backend) | Select the HTTP client backend for remote schemas. |
 | [`--input`](base-options.md#input) | Specify the input schema file path. |
 | [`--input-file-type`](base-options.md#input-file-type) | Specify the input file type for code generation. |
 | [`--input-model`](base-options.md#input-model) | Import a Python type or dict schema from a module or Python file. |
@@ -37199,7 +37921,7 @@ datamodel-codegen [OPTIONS]
 | [`--preset`](base-options.md#preset) | Apply an immutable built-in option preset. |
 | [`--schema-version`](base-options.md#schema-version) | Schema version to use for parsing. |
 | [`--schema-version-mode`](base-options.md#schema-version-mode) | Schema version validation mode. |
-| [`--url`](base-options.md#url) | Fetch schema from URL with custom HTTP headers. |
+| [`--url`](base-options.md#url) | Fetch a schema from a URL with custom HTTP headers. |
 
 ### 🔧 Typing Customization
 
@@ -37211,6 +37933,7 @@ datamodel-codegen [OPTIONS]
 | [`--enum-field-as-literal`](typing-customization.md#enum-field-as-literal) | Convert all enum fields to Literal types instead of Enum classes. |
 | [`--enum-field-as-literal-map`](typing-customization.md#enum-field-as-literal-map) | Override enum/literal generation per-field via JSON mapping. |
 | [`--ignore-enum-constraints`](typing-customization.md#ignore-enum-constraints) | Ignore enum constraints and use base string type instead of Enum classes. |
+| [`--import-overrides`](typing-customization.md#import-overrides) | Override modules for generated imports by symbol name. |
 | [`--no-use-closed-typed-dict`](typing-customization.md#no-use-closed-typed-dict) | Disable PEP 728 TypedDict closed/extra_items generation. |
 | [`--no-use-specialized-enum`](typing-customization.md#no-use-specialized-enum) | Disable specialized Enum classes for Python 3.11+ code generation. |
 | [`--no-use-standard-collections`](typing-customization.md#no-use-standard-collections) | Use typing.Dict/List instead of built-in dict/list for container types. |
@@ -37231,8 +37954,11 @@ datamodel-codegen [OPTIONS]
 | [`--use-specialized-enum`](typing-customization.md#use-specialized-enum) | Generate StrEnum/IntEnum for string/integer enums (Python 3.11+). |
 | [`--use-standard-collections`](typing-customization.md#use-standard-collections) | Use built-in dict/list instead of typing.Dict/List. |
 | [`--use-standard-primitive-types`](typing-customization.md#use-standard-primitive-types) | Use Python standard library types for string formats instead of str. |
+| [`--use-total-false-for-typed-dict`](typing-customization.md#use-total-false-for-typed-dict) | Generate TypedDict declarations with `total=False`. |
 | [`--use-tuple-for-fixed-items`](typing-customization.md#use-tuple-for-fixed-items) | Generate tuple types for arrays with items array syntax. |
+| [`--use-tuple-for-fixed-length-arrays`](typing-customization.md#use-tuple-for-fixed-length-arrays) | Generate tuple types for homogeneous fixed-length arrays. |
 | [`--use-type-alias`](typing-customization.md#use-type-alias) | Use TypeAlias instead of root models for type definitions (experimental). |
+| [`--use-type-alias-type`](typing-customization.md#use-type-alias-type) | Use runtime TypeAliasType objects for aliases before Python 3.12 (experimental). |
 | [`--use-union-operator`](typing-customization.md#use-union-operator) | Use | operator for Union types (PEP 604). |
 | [`--use-unique-items-as-set`](typing-customization.md#use-unique-items-as-set) | Generate set types for arrays with uniqueItems constraint. |
 
@@ -37381,7 +38107,7 @@ datamodel-codegen [OPTIONS]
 | [`--fail-on-multi-module-stdout`](general-options.md#fail-on-multi-module-stdout) | Fail instead of concatenating multiple modules in text stdout. |
 | [`--generate-cli-command`](general-options.md#generate-cli-command) | Generate CLI command from pyproject.toml configuration. |
 | [`--generate-pyproject-config`](general-options.md#generate-pyproject-config) | Generate pyproject.toml configuration from CLI arguments. |
-| [`--http-headers`](general-options.md#http-headers) | Fetch schema from URL with custom HTTP headers. |
+| [`--http-headers`](general-options.md#http-headers) | Fetch a schema from a URL with custom HTTP headers. |
 | [`--http-ignore-tls`](general-options.md#http-ignore-tls) | Disable TLS certificate verification for HTTPS requests. |
 | [`--http-local-ref-path`](general-options.md#http-local-ref-path) | Resolve HTTP references from local schema files. |
 | [`--http-query-parameters`](general-options.md#http-query-parameters) | Add query parameters to HTTP requests for remote schemas. |
@@ -37479,13 +38205,15 @@ All options sorted alphabetically:
 - [`--generate-schema-validators`](template-customization.md#generate-schema-validators) - Generate experimental Pydantic v2 model validators for JSON ...
 - [`--graphql-no-typename`](graphql-only-options.md#graphql-no-typename) - Exclude __typename field from generated GraphQL models.
 - [`--help`](utility-options.md#help) - Show help message and exit
-- [`--http-headers`](general-options.md#http-headers) - Fetch schema from URL with custom HTTP headers.
+- [`--http-backend`](base-options.md#http-backend) - Select the HTTP client backend for remote schemas.
+- [`--http-headers`](general-options.md#http-headers) - Fetch a schema from a URL with custom HTTP headers.
 - [`--http-ignore-tls`](general-options.md#http-ignore-tls) - Disable TLS certificate verification for HTTPS requests.
 - [`--http-local-ref-path`](general-options.md#http-local-ref-path) - Resolve HTTP references from local schema files.
 - [`--http-query-parameters`](general-options.md#http-query-parameters) - Add query parameters to HTTP requests for remote schemas.
 - [`--http-timeout`](general-options.md#http-timeout) - Set timeout for HTTP requests to remote hosts.
 - [`--ignore-enum-constraints`](typing-customization.md#ignore-enum-constraints) - Ignore enum constraints and use base string type instead of ...
 - [`--ignore-pyproject`](general-options.md#ignore-pyproject) - Ignore pyproject.toml configuration file.
+- [`--import-overrides`](typing-customization.md#import-overrides) - Override modules for generated imports by symbol name.
 - [`--include-path-parameters`](openapi-only-options.md#include-path-parameters) - Include OpenAPI path parameters in generated parameter model...
 - [`--infer-union-variant-names`](field-customization.md#infer-union-variant-names) - Infer names for inline oneOf/anyOf object variants from lite...
 - [`--input`](base-options.md#input) - Specify the input schema file path.
@@ -37547,7 +38275,7 @@ All options sorted alphabetically:
 - [`--type-mappings`](typing-customization.md#type-mappings) - Override default type mappings for schema formats.
 - [`--type-overrides`](typing-customization.md#type-overrides) - Replace schema model types with custom Python types via JSON...
 - [`--union-mode`](model-customization.md#union-mode) - Union mode for combining anyOf/oneOf schemas (smart or left_...
-- [`--url`](base-options.md#url) - Fetch schema from URL with custom HTTP headers.
+- [`--url`](base-options.md#url) - Fetch a schema from a URL with custom HTTP headers.
 - [`--use-annotated`](typing-customization.md#use-annotated) - Use typing.Annotated for Field() with constraints.
 - [`--use-attribute-docstrings`](field-customization.md#use-attribute-docstrings) - Generate field descriptions as attribute docstrings instead ...
 - [`--use-closed-typed-dict`](typing-customization.md#use-closed-typed-dict) - Generate TypedDict with PEP 728 closed/extra_items (default:...
@@ -37582,8 +38310,11 @@ All options sorted alphabetically:
 - [`--use-status-code-in-response-name`](openapi-only-options.md#use-status-code-in-response-name) - Include HTTP status code in response model names.
 - [`--use-subclass-enum`](model-customization.md#use-subclass-enum) - Generate typed Enum subclasses for enums with specific field...
 - [`--use-title-as-name`](field-customization.md#use-title-as-name) - Use schema title as the generated class name.
+- [`--use-total-false-for-typed-dict`](typing-customization.md#use-total-false-for-typed-dict) - Generate TypedDict declarations with `total=False`.
 - [`--use-tuple-for-fixed-items`](typing-customization.md#use-tuple-for-fixed-items) - Generate tuple types for arrays with items array syntax.
+- [`--use-tuple-for-fixed-length-arrays`](typing-customization.md#use-tuple-for-fixed-length-arrays) - Generate tuple types for homogeneous fixed-length arrays.
 - [`--use-type-alias`](typing-customization.md#use-type-alias) - Use TypeAlias instead of root models for type definitions (e...
+- [`--use-type-alias-type`](typing-customization.md#use-type-alias-type) - Use runtime TypeAliasType objects for aliases before Python ...
 - [`--use-type-checking-imports`](template-customization.md#use-type-checking-imports) - Allow Ruff to move typing-only imports into TYPE_CHECKING bl...
 - [`--use-union-operator`](typing-customization.md#use-union-operator) - Use | operator for Union types (PEP 604).
 - [`--use-unique-items-as-set`](typing-customization.md#use-unique-items-as-set) - Generate set types for arrays with uniqueItems constraint.
@@ -38261,6 +38992,8 @@ This page lists features that are available but still experimental.
 | `cli-option.schema-validator-type` | cli-option | `--schema-validator-type` | 0.66.1 | - |
 | `cli-option.use-missing-sentinel` | cli-option | `--use-missing-sentinel` | 0.66.1 | - |
 | `cli-option.use-type-alias` | cli-option | `--use-type-alias` | 0.36.0 | - |
+| `cli-option.use-type-alias-type` | cli-option | `--use-type-alias-type` | 0.71.1 | - |
+| `extra.httpx2` | extra | `datamodel-code-generator[httpx2]` | 0.71.1 | - |
 | `formatter.builtin` | formatter | `--formatters builtin` | 0.59.0 | - |
 | `input-format.asyncapi` | input-format | `--input-file-type asyncapi` | 0.59.0 | - |
 | `input-format.avro` | input-format | `--input-file-type avro` | 0.59.0 | - |
@@ -38309,6 +39042,26 @@ The option requires Pydantic v2 BaseModel output and a target Pydantic version t
 Type alias output is experimental and may change as Python typing support evolves.
 
 The option replaces root model classes with type aliases where possible. Pydantic v2 output may use TypeAliasType or Python 3.12 type statements depending on the target Python version.
+
+### `cli-option.use-type-alias-type`
+
+- **Kind:** cli-option
+- **Target:** `--use-type-alias-type`
+- **Since:** 0.71.1
+
+Runtime TypeAliasType output is experimental and may change as Python typing support evolves.
+
+The option implies --use-type-alias and selects TypeAliasType for Python 3.10 and 3.11. Python 3.12 and newer continue to use native type statements.
+
+### `extra.httpx2`
+
+- **Kind:** extra
+- **Target:** `datamodel-code-generator[httpx2]`
+- **Since:** 0.71.1
+
+The HTTPX2-backed HTTP client is experimental and may change as compatibility is validated.
+
+datamodel-code-generator[http] remains the stable HTTPX backend and is not deprecated; datamodel-code-generator[httpx2] is experimental. The default HTTP backend policy is auto: stable httpx is selected when its client module is installed, including when both pairs are installed, and experimental httpx2 is selected only when that module is absent. Use --http-backend httpx2 or HTTPBackend.HTTPX2 to require the experimental pair. Explicit selections and paired dependency errors do not fall back.
 
 ### `formatter.builtin`
 
@@ -38420,11 +39173,14 @@ Use a directory as input, or use `$ref` to reference other files:
 datamodel-codegen --input schemas/ --output models/
 ```
 
-For schemas with cross-file `$ref`, ensure you have the HTTP extra for remote refs:
+For schemas with remote cross-file `$ref`, install an HTTP extra:
 
 ```bash
 pip install 'datamodel-code-generator[http]'
 ```
+
+See [HTTP backend selection](#http-backend-selection) for the stable and
+experimental choices.
 
 📎 Related: [#215](https://github.com/koxudaxi/datamodel-code-generator/issues/215)
 
@@ -38626,12 +39382,51 @@ Install the HTTP extra:
 pip install 'datamodel-code-generator[http]'
 ```
 
+The `http` extra is the stable choice. See
+[HTTP backend selection](#http-backend-selection) if you want to use the
+experimental HTTPX2 backend.
+
 For authenticated endpoints:
 
 ```bash
 datamodel-codegen --url https://api.example.com/schema.yaml \
     --http-headers "Authorization: Bearer TOKEN" \
     --output model.py
+```
+
+### 🔄 Which HTTP client backend is selected? {#http-backend-selection}
+
+The HTTP extras install separate, matched client and transport stacks:
+
+| Extra | Status | Client and transport |
+|-------|--------|----------------------|
+| `datamodel-code-generator[http]` | Stable, supported, and not deprecated | `httpx` + `httpcore` |
+| `datamodel-code-generator[httpx2]` | Experimental | `httpx2` + `httpcore2` |
+
+`datamodel-code-generator[all]` includes the stable `http` extra but
+intentionally does not include the experimental `httpx2` extra.
+
+Select the backend with `--http-backend {auto,httpx,httpx2}`, the corresponding
+`http_backend` pyproject setting, or `HTTPBackend` in the public API:
+
+1. `auto` is the default. It selects stable `httpx` when its client module is
+   installed, including when both pairs are installed.
+2. `auto` uses experimental `httpx2` + `httpcore2` only when the stable HTTPX
+   client itself is unavailable.
+3. `httpx` and `httpx2` require the selected pair. Explicit selections never
+   fall back to a different backend.
+4. A missing paired transport or another broken dependency in a selected stack
+   raises its import error instead of hiding an invalid environment.
+5. If `auto` finds neither client, the request fails with instructions to
+   install an HTTP extra.
+
+Selection and imports are lazy. Once `auto` selects a backend, it keeps that
+selection for the process. Restart the process to change an already selected
+backend after installing or removing an extra.
+
+```toml title="pyproject.toml"
+[tool.datamodel-codegen]
+http-backend = "httpx2"
 ```
 
 ### 🔒 SSL certificate errors
@@ -38858,16 +39653,16 @@ classDiagram
 
 | Config model | Field count | Purpose |
 | --- | ---: | --- |
-| `BaseGenerateConfig` | 142 | Shared generation options. |
-| `GenerateConfig` | 157 | Public `generate()` configuration. |
-| `ParserConfig` | 137 | Base parser dependency injection and parser options. |
-| `JSONSchemaParserConfig` | 139 | JSON Schema parser options. |
-| `OpenAPIParserConfig` | 145 | OpenAPI-specific parser options. |
-| `AsyncAPIParserConfig` | 146 | AsyncAPI-specific parser options. |
-| `XMLSchemaParserConfig` | 140 | XML Schema-specific parser options. |
-| `ProtobufParserConfig` | 140 | Protocol Buffers-specific parser options. |
-| `AvroParserConfig` | 139 | Avro-specific parser options. |
-| `GraphQLParserConfig` | 140 | GraphQL-specific parser options. |
+| `BaseGenerateConfig` | 147 | Shared generation options. |
+| `GenerateConfig` | 162 | Public `generate()` configuration. |
+| `ParserConfig` | 141 | Base parser dependency injection and parser options. |
+| `JSONSchemaParserConfig` | 143 | JSON Schema parser options. |
+| `OpenAPIParserConfig` | 149 | OpenAPI-specific parser options. |
+| `AsyncAPIParserConfig` | 150 | AsyncAPI-specific parser options. |
+| `XMLSchemaParserConfig` | 144 | XML Schema-specific parser options. |
+| `ProtobufParserConfig` | 144 | Protocol Buffers-specific parser options. |
+| `AvroParserConfig` | 143 | Avro-specific parser options. |
+| `GraphQLParserConfig` | 144 | GraphQL-specific parser options. |
 
 ### Formatter Names
 

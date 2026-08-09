@@ -13,13 +13,14 @@ uv run python scripts/build_datamodel_codegen_skill_docs.py
 
 Input sources, output paths, and schema version handling.
 
+- `--http-backend`: Select the HTTP client backend. 'auto' (default) selects stable HTTPX when its client module is installed and only selects experimental HTTPX2 when that module is absent. 'httpx' and 'httpx2' require that exact backend. Explicit selections and paired dependency errors do not fall back. Choices: `auto`, `httpx`, `httpx2`.
 - `--input`: Input file/directory (default: stdin)
 - `--input-file-type`: Input file type (default: auto). Use 'jsonschema', 'openapi', 'asyncapi', 'graphql', 'mcp-tools', 'xmlschema', 'protobuf', or 'avro' for schema definitions. Use 'json', 'yaml', or 'csv' for raw sample data to infer a schema automatically. Choices: `auto`, `openapi`, `asyncapi`, `jsonschema`, `mcp-tools`, `xmlschema`, `protobuf`, `avro`, `json`, `yaml`, `dict`, `csv`, `graphql`.
 - `--external-ref-mapping`: Map external $ref file paths to Python import packages instead of generating duplicate classes. Accepts one or more mappings after a single flag. Format: "path/to/schema.yaml=mypackage.models". When a $ref points to a mapped file, an import statement is generated instead of a class definition.
 - `--output`: Output file (default: stdout)
 - `--emit-model-metadata`: Write a separate JSON map from source schema references to generated models and fields.
 - `--preset`: Apply an immutable built-in option preset. Preset names include the target Python version so generated syntax is pinned. Choices: `standard-py310-20260619`, `standard-py311-20260619`, `standard-py312-20260619`, `standard-py313-20260619`, `standard-py314-20260619`, `practical-py310-20260619`, `practical-py311-20260619`, `practical-py312-20260619`, `practical-py313-20260619`, `practical-py314-20260619`.
-- `--url`: Input file URL. `--input` is ignored when `--url` is used
+- `--url`: Input file URL. `--input` is ignored when `--url` is used. For HTTP(S), datamodel-code-generator[http] remains the stable HTTPX backend and is not deprecated, while datamodel-code-generator[httpx2] is experimental. The default --http-backend auto policy selects stable HTTPX when its client module is installed and selects HTTPX2 only when that module is absent. Select --http-backend httpx2 to require the experimental backend. Explicit selections and paired dependency errors do not fall back.
 - `--input-model`: Python import path or file path to a Pydantic v2 model or schema dict (e.g., 'mypackage.module:ClassName', './models.py:ClassName', or 'mypackage.schemas:SCHEMA_DICT'). Can be specified multiple times for related models with inheritance. For dict input, --input-file-type is required. Cannot be used with --input or --url.
 - `--input-model-ref-strategy`: Strategy for referenced types in --input-model. 'regenerate-all': Regenerate all types. 'reuse-foreign': Reuse types from different families (Enum, etc.), regenerate same-family. 'reuse-all': Reuse all referenced types via import. If not specified, defaults to regenerate-all behavior. Choices: `regenerate-all`, `reuse-foreign`, `reuse-all`.
 - `--encoding`: The encoding of input and output (default: utf-8)
@@ -53,13 +54,17 @@ Type annotation, import, and primitive type behavior.
 - `--no-use-union-operator`: Use | operator for Union type (PEP 604). Default: enabled
 - `--use-unique-items-as-set`: define field type as `set` when the field attribute has `uniqueItems`
 - `--use-tuple-for-fixed-items`: Generate tuple types for arrays with items array syntax when minItems equals maxItems equals items length
+- `--use-tuple-for-fixed-length-arrays`: Generate tuple types for fixed-length arrays with a single items schema
+- `--use-total-false-for-typed-dict`: Generate TypedDict with total=False and mark required fields with Required
 - `--use-closed-typed-dict`: Generate TypedDict with PEP 728 closed=True/extra_items for additionalProperties constraints. Use --no-use-closed-typed-dict for type checkers that don't yet support PEP 728 (e.g., mypy).
 - `--no-use-closed-typed-dict`: Generate TypedDict with PEP 728 closed=True/extra_items for additionalProperties constraints. Use --no-use-closed-typed-dict for type checkers that don't yet support PEP 728 (e.g., mypy).
 - `--allof-merge-mode`: Mode for field merging in allOf schemas. 'constraints': merge only constraints (minItems, maxItems, pattern, etc.) from parent (default). 'all': merge constraints plus annotations (default, examples) from parent. 'none': do not merge any fields from parent properties. Choices: `constraints`, `all`, `none`.
 - `--allof-class-hierarchy`: How to map allOf references to class hierarchies. 'if-no-conflict': only create subclasses when parent class has no conflicting property definition. 'always': always create subclasses. Choices: `if-no-conflict`, `always`.
 - `--use-type-alias`: Use TypeAlias instead of root models (experimental)
+- `--use-type-alias-type`: Use TypeAliasType for type aliases on Python 3.10 and 3.11 (implies --use-type-alias; experimental)
 - `--use-root-model-type-alias`: Use type alias format for RootModel (e.g., Foo = RootModel[Bar]) instead of class inheritance (Pydantic v2 only)
 - `--disable-future-imports`: Disable __future__ imports
+- `--import-overrides`: Override modules for generated imports by symbol name. Format: JSON object mapping symbols to module paths. Example: '{"TypedDict": "my_project.typing_compat", "NotRequired": "my_project.typing_compat"}'.
 - `--type-mappings`: Override default type mappings. Format: "type+format=target" (e.g., "string+binary=string" to map binary format to string type) or "format=target" (e.g., "binary=string"). Can be specified multiple times.
 - `--type-overrides`: Replace schema model types with custom Python types. Format: JSON object mapping model names to Python import paths. Model-level: '{"CustomType": "my_app.types.MyType"}' replaces all references. Scoped: '{"User.field": "my_app.Type"}' replaces specific field only.
 
@@ -223,7 +228,7 @@ General utility, HTTP, checking, and project integration options.
 - `--debug`: show debug message (require "debug". `$ pip install 'datamodel-code-generator[debug]'`)
 - `--disable-warnings`: disable warnings
 - `--list-deprecations`: List registered deprecations and scheduled breaking changes, then exit. Choices: `table`, `json`, `markdown`.
-- `--list-experimental`: List registered experimental features, then exit. Choices: `table`, `json`, `markdown`.
+- `--list-experimental`: List registered experimental features and their compatibility notes, then exit. Choices: `table`, `json`, `markdown`.
 - `--help` (alias: `-h`): show this help message and exit
 - `--no-color`: disable colorized output
 - `--output-format`: Format for command output (default: text). Use json for structured output when supported. Choices: `text`, `json`.

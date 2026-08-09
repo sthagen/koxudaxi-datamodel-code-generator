@@ -8,9 +8,9 @@ Options are grouped from shared CLI metadata and link back to their generated re
 
 | Group | Options | Description |
 |-------|---------|-------------|
-| [Imports](#imports) | 1 | Generated imports and type-checking import behavior. |
-| [Collection Types](#collection-types) | 5 | Collection and tuple/set generation. |
-| [Type Alias](#type-alias) | 2 | TypeAlias and root-model alias output. |
+| [Imports](#imports) | 2 | Generated imports and type-checking import behavior. |
+| [Collection Types](#collection-types) | 6 | Collection and tuple/set generation. |
+| [Type Alias](#type-alias) | 3 | TypeAlias and root-model alias output. |
 | [Type Mapping](#type-mapping) | 9 | Scalar, date/time, and custom type mapping. |
 | [Type Syntax](#type-syntax) | 3 | Modern annotation syntax and Annotated usage. |
 
@@ -21,6 +21,7 @@ Generated imports and type-checking import behavior.
 | Option | Description |
 |--------|-------------|
 | [`--disable-future-imports`](../typing-customization.md#disable-future-imports) | Prevent automatic addition of __future__ imports in generated code. |
+| [`--import-overrides`](../typing-customization.md#import-overrides) | Override modules for generated imports by symbol name. |
 
 ## Collection Types {#collection-types}
 
@@ -32,6 +33,7 @@ Collection and tuple/set generation.
 | [`--use-generic-container-types`](../typing-customization.md#use-generic-container-types) | Use generic container types (Sequence, Mapping) for type hinting. |
 | [`--use-standard-collections`](../typing-customization.md#use-standard-collections) | Use built-in dict/list instead of typing.Dict/List. |
 | [`--use-tuple-for-fixed-items`](../typing-customization.md#use-tuple-for-fixed-items) | Generate tuple types for arrays with items array syntax. |
+| [`--use-tuple-for-fixed-length-arrays`](../typing-customization.md#use-tuple-for-fixed-length-arrays) | Generate tuple types for homogeneous fixed-length arrays. |
 | [`--use-unique-items-as-set`](../typing-customization.md#use-unique-items-as-set) | Generate set types for arrays with uniqueItems constraint. |
 
 ## Type Alias {#type-alias}
@@ -42,6 +44,7 @@ TypeAlias and root-model alias output.
 |--------|-------------|
 | [`--use-root-model-type-alias`](../typing-customization.md#use-root-model-type-alias) | Generate RootModel as type alias format for better mypy support. |
 | [`--use-type-alias`](../typing-customization.md#use-type-alias) | Use TypeAlias instead of root models for type definitions (experimental). |
+| [`--use-type-alias-type`](../typing-customization.md#use-type-alias-type) | Use runtime TypeAliasType objects for aliases before Python 3.12 (experimental). |
 
 ## Type Mapping {#type-mapping}
 

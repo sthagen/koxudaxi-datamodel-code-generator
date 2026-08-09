@@ -32,6 +32,7 @@ from datamodel_code_generator.enums import (
     DataclassArguments,
     FieldTypeCollisionStrategy,
     GraphQLScope,
+    HTTPBackend,
     JsonSchemaVersion,
     ModuleSplitMode,
     NamingStrategy,
@@ -197,12 +198,15 @@ class ParserConfig(BaseModel):
     use_operation_id_as_name: bool = False
     use_unique_items_as_set: bool = False
     use_tuple_for_fixed_items: bool = False
+    use_tuple_for_fixed_length_arrays: bool = False
+    use_total_false_for_typed_dict: bool = False
     use_closed_typed_dict: bool = True
     allof_merge_mode: AllOfMergeMode = AllOfMergeMode.Constraints
     allof_class_hierarchy: AllOfClassHierarchy = AllOfClassHierarchy.IfNoConflict
     allow_remote_refs: bool | None = None
     strict_refs: bool = False
     allow_private_network: bool = False
+    http_backend: HTTPBackend = HTTPBackend.AUTO
     http_headers: Sequence[tuple[str, str]] | None = None
     http_local_ref_path: Path | None = None
     http_ignore_tls: bool = False
@@ -254,6 +258,7 @@ class ParserConfig(BaseModel):
     naming_strategy: NamingStrategy | None = None
     duplicate_name_suffix: dict[str, str] | None = None
     dataclass_arguments: DataclassArguments | None = None
+    import_overrides: dict[str, str] | None = None
     type_mappings: list[str] | None = None
     type_overrides: dict[str, str] | None = None
     read_only_write_only_model_type: ReadOnlyWriteOnlyModelType | None = None

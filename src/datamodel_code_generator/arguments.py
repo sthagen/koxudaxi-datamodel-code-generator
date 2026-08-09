@@ -28,6 +28,7 @@ from datamodel_code_generator.enums import (
     DataclassArguments,
     DataModelType,
     FieldTypeCollisionStrategy,
+    HTTPBackend,
     InputFileType,
     InputModelRefStrategy,
     ModuleSplitMode,
@@ -46,7 +47,7 @@ from datamodel_code_generator.preset_names import PRESET_NAMES
 
 if TYPE_CHECKING:
     from argparse import Action
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
 
 DEFAULT_ENCODING = "utf-8"
 
@@ -118,7 +119,41 @@ class SortingHelpFormatter(RawDescriptionHelpFormatter):
         return super().start_section(heading if namespace.no_color or not heading else self._bold_cyan(heading))
 
 
-arg_parser = ArgumentParser(
+class SuggestingArgumentParser(ArgumentParser):
+    """Argument parser that suggests close matches for unknown option names."""
+
+    def parse_args(self, args: Sequence[str] | None = None, namespace: Namespace | None = None) -> Namespace:
+        """Parse arguments and suggest close matches for unknown option names."""
+        parsed_args, unknown_arguments = self.parse_known_args(args, namespace)
+        if not unknown_arguments:
+            return cast("Namespace", parsed_args)
+        return self.error(self._unrecognized_arguments_message(unknown_arguments))
+
+    def _unrecognized_arguments_message(self, unknown_arguments: Sequence[str]) -> str:
+        """Format an unknown-argument message with close option-name matches."""
+        message = f"unrecognized arguments: {' '.join(unknown_arguments)}"
+        suggestions: list[str] = []
+        for unknown_argument in unknown_arguments:
+            match unknown_argument:
+                case "--":
+                    break
+                case option_name if option_name.startswith("-"):
+                    option_name = option_name.partition("=")[0]
+                case _:
+                    continue
+
+            from difflib import get_close_matches  # noqa: PLC0415
+
+            if (matches := get_close_matches(option_name, self._option_string_actions, n=1, cutoff=0.7)) and (
+                suggestion := matches[0]
+            ) not in suggestions:
+                suggestions.append(suggestion)
+        if not suggestions:
+            return message
+        return f"{message}\nDid you mean: {', '.join(suggestions)}?"
+
+
+arg_parser = SuggestingArgumentParser(
     usage="\n  datamodel-codegen [options]",
     description="Generate Python data models from schema definitions or structured data\n\n"
     "For detailed usage, see: https://datamodel-code-generator.koxudaxi.dev",
@@ -169,6 +204,16 @@ base_options.add_argument(
     ),
     action=BooleanOptionalAction,
     default=None,
+)
+base_options.add_argument(
+    "--http-backend",
+    choices=[backend.value for backend in HTTPBackend],
+    default=None,
+    help=(
+        "Select the HTTP client backend. 'auto' (default) selects stable HTTPX when its client module is installed "
+        "and only selects experimental HTTPX2 when that module is absent. 'httpx' and 'httpx2' require that exact "
+        "backend. Explicit selections and paired dependency errors do not fall back."
+    ),
 )
 base_options.add_argument(
     "--http-headers",
@@ -248,7 +293,14 @@ base_options.add_argument(
 )
 base_options.add_argument(
     "--url",
-    help="Input file URL. `--input` is ignored when `--url` is used",
+    help=(
+        "Input file URL. `--input` is ignored when `--url` is used. "
+        "For HTTP(S), datamodel-code-generator[http] remains the stable HTTPX backend and is not deprecated, while "
+        "datamodel-code-generator[httpx2] is experimental. The default --http-backend auto policy selects stable "
+        "HTTPX when its client module is installed and selects HTTPX2 only when that module is absent. Select "
+        "--http-backend httpx2 to require the experimental backend. Explicit selections and paired dependency "
+        "errors do not fall back."
+    ),
 )
 base_options.add_argument(
     "--input-model",
@@ -745,6 +797,18 @@ typing_options.add_argument(
     default=None,
 )
 typing_options.add_argument(
+    "--use-tuple-for-fixed-length-arrays",
+    help="Generate tuple types for fixed-length arrays with a single items schema",
+    action="store_true",
+    default=None,
+)
+typing_options.add_argument(
+    "--use-total-false-for-typed-dict",
+    help="Generate TypedDict with total=False and mark required fields with Required",
+    action="store_true",
+    default=None,
+)
+typing_options.add_argument(
     "--use-closed-typed-dict",
     help="Generate TypedDict with PEP 728 closed=True/extra_items for additionalProperties constraints. "
     "Use --no-use-closed-typed-dict for type checkers that don't yet support PEP 728 (e.g., mypy).",
@@ -775,6 +839,12 @@ typing_options.add_argument(
     default=None,
 )
 typing_options.add_argument(
+    "--use-type-alias-type",
+    help="Use TypeAliasType for type aliases on Python 3.10 and 3.11 (implies --use-type-alias; experimental)",
+    action="store_true",
+    default=None,
+)
+typing_options.add_argument(
     "--use-root-model-type-alias",
     help="Use type alias format for RootModel (e.g., Foo = RootModel[Bar]) "
     "instead of class inheritance (Pydantic v2 only)",
@@ -785,6 +855,14 @@ typing_options.add_argument(
     "--disable-future-imports",
     help="Disable __future__ imports",
     action="store_true",
+    default=None,
+)
+typing_options.add_argument(
+    "--import-overrides",
+    help="Override modules for generated imports by symbol name. "
+    "Format: JSON object mapping symbols to module paths. "
+    'Example: \'{"TypedDict": "my_project.typing_compat", "NotRequired": "my_project.typing_compat"}\'.',
+    type=str,
     default=None,
 )
 typing_options.add_argument(
@@ -1267,7 +1345,7 @@ general_options.add_argument(
 )
 general_options.add_argument(
     "--list-experimental",
-    help="List registered experimental features, then exit.",
+    help="List registered experimental features and their compatibility notes, then exit.",
     nargs="?",
     const="table",
     choices=["table", "json", "markdown"],

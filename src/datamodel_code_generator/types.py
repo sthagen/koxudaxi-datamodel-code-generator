@@ -7,7 +7,6 @@ utilities for handling unions, optionals, and type hints.
 
 from __future__ import annotations
 
-import ast
 import re
 from abc import ABC, abstractmethod
 from copy import deepcopy
@@ -15,7 +14,7 @@ from decimal import Decimal
 from enum import Enum, auto
 from fractions import Fraction
 from functools import cache, lru_cache
-from itertools import chain
+from itertools import chain, repeat
 from re import Pattern
 from typing import (
     TYPE_CHECKING,
@@ -28,7 +27,16 @@ from typing import (
     runtime_checkable,
 )
 
-from pydantic import ConfigDict, Field, GetCoreSchemaHandler, StrictBool, StrictInt, StrictStr, create_model
+from pydantic import (
+    ConfigDict,
+    Field,
+    GetCoreSchemaHandler,
+    StrictBool,
+    StrictInt,
+    StrictStr,
+    create_model,
+    field_validator,
+)
 from pydantic_core import core_schema
 from typing_extensions import TypeIs
 
@@ -89,6 +97,9 @@ STANDARD_TUPLE = "tuple"
 STANDARD_FROZEN_SET = "frozenset"
 STR = "str"
 
+REQUIRED = "Required"
+REQUIRED_PREFIX = f"{REQUIRED}["
+
 NOT_REQUIRED = "NotRequired"
 NOT_REQUIRED_PREFIX = f"{NOT_REQUIRED}["
 
@@ -106,8 +117,22 @@ if TYPE_CHECKING:
     import builtins
     from collections.abc import Callable, Iterable, Iterator, Sequence
 
+    from datamodel_code_generator._python_type_binding import BoundPythonType
     from datamodel_code_generator.enums import StrictTypes
-    from datamodel_code_generator.model.base import DataModelFieldBase
+
+    class DataModelFieldBase(Protocol):
+        """Type-checking contract for a field that owns a DataType."""
+
+        data_type: DataType
+
+    _BoundPythonTypeField = BoundPythonType
+
+else:
+    DataModelFieldBase = Any
+    # Keep the optional structured annotation feature off the normal import
+    # path. DataType validates every non-None construction input against the exact
+    # runtime class below, so this lazy Pydantic field alias is not an unchecked escape.
+    _BoundPythonTypeField = Any
 
 
 class UnionIntFloat:
@@ -248,31 +273,28 @@ def chain_as_tuple(*iterables: Iterable[T]) -> tuple[T, ...]:
 
 
 def get_type_base_name(type_str: str) -> str:
-    """Extract base type name from a type annotation string using AST.
+    """Extract the base name from a supported Python type annotation.
 
     Examples:
         "List[str]" -> "List"
         "foo.bar.Baz" -> "Baz"
         "Optional[int]" -> "Optional"
     """
-    try:
-        tree = ast.parse(type_str, mode="eval")
-    except SyntaxError:
-        return type_str.split("[", maxsplit=1)[0].rsplit(".", 1)[-1].strip()
+    # Python annotation parsing is an opt-in external-schema boundary. Keep its
+    # IR and runtime codec out of ordinary generation that never supplies one.
+    from datamodel_code_generator._python_type_annotation import (  # noqa: PLC0415
+        parse_python_type_annotation,
+        python_type_expr_base_name,
+    )
 
-    body = tree.body
-    if isinstance(body, ast.Subscript):
-        body = body.value
-
-    if isinstance(body, ast.Attribute):
-        return body.attr
-    if isinstance(body, ast.Name):
-        return body.id
-    return type_str.split("[", maxsplit=1)[0].rsplit(".", 1)[-1].strip()
+    fallback = type_str.split("[", maxsplit=1)[0].rsplit(".", 1)[-1].strip()
+    if (expression := parse_python_type_annotation(type_str)) is None:
+        return fallback
+    return python_type_expr_base_name(expression) or fallback
 
 
 def get_subscript_args(type_str: str) -> list[str]:
-    """Extract type arguments from a subscripted type using AST.
+    """Extract top-level arguments from a supported Python type annotation.
 
     Examples:
         "List[str]" -> ["str"]
@@ -281,37 +303,19 @@ def get_subscript_args(type_str: str) -> list[str]:
         "str | int | None" -> ["str", "int", "None"]
         "str" -> []
     """
-    try:
-        tree = ast.parse(type_str, mode="eval")
-    except SyntaxError:
+    from datamodel_code_generator._python_type_annotation import (  # noqa: PLC0415
+        parse_python_type_annotation,
+        python_type_expr_arguments,
+        render_python_type_expr,
+    )
+
+    if (expression := parse_python_type_annotation(type_str)) is None:
         return []
-
-    body = tree.body
-
-    if isinstance(body, ast.BinOp) and isinstance(body.op, ast.BitOr):
-        args: list[str] = []
-
-        def collect_union_args(node: ast.expr) -> None:
-            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
-                collect_union_args(node.left)
-                collect_union_args(node.right)
-            else:
-                args.append(ast.unparse(node))
-
-        collect_union_args(body)
-        return args
-
-    if isinstance(body, ast.Subscript):
-        slice_node = body.slice
-        if isinstance(slice_node, ast.Tuple):
-            return [ast.unparse(elt) for elt in slice_node.elts]
-        return [ast.unparse(slice_node)]
-
-    return []
+    return [render_python_type_expr(argument) for argument in python_type_expr_arguments(expression)]
 
 
 def extract_qualified_names(type_str: str) -> list[str]:
-    """Extract all fully qualified names from a type annotation string using AST.
+    """Extract all fully qualified names from a supported type annotation.
 
     Finds patterns like 'module.path.ClassName' where the name contains dots.
 
@@ -320,76 +324,21 @@ def extract_qualified_names(type_str: str) -> list[str]:
         "Dict[a.B, c.D]" -> ["a.B", "c.D"]
         "str" -> []
     """
-    try:
-        tree = ast.parse(type_str, mode="eval")
-    except SyntaxError:
-        return []
+    from datamodel_code_generator._python_type_annotation import (  # noqa: PLC0415
+        iter_python_type_expr_qualified_names,
+        parse_python_type_annotation,
+    )
 
-    qualified_names: list[str] = []
-    visited: set[int] = set()
-
-    def get_full_name(node: ast.expr) -> str | None:
-        parts: list[str] = []
-        current: ast.expr = node
-        while isinstance(current, ast.Attribute):
-            visited.add(id(current))
-            parts.append(current.attr)
-            current = current.value
-        if isinstance(current, ast.Name):
-            parts.append(current.id)
-            return ".".join(reversed(parts))
-        return None
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute) and id(node) not in visited:
-            name = get_full_name(node)
-            if name and "." in name:
-                qualified_names.append(name)
-
-    return qualified_names
+    expression = parse_python_type_annotation(type_str)
+    return list(iter_python_type_expr_qualified_names(expression)) if expression is not None else []
 
 
 @lru_cache(maxsize=1024)
 def is_python_type_annotation(type_str: str) -> bool:
     """Return whether a string is a Python type annotation expression."""
-    try:
-        tree = ast.parse(type_str, mode="eval")
-    except SyntaxError:
-        return False
+    from datamodel_code_generator._python_type_annotation import parse_python_type_annotation  # noqa: PLC0415
 
-    return _is_python_type_annotation_node(tree.body, allow_literal=False)
-
-
-def _is_python_type_annotation_node(node: ast.AST, *, allow_literal: bool) -> bool:
-    match node:
-        case ast.Name():
-            result = True
-        case ast.Attribute(value=value):
-            result = isinstance(value, (ast.Name, ast.Attribute)) and _is_python_type_annotation_node(
-                value,
-                allow_literal=False,
-            )
-        case ast.Subscript(value=value, slice=slice_node):
-            result = _is_python_type_annotation_node(
-                value,
-                allow_literal=False,
-            ) and _is_python_type_annotation_node(slice_node, allow_literal=True)
-        case ast.Tuple(elts=elts) | ast.List(elts=elts):
-            result = all(_is_python_type_annotation_node(elt, allow_literal=True) for elt in elts)
-        case ast.BinOp(left=left, op=ast.BitOr(), right=right):
-            result = _is_python_type_annotation_node(left, allow_literal=False) and _is_python_type_annotation_node(
-                right,
-                allow_literal=False,
-            )
-        case ast.Constant(value=None):
-            result = True
-        case ast.Constant(value=value) if allow_literal:
-            result = value is None or value is Ellipsis or isinstance(value, (str, int, float, bool))
-        case ast.UnaryOp(op=ast.UAdd() | ast.USub(), operand=ast.Constant(value=value)) if allow_literal:
-            result = isinstance(value, (int, float))
-        case _:
-            result = False
-    return result
+    return parse_python_type_annotation(type_str) is not None
 
 
 def _remove_none_from_union(type_: str, *, use_union_operator: bool) -> str:  # noqa: PLR0912
@@ -469,10 +418,8 @@ def get_optional_type(type_: str, use_union_operator: bool) -> str:  # noqa: FBT
 
 
 def is_data_model_field(obj: object) -> TypeIs[DataModelFieldBase]:
-    """Check if an object is a DataModelFieldBase instance."""
-    from datamodel_code_generator.model.base import DataModelFieldBase  # noqa: PLC0415
-
-    return isinstance(obj, DataModelFieldBase)
+    """Check if an object structurally owns a DataType."""
+    return isinstance(getattr(obj, "data_type", None), DataType)
 
 
 @runtime_checkable
@@ -510,6 +457,7 @@ class DataType(_BaseModel):
     is_func: bool = False
     kwargs: Optional[dict[str, Any]] = None  # noqa: UP045
     import_: Optional[Import] = None  # noqa: UP045
+    python_type: _BoundPythonTypeField | None = Field(default=None, exclude=True, repr=False)
     python_version: PythonVersion = PythonVersionMin
     is_optional: bool = False
     is_dict: bool = False
@@ -519,6 +467,7 @@ class DataType(_BaseModel):
     is_mapping: bool = False
     is_sequence: bool = False
     is_tuple: bool = False
+    tuple_item_count: int | None = Field(default=None, ge=0)
     is_custom_type: bool = False
     literals: list[Union[StrictBool, StrictInt, StrictStr]] = Field(default_factory=list)  # noqa: UP007
     enum_member_literals: list[tuple[str, str]] = Field(default_factory=list)  # [(EnumClassName, member_name), ...]
@@ -528,6 +477,20 @@ class DataType(_BaseModel):
     preserve_union_member_order: bool = False
     alias: Optional[str] = None  # noqa: UP045
     parent: Union[DataModelFieldBase, DataType, None] = None  # noqa: UP007
+
+    @field_validator("python_type")
+    @classmethod
+    def _validate_python_type(cls, value: object | None) -> object | None:
+        """Enforce the semantic binding type only when the feature is used."""
+        if value is None:
+            return None
+        from datamodel_code_generator._python_type_binding import BoundPythonType  # noqa: PLC0415
+
+        if isinstance(value, BoundPythonType):
+            return value
+        msg = "python_type must be a BoundPythonType"
+        raise ValueError(msg)
+
     children: list[DataType] = Field(default_factory=list)
     strict: bool = False
     dict_key: Optional[DataType] = None  # noqa: UP045
@@ -614,6 +577,20 @@ class DataType(_BaseModel):
         self.reference = reference
         if reference:
             reference.children.append(self)
+
+    def register_reference(self) -> None:
+        """Register this newly copied type with its existing reference."""
+        if self.reference:
+            self.reference.children.append(self)
+
+    def unregister_reference(self) -> None:
+        """Detach this temporary type from reverse-reference tracking without losing its target."""
+        if not self.reference:
+            return
+        children = self.reference.children
+        for index in range(len(children) - 1, -1, -1):
+            if children[index] is self:
+                children.pop(index)
 
     def remove_reference(self) -> None:
         """Remove the reference from this DataType."""
@@ -727,6 +704,10 @@ class DataType(_BaseModel):
         # Add base import if exists
         if self.import_:
             yield self.import_
+        if self.python_type:
+            yield from self.python_type.imports
+        if self.is_tuple and self.tuple_item_count and (not self.data_types or not self.data_types[0].type_hint):
+            yield IMPORT_ANY
         if self.kwargs and self.import_ != IMPORT_DECIMAL and _contains_decimal(self.kwargs):
             yield IMPORT_DECIMAL
 
@@ -809,10 +790,19 @@ class DataType(_BaseModel):
     ) -> str:
         if self.is_tuple:
             tuple_type = STANDARD_TUPLE if self.use_standard_collections else TUPLE
-            inner_types = [
-                (item.base_type_hint if use_base_type_hint else item.type_hint) or ANY for item in self.data_types
-            ]
-            type_ = f"{tuple_type}[{', '.join(inner_types)}]" if inner_types else f"{tuple_type}[()]"
+            if self.tuple_item_count == 0:
+                type_ = f"{tuple_type}[()]"
+            elif self.tuple_item_count is not None:
+                item_type = ANY
+                if self.data_types:
+                    item = self.data_types[0]
+                    item_type = (item.base_type_hint if use_base_type_hint else item.type_hint) or ANY
+                type_ = f"{tuple_type}[{', '.join(repeat(item_type, self.tuple_item_count))}]"
+            else:
+                inner_types = [
+                    (item.base_type_hint if use_base_type_hint else item.type_hint) or ANY for item in self.data_types
+                ]
+                type_ = f"{tuple_type}[{', '.join(inner_types)}]" if inner_types else f"{tuple_type}[()]"
         elif self.is_union:
             type_ = self._render_union_type_hint(
                 use_base_type_hint=use_base_type_hint,

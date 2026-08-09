@@ -166,6 +166,70 @@ def test_remove_cleans_up_reference_paths() -> None:
     assert "/test/path" not in imports.reference_paths
 
 
+def test_remap_modules_preserves_aliases_and_reference_paths() -> None:
+    """Keep import bookkeeping consistent when remapping one of two referenced aliases."""
+    imports = Imports()
+    model_import = Import(from_="source", import_="Model", alias="Model_1", reference_path="/model")
+    other_import = Import(from_="source", import_="Other", alias="Other_1", reference_path="/other")
+    imports.append([model_import, other_import])
+
+    imports.remap_modules({"Model": "target"})
+
+    assert str(imports) == "from source import Other as Other_1\nfrom target import Model as Model_1"
+    assert imports.counter == {("source", "Other"): 1, ("target", "Model"): 1}
+    assert imports.alias == {"source": {"Other": "Other_1"}, "target": {"Model": "Model_1"}}
+    assert imports.reference_paths == {
+        "/model": Import(from_="target", import_="Model", alias="Model_1", reference_path="/model"),
+        "/other": other_import,
+    }
+
+    imports.remove_referenced_imports("/model")
+
+    assert str(imports) == "from source import Other as Other_1"
+    assert ("target", "Model") not in imports.counter
+    assert "/model" not in imports.reference_paths
+
+
+def test_remap_modules_rejects_conflicting_aliases_without_mutation() -> None:
+    """Reject overrides that would collapse distinct effective names."""
+    imports = Imports()
+    imports.append([
+        Import(from_="source_a", import_="Model", alias="Model_1"),
+        Import(from_="source_b", import_="Model", alias="Model_2"),
+    ])
+    original = str(imports)
+    original_counter = imports.counter.copy()
+    original_aliases = {module: aliases.copy() for module, aliases in imports.alias.items()}
+
+    with pytest.raises(
+        ValueError,
+        match="Import override for 'Model' produces conflicting names: 'Model_1' and 'Model_2'",
+    ):
+        imports.remap_modules({"Model": "target"})
+
+    assert str(imports) == original
+    assert imports.counter == original_counter
+    assert imports.alias == original_aliases
+
+
+def test_remap_modules_preserves_future_reference_paths() -> None:
+    """Keep future imports and their reference metadata outside override handling."""
+    imports = Imports()
+    future_import = Import(
+        from_="__future__",
+        import_="annotations",
+        reference_path="/future/annotations",
+    )
+    imports.append(future_import)
+
+    imports.remap_modules({"annotations": "custom.future"})
+    future_imports = imports.extract_future()
+
+    assert str(future_imports) == "from __future__ import annotations"
+    assert future_imports.reference_paths == {"/future/annotations": future_import}
+    assert not imports.reference_paths
+
+
 def test_remove_dotted_import_decrements_counter_and_cleans_reference_paths() -> None:
     """Dotted imports keep their public counters and reference paths consistent."""
     imports = Imports()
@@ -221,6 +285,18 @@ def test_remove_dotted_import_keeps_bucket_when_other_dotted_imports_remain() ->
     assert imports.counter[None, "pathlib.Path"] == 1
 
 
+def test_remove_unused_dotted_import_uses_bound_package_name() -> None:
+    """A dotted import binds its top-level package rather than its final segment."""
+    imports = Imports()
+    imports.append(Import(from_=None, import_="package.submodule"))
+
+    imports.remove_unused({"package"})
+
+    assert str(imports) == "import package.submodule"
+    imports.remove_unused({"submodule"})
+    assert not str(imports)
+
+
 def test_remove_dotted_import_without_bucket_cleans_reference_path() -> None:
     """Defensive dotted import removal still clears counters and reference paths."""
     imports = Imports()
@@ -267,6 +343,83 @@ def test_plain_from_none_alias_cleanup_after_remove_and_remove_unused() -> None:
     imports.append(Import(from_=None, import_="datetime"))
 
     assert str(imports) == "import datetime"
+
+
+def test_dotted_direct_import_alias_lifecycle() -> None:
+    """Dotted direct imports retain aliases through use tracking and removal."""
+    imports = Imports()
+    aliased_import = Import(import_="pkg.models", alias="pkg_1", reference_path="/pkg/models")
+    imports.append(aliased_import)
+
+    assert str(imports) == "import pkg.models as pkg_1"
+    assert imports.get_effective_name(None, "pkg.models") == "pkg_1"
+    imports.remove_unused({"pkg_1"})
+    assert str(imports) == "import pkg.models as pkg_1"
+
+    imports.remove(aliased_import)
+
+    assert not str(imports)
+    assert None not in imports.alias
+    assert (None, "pkg.models") not in imports.counter
+    assert "/pkg/models" not in imports.reference_paths
+
+
+@pytest.mark.parametrize(
+    ("aliased_import", "plain_import", "expected"),
+    [
+        (
+            Import(import_="pkg.models", alias="pkg_1"),
+            Import(import_="pkg.models"),
+            "import pkg.models",
+        ),
+        (
+            Import(from_="foo", import_="Bar", alias="Bar_1"),
+            Import(from_="foo", import_="Bar"),
+            "from foo import Bar",
+        ),
+    ],
+)
+def test_last_unaliased_remove_clears_existing_alias(
+    aliased_import: Import,
+    plain_import: Import,
+    expected: str,
+) -> None:
+    """Alias state belongs to the identity and expires with its final reference."""
+    imports = Imports()
+    imports.append([aliased_import, plain_import])
+
+    imports.remove(aliased_import)
+    imports.remove(plain_import)
+    imports.append(plain_import)
+
+    assert str(imports) == expected
+
+
+def test_dump_all_uses_names_actually_bound_by_dotted_imports() -> None:
+    """Exports use the package root unless a direct dotted import has an alias."""
+    imports = Imports()
+    imports.append([
+        Import(import_="pkg.models"),
+        Import(import_="other.models", alias="models_alias"),
+        Import(from_="foo", import_="Bar"),
+    ])
+    imports.add_export("Local")
+
+    assert imports.dump_all() == '__all__ = ["Bar", "Local", "models_alias", "pkg"]'
+
+
+def test_apply_alias_is_identity_scoped() -> None:
+    """Module-local aliasing updates only an exact tracked identity."""
+    imports = Imports()
+    imports.apply_alias(Import(from_="missing", import_="Thing", alias="Thing_1"))
+    imports.append([
+        Import(from_="foo", import_="Bar"),
+        Import(from_="other", import_="Value"),
+    ])
+    imports.apply_alias(Import(from_="foo", import_="Bar"))
+    imports.apply_alias(Import(from_="foo", import_="Bar", alias="Bar_1"))
+
+    assert str(imports) == "from foo import Bar as Bar_1\nfrom other import Value"
 
 
 def test_extract_future_moves_reference_paths() -> None:

@@ -13,7 +13,7 @@ from itertools import starmap
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
 
 
 @dataclass(frozen=True)
@@ -88,7 +88,7 @@ class Imports(defaultdict[str | None, set[str]]):
                 key = self._storage_key(import_)
                 self[key[0]].add(key[1])
                 self.counter[key] += 1
-                if "." not in import_.import_ and import_.alias:
+                if import_.alias:
                     self.alias[key[0]][key[1]] = import_.alias
 
     def remove(self, imports: Import | Iterable[Import]) -> None:
@@ -96,23 +96,73 @@ class Imports(defaultdict[str | None, set[str]]):
         if isinstance(imports, Import):
             imports = [imports]
         for import_ in imports:
-            is_dotted_import = "." in import_.import_
             key = self._storage_key(import_)
             if self.counter.get(key, 0) <= 0:
                 continue
             self.counter[key] -= 1
             if self.counter[key] == 0:
                 del self.counter[key]
-                if not is_dotted_import or (key[0] in self and key[1] in self[key[0]]):
+                if key[0] in self and key[1] in self[key[0]]:
                     self[key[0]].remove(key[1])
                     if not self[key[0]]:
                         del self[key[0]]
-                if not is_dotted_import and import_.alias and key[0] in self.alias and key[1] in self.alias[key[0]]:
+                if key[0] in self.alias and key[1] in self.alias[key[0]]:
                     del self.alias[key[0]][key[1]]
                     if not self.alias[key[0]]:
                         del self.alias[key[0]]
             if import_.reference_path and import_.reference_path in self.reference_paths:
                 del self.reference_paths[import_.reference_path]
+
+    def remap_modules(self, import_overrides: Mapping[str, str]) -> None:
+        """Move configured symbols to replacement modules in place."""
+        remapped_keys = {
+            source_key: (module, source_key[1])
+            for source_key in self.counter
+            if source_key[0] != "__future__"
+            and (module := import_overrides.get(source_key[1])) is not None
+            and source_key[0] != module
+        }
+        effective_names = {
+            target_key: self.alias.get(target_key[0], {}).get(target_key[1], target_key[1])
+            for target_key in remapped_keys.values()
+            if target_key in self.counter
+        }
+        for source_key, target_key in remapped_keys.items():
+            source_name = self.alias.get(source_key[0], {}).get(source_key[1], source_key[1])
+            if (target_name := effective_names.setdefault(target_key, source_name)) != source_name:
+                msg = (
+                    f"Import override for {target_key[1]!r} produces conflicting names: "
+                    f"{target_name!r} and {source_name!r}"
+                )
+                raise ValueError(msg)
+
+        for (source_module, source_import), (target_module, target_import) in remapped_keys.items():
+            source_key = (source_module, source_import)
+            target_key = (target_module, target_import)
+            self.counter[target_key] += self.counter.pop(source_key)
+            self[source_module].remove(source_import)
+            if not self[source_module]:
+                del self[source_module]
+            self[target_module].add(target_import)
+
+            source_aliases = self.alias.get(source_module)
+            if source_aliases and (alias := source_aliases.pop(source_import, None)) is not None:
+                self.alias[target_module][target_import] = alias
+                if not source_aliases:
+                    del self.alias[source_module]
+
+        for reference_path, import_ in self.reference_paths.items():
+            if (
+                not import_.is_future
+                and (module := import_overrides.get(import_.import_)) is not None
+                and import_.from_ != module
+            ):
+                self.reference_paths[reference_path] = Import(
+                    import_=import_.import_,
+                    from_=module,
+                    alias=import_.alias,
+                    reference_path=import_.reference_path,
+                )
 
     def remove_referenced_imports(self, reference_path: str) -> None:
         """Remove imports associated with a reference path."""
@@ -156,7 +206,7 @@ class Imports(defaultdict[str | None, set[str]]):
         """
         name_set: set[str] = (self._exports or set()).copy()
         for from_, imports in self.items():
-            name_set.update(self.alias.get(from_, {}).get(import_) or import_ for import_ in imports)
+            name_set.update(self.get_effective_name(from_, import_) for import_ in imports)
         name_list = sorted(name_set)
         if multiline:
             items = ",\n    ".join(f'"{name}"' for name in name_list)
@@ -165,8 +215,17 @@ class Imports(defaultdict[str | None, set[str]]):
         return f"__all__ = [{items}]"
 
     def get_effective_name(self, from_: str | None, import_: str) -> str:
-        """Get the effective name after alias resolution."""
-        return self.alias.get(from_, {}).get(import_, import_)
+        """Get the name actually bound by an import after alias resolution."""
+        if alias := self.alias.get(from_, {}).get(import_):
+            return alias
+        return import_.partition(".")[0] if from_ is None else import_
+
+    def apply_alias(self, import_: Import) -> None:
+        """Apply an alias to an exact import identity already in this aggregate."""
+        key = self._storage_key(import_)
+        if not import_.alias or not self.counter.get(key):
+            return
+        self.alias[key[0]][key[1]] = import_.alias
 
     def remove_unused(self, used_names: set[str]) -> None:
         """Remove imports not referenced in used_names.

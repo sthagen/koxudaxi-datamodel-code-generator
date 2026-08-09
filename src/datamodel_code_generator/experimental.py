@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from textwrap import fill
 from typing import Literal
 
 from datamodel_code_generator._registry_render import _render_registry_json, _render_registry_table
 
-ExperimentalFeatureKind = Literal["input-format", "formatter", "cli-option", "python-api", "behavior"]
+ExperimentalFeatureKind = Literal["input-format", "formatter", "cli-option", "python-api", "behavior", "extra"]
 ExperimentalFeatureFormat = Literal["table", "json", "markdown"]
 ExperimentalFeatureId = Literal[
     "cli-option.generate-schema-validators",
     "cli-option.schema-validator-type",
     "cli-option.use-missing-sentinel",
     "cli-option.use-type-alias",
+    "cli-option.use-type-alias-type",
+    "extra.httpx2",
     "input-format.asyncapi",
     "input-format.avro",
     "input-format.mcp-tools",
@@ -37,6 +40,21 @@ class ExperimentalFeature:
 
 
 EXPERIMENTAL_FEATURES: dict[ExperimentalFeatureId, ExperimentalFeature] = {
+    "extra.httpx2": ExperimentalFeature(
+        id="extra.httpx2",
+        kind="extra",
+        target="datamodel-code-generator[httpx2]",
+        message="The HTTPX2-backed HTTP client is experimental and may change as compatibility is validated.",
+        since_version="0.71.1",
+        note=(
+            "datamodel-code-generator[http] remains the stable HTTPX backend and is not deprecated; "
+            "datamodel-code-generator[httpx2] is experimental. The default HTTP backend policy is auto: stable "
+            "httpx is selected when its client module is installed, including when both pairs are installed, and "
+            "experimental httpx2 is selected only when that module is absent. Use --http-backend httpx2 or "
+            "HTTPBackend.HTTPX2 to require the experimental pair. Explicit selections and paired dependency "
+            "errors do not fall back."
+        ),
+    ),
     "cli-option.generate-schema-validators": ExperimentalFeature(
         id="cli-option.generate-schema-validators",
         kind="cli-option",
@@ -87,6 +105,17 @@ EXPERIMENTAL_FEATURES: dict[ExperimentalFeatureId, ExperimentalFeature] = {
         note=(
             "The option replaces root model classes with type aliases where possible. Pydantic v2 output may use "
             "TypeAliasType or Python 3.12 type statements depending on the target Python version."
+        ),
+    ),
+    "cli-option.use-type-alias-type": ExperimentalFeature(
+        id="cli-option.use-type-alias-type",
+        kind="cli-option",
+        target="--use-type-alias-type",
+        message="Runtime TypeAliasType output is experimental and may change as Python typing support evolves.",
+        since_version="0.71.1",
+        note=(
+            "The option implies --use-type-alias and selects TypeAliasType for Python 3.10 and 3.11. "
+            "Python 3.12 and newer continue to use native type statements."
         ),
     ),
     "input-format.asyncapi": ExperimentalFeature(
@@ -162,7 +191,8 @@ def render_experimental_features_json() -> str:
 
 
 def render_experimental_features_table() -> str:
-    """Render all experimental features as a plain text table."""
+    """Render all experimental features as a plain text table with readable notes."""
+    features = iter_experimental_features()
     table = _render_registry_table([
         [
             "ID",
@@ -179,10 +209,21 @@ def render_experimental_features_table() -> str:
                 feature.since_version,
                 feature.tracking_issue or "-",
             ]
-            for feature in iter_experimental_features()
+            for feature in features
         ],
     ])
-    return "\n".join(line.rstrip() for line in table.splitlines()) + "\n"
+    notes = [
+        f"{feature.id}:\n{fill(note, width=100, initial_indent='  ', subsequent_indent='  ', break_on_hyphens=False)}"
+        for feature in features
+        if (note := feature.note) is not None
+    ]
+    return "\n".join([
+        *(line.rstrip() for line in table.splitlines()),
+        "",
+        "Notes:",
+        *notes,
+        "",
+    ])
 
 
 def render_experimental_features_markdown(*, include_header: bool = True) -> str:

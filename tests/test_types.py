@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 import pytest
 
+from datamodel_code_generator.imports import IMPORT_ANY, IMPORT_TUPLE
 from datamodel_code_generator.parser._math_imports import add_math_imports_for_non_finite_literals
 from datamodel_code_generator.python_literal import PythonCode, represent_python_value
 from datamodel_code_generator.reference import Reference
@@ -19,11 +20,36 @@ from datamodel_code_generator.types import (
     get_optional_type,
     get_subscript_args,
     get_type_base_name,
+    is_data_model_field,
     normalize_integer_constraint,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+
+def test_is_data_model_field_uses_structural_contract() -> None:
+    """Recognize only parents exposing the writable data_type contract."""
+    from types import SimpleNamespace
+
+    data_type = DataType(type="str")
+
+    assert is_data_model_field(SimpleNamespace(data_type=data_type))
+    assert not is_data_model_field(SimpleNamespace(data_type=object()))
+    assert not is_data_model_field(data_type)
+
+
+def test_data_type_rejects_non_binding_python_type_context() -> None:
+    """Parser/model objects cannot cross the structured annotation boundary."""
+    with pytest.raises(ValueError, match="python_type must be a BoundPythonType"):
+        DataType(type="str", python_type=object())
+
+
+def test_data_type_accepts_explicit_empty_python_type_context() -> None:
+    """An explicitly empty binding context keeps the ordinary fast path."""
+    data_type = DataType(type="str", python_type=None)
+
+    assert data_type.python_type is None
 
 
 @pytest.mark.parametrize(
@@ -77,6 +103,23 @@ def test_get_optional_type_cache_clear_preserves_value() -> None:
 def test_chain_as_tuple_chains_multiple_iterables() -> None:
     """Test chain_as_tuple handles the general path for more than two iterables."""
     assert chain_as_tuple((1,), (2,), (3,)) == (1, 2, 3)
+
+
+def test_is_data_model_field_matches_structural_type_contract() -> None:
+    """The runtime predicate must accept exactly field-like DataType owners."""
+
+    class FieldLike:
+        data_type = DataType(type="str")
+
+    class InvalidFieldLike:
+        data_type = object()
+
+    candidate: object = FieldLike()
+
+    assert is_data_model_field(candidate)
+    assert candidate.data_type.type == "str"
+    assert not is_data_model_field(InvalidFieldLike())
+    assert not is_data_model_field(object())
 
 
 @pytest.mark.parametrize(
@@ -375,6 +418,26 @@ def test_datatype_type_hint_container_precedence_matches_base_type_hint() -> Non
         assert data_type.base_type_hint == expected_base_type_hint
 
 
+@pytest.mark.parametrize(
+    ("data_types", "tuple_item_count", "expected", "expected_imports"),
+    [
+        ([], 0, "Tuple[()]", (IMPORT_TUPLE,)),
+        ([], 2, "Tuple[Any, Any]", (IMPORT_ANY, IMPORT_TUPLE)),
+        ([DataType()], 2, "Tuple[Any, Any]", (IMPORT_ANY, IMPORT_TUPLE)),
+        ([DataType(type="str")], 3, "Tuple[str, str, str]", (IMPORT_TUPLE,)),
+    ],
+)
+def test_datatype_fixed_length_tuple_renders_without_repeated_data_types(
+    data_types: list[DataType], tuple_item_count: int, expected: str, expected_imports: tuple[object, ...]
+) -> None:
+    """Render homogeneous tuples from one item type without expanding the type tree."""
+    data_type = DataType(data_types=data_types, is_tuple=True, tuple_item_count=tuple_item_count)
+
+    assert data_type.type_hint == expected
+    assert data_type.base_type_hint == expected
+    assert tuple(data_type.all_imports) == expected_imports
+
+
 def test_external_datatype_subclass_keeps_legacy_rendering_contract() -> None:
     """External DataType subclasses retain discriminator and base-hint behavior."""
     from datamodel_code_generator.model.base import DataModelFieldBase  # noqa: F401
@@ -635,6 +698,8 @@ def test_datatype_deepcopy_memo_cache_hit() -> None:
         # Subscripted with qualified names
         ("type[foo.bar.Baz]", "type"),
         ("List[foo.Bar]", "List"),
+        # Preserve the legacy first-generic fallback for a union root
+        ("my.custom.Iterable[str] | None", "Iterable"),
         # Invalid syntax (fallback to string parsing)
         ("List[", "List"),
         ("[invalid", ""),  # splits on "[" giving empty string
@@ -663,12 +728,16 @@ def test_get_type_base_name(type_str: str, expected: str) -> None:
         ("str | int", ["str", "int"]),
         ("str | int | None", ["str", "int", "None"]),
         ("List[str] | None", ["List[str]", "None"]),
+        ("tuple[()] | None", ["tuple[()]", "None"]),
         # Complex nested types
         ("Dict[str, List[int]]", ["str", "List[int]"]),
         ("Union[List[str], Dict[str, int]]", ["List[str]", "Dict[str, int]"]),
         # Qualified names in arguments
         ("type[foo.bar.Baz]", ["foo.bar.Baz"]),
         ("Dict[a.B, c.D]", ["a.B", "c.D"]),
+        # Variadics and canonicalized non-finite numeric literals
+        ("tuple[*Ts]", ["*Ts"]),
+        ("Literal[1e309, -1e309]", ["1e309", "-1e309"]),
         # Invalid syntax
         ("List[", []),
         ("[invalid", []),

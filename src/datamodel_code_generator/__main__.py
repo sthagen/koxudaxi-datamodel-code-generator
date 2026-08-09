@@ -4,19 +4,19 @@ from __future__ import annotations
 
 import sys
 
-# Fast path for --version (avoid importing heavy modules)
-if len(sys.argv) == 2 and sys.argv[1] in {"--version", "-V"}:  # pragma: no cover  # noqa: PLR2004
-    from importlib.metadata import version
+match sys.argv:
+    # Fast path for --version (avoid importing heavy modules)
+    case [_, "--version" | "-V"]:
+        from datamodel_code_generator import get_version
 
-    sys.stdout.write(f"datamodel-codegen {version('datamodel-code-generator')}\n")
-    sys.exit(0)
+        sys.stdout.write(f"datamodel-codegen {get_version()}\n")
+        sys.exit(0)
+    # Fast path for --help (avoid importing heavy modules)
+    case [_, "--help" | "-h"]:  # pragma: no cover
+        from datamodel_code_generator.arguments import arg_parser
 
-# Fast path for --help (avoid importing heavy modules)
-if len(sys.argv) == 2 and sys.argv[1] in {"--help", "-h"}:  # pragma: no cover  # noqa: PLR2004
-    from datamodel_code_generator.arguments import arg_parser
-
-    arg_parser.print_help()
-    sys.exit(0)
+        arg_parser.print_help()
+        sys.exit(0)
 
 match sys.argv:
     case [_, "--output-format-json-schema", schema_output_name] if schema_output_name in {
@@ -341,6 +341,7 @@ def _get_config_class() -> type[Config]:
             "model_name_map",
             "enum_field_as_literal_map",
             "duplicate_name_suffix",
+            "import_overrides",
             "type_overrides",
             mode="before",
         )
@@ -664,6 +665,9 @@ def _prepare_cli_config_args(set_args: Mapping[str, _RawConfigValue]) -> dict[st
 
     if prepared_args.get("use_annotated"):
         prepared_args["field_constraints"] = True
+
+    if prepared_args.get("use_type_alias_type"):
+        prepared_args["use_type_alias"] = True
 
     return prepared_args
 
@@ -1148,7 +1152,7 @@ def _write_generated_result(
 
 def run_generate_from_config(  # noqa: PLR0913, PLR0917
     config: Config,
-    input_: Path | str | ParseResult,
+    input_: Path | str | ParseResult | Mapping[str, Any],
     output: Path | None,
     extra_template_data: defaultdict[str, dict[str, Any]] | None,
     aliases: Mapping[str, str | list[str]] | None,
@@ -1493,13 +1497,15 @@ def main(args: Sequence[str] | None = None) -> Exit:  # noqa: PLR0911, PLR0912, 
         return exit_code
 
     try:
-        input_: Path | str | ParseResult
+        input_: Path | str | ParseResult | Mapping[str, Any]
         if config.input_model:
             from datamodel_code_generator.input_model import Error as InputModelError  # noqa: PLC0415
-            from datamodel_code_generator.input_model import load_model_schema  # noqa: PLC0415
+            from datamodel_code_generator.input_model import (  # noqa: PLC0415
+                _load_model_schema_with_python_type_expressions,
+            )
 
             try:
-                schema = load_model_schema(
+                input_ = _load_model_schema_with_python_type_expressions(
                     config.input_model,
                     config.input_file_type,
                     config.input_model_ref_strategy,
@@ -1507,7 +1513,6 @@ def main(args: Sequence[str] | None = None) -> Exit:  # noqa: PLR0911, PLR0912, 
                 )
             except InputModelError as e:
                 raise Error(str(e)) from e
-            input_ = json.dumps(schema)
             if config.input_file_type == InputFileType.Auto:
                 config.input_file_type = InputFileType.JsonSchema
         else:
