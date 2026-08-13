@@ -91,22 +91,29 @@ from datamodel_code_generator.parser.generation import GenerationIndex, Generati
 from datamodel_code_generator.parser.schema_version import SchemaFeaturesT
 from datamodel_code_generator.reference import ModelResolver, ModelType, Reference, split_module_name
 from datamodel_code_generator.types import ANY, NONE, DataType, DataTypeManager
-from datamodel_code_generator.util import camel_to_snake
+from datamodel_code_generator.util import camel_to_snake, record_watch_dependency
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+
+    from typing_extensions import Protocol
 
     from datamodel_code_generator._types import ParserConfigDict
     from datamodel_code_generator.config import ParserConfig
     from datamodel_code_generator.format import CodeFormatter
     from datamodel_code_generator.http import _HTTPFetchSession
+    from datamodel_code_generator.model.pydantic_v2.base_model import (
+        _ParserSimpleFieldData,
+    )
     from datamodel_code_generator.model_metadata import GeneratedModelMetadata, ModelFieldMetadata, ModelMetadata
+
 
 # Preserve the existing parser.base export while sharing one canonical escape table.
 escape_characters = _enum_escape_characters
 
 ParserConfigT = TypeVar("ParserConfigT", bound="ParserConfig")
 _ConstructorFieldAdjustment: TypeAlias = Literal["assignment", "keyword_only"]
+
 
 HashableComparable = _internal_utils.HashableComparable
 to_hashable = _internal_utils.to_hashable
@@ -156,6 +163,27 @@ def _model_type(value: object | type[object]) -> type[object]:
 
 def _is_pydantic_v2_data_model_field(value: object) -> bool:
     return _type_mro_contains_type(_model_type(value), module=_PYDANTIC_V2_BASE_MODEL_MODULE, name="DataModelField")
+
+
+if TYPE_CHECKING:
+
+    class _DataModelFieldConstructor(Protocol):
+        def __call__(self, **data: Unpack[_ParserSimpleFieldData]) -> DataModelFieldBase:
+            raise NotImplementedError
+
+
+def _get_builtin_pydantic_v2_field_constructor(
+    field_type: type[DataModelFieldBase],
+) -> _DataModelFieldConstructor | None:
+    """Return the internal constructor only for the exact built-in v2 field."""
+    if field_type.__module__ != _PYDANTIC_V2_BASE_MODEL_MODULE or field_type.__name__ != "DataModelField":
+        return None
+    from datamodel_code_generator.model.pydantic_v2.base_model import (  # noqa: PLC0415
+        DataModelField,
+        _construct_parser_simple_field,
+    )
+
+    return _construct_parser_simple_field if field_type is DataModelField else None
 
 
 def _get_field_dependency_ordering_model_type(model_type: type[DataModel]) -> type[DataModel] | None:
@@ -1465,6 +1493,7 @@ class Source(BaseModel):
         encoding: str,
     ) -> Source:
         """Create a Source from a file path relative to base_path."""
+        record_watch_dependency(path)
         return cls(
             path=path.relative_to(base_path),
             text=path.read_text(encoding=encoding),
@@ -1783,9 +1812,9 @@ def _resolve_module_file(module_: ModulePath, results: dict[ModulePath, Result])
     return ("__init__.py",), is_init
 
 
-def _format_body_safe(body: str, code_formatter: CodeFormatter) -> str:
+def _format_body_safe(body: str, code_formatter: CodeFormatter, *, generated_code: bool = False) -> str:
     try:
-        return code_formatter.format_code(body)
+        return code_formatter._format_generated_code(body) if generated_code else code_formatter.format_code(body)  # noqa: SLF001
     except Exception as exc:  # noqa: BLE001
         warn(
             f"Failed to format code: {exc!r}. Emitting unformatted output.",
@@ -1942,6 +1971,13 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             self.data_model_root_type
         )
         self.data_model_field_type: type[DataModelFieldBase] = config.data_model_field_type
+        self._data_model_field_constructor: type[DataModelFieldBase] | _DataModelFieldConstructor = (
+            self.data_model_field_type
+        )
+        if (
+            simple_field_constructor := _get_builtin_pydantic_v2_field_constructor(self.data_model_field_type)
+        ) is not None:
+            self._data_model_field_constructor = simple_field_constructor
         self._configured_generation_types_are_builtin = all(
             generation_type.__module__.startswith(_MODEL_MODULE_PREFIX)
             for generation_type in (
@@ -1955,6 +1991,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             or generation_type.__module__.startswith(_MODEL_MODULE_PREFIX)
             for attribute in ("data_model_scalar_type", "data_model_union_type")
         )
+        self._uses_standard_generation_templates = False
 
         self.imports: Imports = Imports(config.use_exact_imports)
         self.use_exact_imports: bool = config.use_exact_imports
@@ -2160,6 +2197,8 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         self.http_query_parameters: Sequence[tuple[str, str]] | None = config.http_query_parameters
         self.http_ignore_tls: bool = config.http_ignore_tls
         self.http_timeout: float | None = config.http_timeout
+        remote_lock = getattr(config, "remote_lock", None)
+        self._remote_response_observer = remote_lock.record_response if remote_lock is not None else None
         self.use_annotated: bool = config.use_annotated
         if self.use_annotated and not self.field_constraints:  # pragma: no cover
             msg = "`use_annotated=True` has to be used with `field_constraints=True`"
@@ -2405,7 +2444,10 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             from datamodel_code_generator.http import DEFAULT_HTTP_TIMEOUT, _HTTPFetchSession  # noqa: PLC0415
 
             if (session := self._http_fetch_session) is None:
-                self._http_fetch_session = session = _HTTPFetchSession(self.http_backend)
+                self._http_fetch_session = session = _HTTPFetchSession(
+                    self.http_backend,
+                    response_observer=self._remote_response_observer,
+                )
             timeout = self.http_timeout if self.http_timeout is not None else DEFAULT_HTTP_TIMEOUT
             return session.get_body(
                 remote_url,
@@ -2414,6 +2456,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                 self.http_query_parameters,
                 timeout,
                 allow_private_network=self.allow_private_network,
+                encoding=self.encoding,
             )
 
         return self.remote_text_cache.get_or_put(
@@ -3830,7 +3873,8 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         return overridden
 
     @staticmethod
-    def __disable_union_operator_for_forward_ref_parents(data_type: DataType) -> None:
+    def __disable_union_operator_for_forward_ref(data_type: DataType) -> None:
+        data_type.use_union_operator = False
         parent = data_type.parent
         while isinstance(parent, DataType):
             if parent.is_union:
@@ -3891,7 +3935,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                     source_index = model_index.get(name)
                     if source_index is not None and source_index >= i:
                         data_type.alias = f'"{name}"'
-                        cls.__disable_union_operator_for_forward_ref_parents(data_type)
+                        cls.__disable_union_operator_for_forward_ref(data_type)
                         has_aliased_forward_ref = True
 
             if has_aliased_forward_ref:
@@ -5019,6 +5063,47 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         all_module_fields = {field.name for model in models for field in model.fields if field.name is not None}
         scoped_model_resolver = ModelResolver(exclude_names=all_module_fields)
 
+        can_retain_cache = self.__prepare_module_models(
+            models,
+            all_module_fields=all_module_fields,
+            imports=imports,
+            scoped_model_resolver=scoped_model_resolver,
+            is_init=is_init,
+            internal_modules=internal_modules,
+            model_path_to_module_name=model_path_to_module_name,
+            can_retain_cache=can_retain_cache,
+        )
+        models = self.__process_module_models(
+            models,
+            unused_models=unused_models,
+            imports=imports,
+            scoped_model_resolver=scoped_model_resolver,
+            model_path_to_module_name=model_path_to_module_name,
+            require_update_action_models=require_update_action_models,
+            use_deferred_annotations=config.use_deferred_annotations,
+            can_retain_cache=can_retain_cache,
+        )
+        self.__finalize_module_models(
+            models,
+            use_deferred_annotations=config.use_deferred_annotations,
+            can_retain_cache=can_retain_cache,
+        )
+
+        return ModuleContext(module, module_, models, is_init, imports, scoped_model_resolver)
+
+    def __prepare_module_models(  # noqa: PLR0913
+        self,
+        models: list[DataModel],
+        *,
+        all_module_fields: set[str],
+        imports: Imports,
+        scoped_model_resolver: ModelResolver,
+        is_init: bool,
+        internal_modules: set[ModulePath],
+        model_path_to_module_name: dict[str, str],
+        can_retain_cache: bool,
+    ) -> bool:
+        """Prepare aliases, imports, and inherited enums before default processing."""
         self.__alias_shadowed_imports(models, all_module_fields, can_retain_cache=can_retain_cache)
         self.__override_required_field(models, can_retain_cache=can_retain_cache)
         self.__replace_unique_list_to_set(models, can_retain_cache=can_retain_cache)
@@ -5031,32 +5116,54 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             model_path_to_module_name=model_path_to_module_name,
         )
         self.__extract_inherited_enum(models)
-        can_retain_cache = can_retain_cache and _can_retain_model_imports_cache(
+        return can_retain_cache and _can_retain_model_imports_cache(
             models,
             configured_types_are_builtin=self._configured_generation_types_are_builtin,
         )
+
+    def __process_module_models(  # noqa: PLR0913
+        self,
+        models: list[DataModel],
+        *,
+        unused_models: list[DataModel],
+        imports: Imports,
+        scoped_model_resolver: ModelResolver,
+        model_path_to_module_name: dict[str, str],
+        require_update_action_models: list[str],
+        use_deferred_annotations: bool,
+        can_retain_cache: bool,
+    ) -> list[DataModel]:
+        """Apply defaults and model transforms before final type adjustments."""
         self.__set_reference_default_value_to_field(models, can_retain_cache=can_retain_cache)
         self.__reuse_model(models, require_update_action_models)
         self.__collapse_root_models(models, unused_models, imports, scoped_model_resolver, model_path_to_module_name)
         self.__set_default_enum_member(models, can_retain_cache=can_retain_cache)
-        self.__sort_models(models, imports, use_deferred_annotations=config.use_deferred_annotations)
+        self.__sort_models(models, imports, use_deferred_annotations=use_deferred_annotations)
         self.__change_field_name(models, can_retain_cache=can_retain_cache)
         self.__apply_discriminator_type(models, imports, can_retain_cache=can_retain_cache)
         self.__set_one_literal_on_default(models, can_retain_cache=can_retain_cache)
         self.__fix_constructor_field_ordering(models)
-        models = self.__remove_overridden_models(models)
+
+        return self.__remove_overridden_models(models)
+
+    def __finalize_module_models(
+        self,
+        models: list[DataModel],
+        *,
+        use_deferred_annotations: bool,
+        can_retain_cache: bool,
+    ) -> None:
+        """Apply final type metadata and invalidate imports only when required."""
         self.__apply_type_overrides(models)
         self.__update_type_aliases(
             models,
             self.pydantic_v2_root_model_type,
-            use_deferred_annotations=config.use_deferred_annotations,
+            use_deferred_annotations=use_deferred_annotations,
             can_retain_cache=can_retain_cache,
         )
         self.__set_validate_default_on_fields(models, can_retain_cache=can_retain_cache)
         if not can_retain_cache:
             _clear_model_imports_cache(models)
-
-        return ModuleContext(module, module_, models, is_init, imports, scoped_model_resolver)
 
     def _finalize_bound_python_type_imports(self, contexts: list[ModuleContext]) -> None:
         """Resolve aliases introduced after generic base classes are applied."""
@@ -5222,7 +5329,11 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
 
         body = "\n".join(result)
         if config.code_formatter:
-            body = _format_body_safe(body, config.code_formatter)
+            body = _format_body_safe(
+                body,
+                config.code_formatter,
+                generated_code=self._uses_standard_generation_templates,
+            )
 
         return Result(
             body=body,
@@ -5253,7 +5364,11 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                 parts += [str(export_imports), "", export_imports.dump_all(multiline=True)]
                 body = "\n".join(parts)
                 if config.code_formatter:
-                    body = _format_body_safe(body, config.code_formatter)
+                    body = _format_body_safe(
+                        body,
+                        config.code_formatter,
+                        generated_code=self._uses_standard_generation_templates,
+                    )
                 results[init_module] = Result(
                     body=body,
                     future_imports=future_imports_str,
@@ -5340,7 +5455,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
     def _report_parse_diagnostics(self) -> None:
         """Report diagnostics collected while parsing the input schema."""
 
-    def parse(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, PLR0917
+    def parse(  # noqa: PLR0913, PLR0917
         self,
         with_import: bool | None = True,  # noqa: FBT001, FBT002
         format_: bool | None = True,  # noqa: FBT001, FBT002
@@ -5352,6 +5467,30 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         collect_model_metadata: bool = False,  # noqa: FBT001, FBT002
     ) -> str | dict[tuple[str, ...], Result]:
         """Parse schema and generate code, returning single file or module dict."""
+        return self.__prepare_parse(
+            with_import=with_import,
+            format_=format_,
+            settings_path=settings_path,
+            disable_future_imports=disable_future_imports,
+            all_exports_scope=all_exports_scope,
+            all_exports_collision_strategy=all_exports_collision_strategy,
+            module_split_mode=module_split_mode,
+            collect_model_metadata=collect_model_metadata,
+        )
+
+    def __prepare_parse(  # noqa: PLR0913
+        self,
+        *,
+        with_import: bool | None,
+        format_: bool | None,
+        settings_path: Path | None,
+        disable_future_imports: bool,
+        all_exports_scope: AllExportsScope | None,
+        all_exports_collision_strategy: AllExportsCollisionStrategy | None,
+        module_split_mode: ModuleSplitMode | None,
+        collect_model_metadata: bool,
+    ) -> str | dict[tuple[str, ...], Result]:
+        """Prepare parsed models and formatting before processing output modules."""
         if (custom_template_dir := self.custom_template_dir) is not None:
             _refresh_custom_template_paths(custom_template_dir)
         self._set_typed_extra_annotation_mode(
@@ -5376,12 +5515,14 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             generation_index=self.generation_store.index,
             pydantic_v2_root_model_type=self.pydantic_v2_root_model_type,
         )
-        source_reference_paths: dict[DataModel, str] = {}
-        if collect_model_metadata:
-            source_reference_paths = {
+        source_reference_paths: Mapping[DataModel, str] | None = (
+            {
                 model: model.__dict__.get(_SOURCE_REFERENCE_PATH_KEY, model.reference.path)
                 for model in sorted_data_models.values()
             }
+            if collect_model_metadata
+            else None
+        )
         sort_base_classes_for_mro(sorted_data_models, self.generation_store)
 
         (
@@ -5409,6 +5550,55 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                         ),
                     )
 
+        self._uses_standard_generation_templates = bool(
+            (code_formatter := config.code_formatter)
+            and code_formatter.use_builtin_formatter
+            and self._configured_generation_types_are_builtin
+            and not (parser_config := self.config).custom_template_dir
+            and not any((
+                parser_config.additional_imports,
+                parser_config.class_decorators,
+                parser_config.base_class,
+                parser_config.base_class_map,
+                parser_config.extra_template_data,
+                parser_config.validators,
+                parser_config.generate_schema_validators,
+                parser_config.alias_generator,
+                parser_config.custom_class_name_generator,
+                parser_config.dump_resolve_reference_action is not None
+                and not _is_pydantic_v2_dump_resolve_reference_action(parser_config.dump_resolve_reference_action),
+                parser_config.type_mappings,
+                parser_config.type_overrides,
+                parser_config.import_overrides,
+            ))
+        )
+
+        return self.__process_modules(
+            module_models,
+            internal_modules=internal_modules,
+            forwarder_map=forwarder_map,
+            model_to_module_models=model_to_module_models,
+            model_path_to_module_name=model_path_to_module_name,
+            require_update_action_models=require_update_action_models,
+            sorted_data_models=sorted_data_models,
+            source_reference_paths=source_reference_paths,
+            config=config,
+        )
+
+    def __process_modules(  # noqa: PLR0913
+        self,
+        module_models: ModuleModels,
+        *,
+        internal_modules: set[ModulePath],
+        forwarder_map: ForwarderMap,
+        model_to_module_models: dict[DataModel, tuple[ModulePath, list[DataModel]]],
+        model_path_to_module_name: dict[str, str],
+        require_update_action_models: list[str],
+        sorted_data_models: SortedDataModels,
+        source_reference_paths: Mapping[DataModel, str] | None,
+        config: ParseConfig,
+    ) -> str | dict[tuple[str, ...], Result]:
+        """Process every module into one shared result mapping before rendering."""
         results: dict[ModulePath, Result] = {}
         unused_models: list[DataModel] = []
         module_to_import: dict[ModulePath, Imports] = {}
@@ -5438,6 +5628,28 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             if len(top_level_dirs) > 1:
                 results[root_init] = Result(body="")
 
+        return self.__render_modules(
+            results,
+            contexts=contexts,
+            sorted_data_models=sorted_data_models,
+            source_reference_paths=source_reference_paths,
+            config=config,
+            forwarder_map=forwarder_map,
+            require_update_action_models=require_update_action_models,
+        )
+
+    def __render_modules(  # noqa: PLR0913
+        self,
+        results: dict[ModulePath, Result],
+        *,
+        contexts: list[ModuleContext],
+        sorted_data_models: SortedDataModels,
+        source_reference_paths: Mapping[DataModel, str] | None,
+        config: ParseConfig,
+        forwarder_map: ForwarderMap,
+        require_update_action_models: list[str],
+    ) -> str | dict[tuple[str, ...], Result]:
+        """Render the shared result mapping and apply final output-only transformations."""
         future_imports = self.imports.extract_future()
         future_imports_str = str(future_imports)
 
@@ -5453,7 +5665,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
 
         self._inspect_invalid_dotted_stdout(contexts, sorted_data_models, config, results)
 
-        if collect_model_metadata:
+        if source_reference_paths is not None:
             self.model_metadata = self._build_model_metadata(contexts, source_reference_paths)
         else:
             self.model_metadata = None

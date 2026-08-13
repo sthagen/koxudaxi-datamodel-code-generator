@@ -5,6 +5,41 @@ This changelog is automatically generated from GitHub Releases.
 
 ---
 
+## [0.72.4](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.72.4) - 2026-08-12
+
+## What's Changed
+* Update CHANGELOG for 0.72.3 by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3724
+* Update release benchmark data by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3725
+* Update package metadata validation by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3733
+* Fix nullable forward reference unions by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3732
+* Split generation orchestration into phases by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3726
+* Split result emission paths by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3727
+* Split parser processing phases by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3728
+* Group single-module processing steps by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3729
+* Remove Astral sponsor logo by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3735
+
+
+**Full Changelog**: https://github.com/koxudaxi/datamodel-code-generator/compare/0.72.3...0.72.4
+
+---
+
+## [0.72.3](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.72.3) - 2026-08-10
+
+## What's Changed
+* Update CHANGELOG for 0.72.2 by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3715
+* Update release benchmark data by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3721
+* Watch local generation dependencies by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3717
+* Add batch generation jobs by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3716
+* Compare generated inputs by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3718
+* Lock remote schema references by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3719
+* Bump pymdown-extensions from 11.0 to 11.0.1 by @dependabot[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3722
+* [pre-commit.ci] pre-commit autoupdate by @pre-commit-ci[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3723
+
+
+**Full Changelog**: https://github.com/koxudaxi/datamodel-code-generator/compare/0.72.2...0.72.3
+
+---
+
 ## [0.72.2](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.72.2) - 2026-08-06
 
 ## What's Changed

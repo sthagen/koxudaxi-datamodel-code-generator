@@ -43,14 +43,18 @@ if TYPE_CHECKING:
     from collections import defaultdict
     from collections.abc import Callable, Iterable, Mapping, Sequence
     from pathlib import Path
+    from typing import Unpack
     from urllib.parse import ParseResult
 
+    from datamodel_code_generator import GeneratedModules
+    from datamodel_code_generator._types import GenerateConfigDict
     from datamodel_code_generator.config import GenerateConfig
     from datamodel_code_generator.format import DateClassType, DatetimeClassType, Formatter, PythonVersion
     from datamodel_code_generator.model import DataModel, DataModelFieldBase
     from datamodel_code_generator.model.dataclass import DataclassArguments
     from datamodel_code_generator.model.pydantic_v2 import UnionMode
     from datamodel_code_generator.parser import DefaultPutDict, LiteralType
+    from datamodel_code_generator.parser.base import ModuleContext, ModulePath, ParseConfig, Result
     from datamodel_code_generator.preset_names import PresetName
     from datamodel_code_generator.types import StrictTypes
     from datamodel_code_generator.validators import ModelValidators
@@ -357,6 +361,9 @@ def _baseline_generate(
     http_local_ref_path: Path | None = None,
     http_ignore_tls: bool = False,
     http_timeout: float | None = None,
+    lockfile: Path | None = None,
+    update_lock: bool = False,
+    locked: bool = False,
     use_annotated: bool = False,
     use_serialize_as_any: bool = False,
     use_non_positive_negative_number_constrained_types: bool = False,
@@ -419,6 +426,51 @@ def _baseline_generate(
     schema_version_mode: VersionMode | None = None,
     external_ref_mapping: dict[str, str] | None = None,
 ) -> str | object | None:
+    raise NotImplementedError
+
+
+def _baseline_generate_runtime_signature(
+    input_: Path | str | ParseResult | Mapping[str, Any] | list[Any],
+    *,
+    config: GenerateConfig | None = None,
+    **options: Unpack[GenerateConfigDict],
+) -> str | GeneratedModules | None:
+    raise NotImplementedError
+
+
+def _baseline_parser_parse_runtime_signature(
+    self,  # noqa: ANN001
+    with_import: bool | None = True,
+    format_: bool | None = True,
+    settings_path: Path | None = None,
+    disable_future_imports: bool = False,
+    all_exports_scope: AllExportsScope | None = None,
+    all_exports_collision_strategy: AllExportsCollisionStrategy | None = None,
+    module_split_mode: ModuleSplitMode | None = None,
+    collect_model_metadata: bool = False,
+) -> str | dict[tuple[str, ...], Result]:
+    raise NotImplementedError
+
+
+def _baseline_process_single_module_runtime_signature(
+    self,  # noqa: ANN001
+    module_: ModulePath,
+    models: list[DataModel],
+    results: dict[ModulePath, Result],
+    config: ParseConfig,
+    internal_modules: set[ModulePath],
+    model_path_to_module_name: dict[str, str],
+    require_update_action_models: list[str],
+    unused_models: list[DataModel],
+) -> ModuleContext:
+    raise NotImplementedError
+
+
+def _baseline_openapi_parser_parse_runtime_signature(
+    self,  # noqa: ANN001
+    *args: Any,
+    **kwargs: Any,
+) -> str | dict[tuple[str, ...], Result]:
     raise NotImplementedError
 
 
@@ -775,8 +827,21 @@ def test_data_model_set_tuple_abi_matches_baseline() -> None:
         known_third_party,
     ) = model_types
 
+    defaulted_model_types = DataModelSet(
+        data_model,
+        root_model,
+        field_model,
+        data_type_manager,
+        dump_resolve_reference_action,
+        scalar_model,
+        union_model,
+    )
+
+    assert issubclass(DataModelSet, tuple)
     assert DataModelSet._fields == expected_fields
+    assert DataModelSet._field_defaults == {"known_third_party": None}
     assert len(model_types) == len(expected_fields)
+    assert defaulted_model_types.known_third_party is None
     assert (
         DataModelSet(
             data_model,
@@ -790,6 +855,53 @@ def test_data_model_set_tuple_abi_matches_baseline() -> None:
         )
         == model_types
     )
+
+
+@pytest.mark.parametrize(
+    ("context_type", "expected_fields"),
+    [
+        pytest.param(
+            "ModuleContext",
+            ("module", "module_key", "models", "is_init", "imports", "scoped_model_resolver"),
+            id="module-context",
+        ),
+        pytest.param(
+            "ParseConfig",
+            (
+                "with_import",
+                "use_deferred_annotations",
+                "code_formatter",
+                "module_split_mode",
+                "all_exports_scope",
+                "all_exports_collision_strategy",
+            ),
+            id="parse-config",
+        ),
+    ],
+)
+def test_parser_named_tuple_context_abi_matches_baseline(
+    context_type: str,
+    expected_fields: tuple[str, ...],
+) -> None:
+    """Keep parser processing contexts compatible with tuple consumers."""
+    from datamodel_code_generator.parser import base
+
+    context_class = getattr(base, context_type)
+    values = tuple(object() for _ in expected_fields)
+    context = context_class(*values)
+
+    assert context_class.__module__ == "datamodel_code_generator.parser.base"
+    assert issubclass(context_class, tuple)
+    assert context_class._fields == expected_fields
+    assert context_class._field_defaults == {}
+    assert tuple(context) == values
+    assert tuple(getattr(context, field) for field in expected_fields) == values
+    if context_type == "ParseConfig":
+        replacement = object()
+        updated_context = context._replace(with_import=replacement)
+
+        assert updated_context.with_import is replacement
+        assert tuple(updated_context)[1:] == values[1:]
 
 
 def test_json_schema_parser_extension_method_signatures_match_baseline() -> None:
@@ -872,6 +984,44 @@ def test_generate_signature_matches_baseline() -> None:
         assert config_default == param.default, (
             f"Default mismatch for '{name}':\n  Baseline: {param.default!r}\n  GenerateConfig: {config_default!r}"
         )
+
+
+def test_generate_runtime_signature_matches_baseline() -> None:
+    """Keep generate()'s introspected public callable shape stable."""
+    assert generate.__module__ == "datamodel_code_generator"
+    assert inspect.signature(generate) == inspect.signature(_baseline_generate_runtime_signature)
+
+
+def test_parser_parse_runtime_signature_matches_baseline() -> None:
+    """Keep Parser.parse()'s introspected public callable shape stable."""
+    from datamodel_code_generator.parser.base import Parser
+
+    assert Parser.parse.__module__ == "datamodel_code_generator.parser.base"
+    assert inspect.signature(Parser.parse) == inspect.signature(_baseline_parser_parse_runtime_signature)
+
+
+def test_parser_process_single_module_runtime_signature_matches_baseline() -> None:
+    """Keep Parser._process_single_module()'s extension hook stable."""
+    from datamodel_code_generator.parser.base import Parser
+
+    assert Parser._process_single_module.__module__ == "datamodel_code_generator.parser.base"
+    assert inspect.signature(Parser._process_single_module) == inspect.signature(
+        _baseline_process_single_module_runtime_signature
+    )
+
+
+def test_openapi_and_asyncapi_parser_parse_runtime_signatures_match_baseline() -> None:
+    """Keep OpenAPI's forwarding parse hook and AsyncAPI inheritance intact."""
+    from datamodel_code_generator.parser.asyncapi import AsyncAPIParser
+    from datamodel_code_generator.parser.openapi import OpenAPIParser
+
+    expected = inspect.signature(_baseline_openapi_parser_parse_runtime_signature)
+
+    assert OpenAPIParser.parse.__module__ == "datamodel_code_generator.parser.openapi"
+    assert inspect.signature(OpenAPIParser.parse) == expected
+    assert AsyncAPIParser.parse is OpenAPIParser.parse
+    assert AsyncAPIParser.parse.__module__ == "datamodel_code_generator.parser.openapi"
+    assert inspect.signature(AsyncAPIParser.parse) == expected
 
 
 def test_parser_signature_matches_baseline() -> None:

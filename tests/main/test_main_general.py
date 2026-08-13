@@ -103,6 +103,29 @@ class _GenerateParseAbort(BaseException):
     """Test-only parse abort that is not an Exception subclass."""
 
 
+def test_parser_collects_empty_model_metadata() -> None:
+    """Collect an empty metadata payload when parsing emits no models."""
+    from datamodel_code_generator.model_metadata import dump_model_metadata
+    from datamodel_code_generator.parser.jsonschema import JsonSchemaParser
+
+    parser = JsonSchemaParser(
+        JSON_SCHEMA_DATA_PATH / "const_null.json",
+        formatters=[],
+        skip_root_model=True,
+    )
+    try:
+        assert_output(
+            f"{parser.parse(collect_model_metadata=True, format_=False)!r}\n",
+            EXPECTED_MAIN_PATH / "empty_model_metadata_modules.txt",
+        )
+        assert_output(
+            f"{dump_model_metadata(parser.model_metadata)}\n",
+            EXPECTED_MAIN_PATH / "empty_model_metadata_map.txt",
+        )
+    finally:
+        parser._dispose()
+
+
 def test_parser_retains_builtin_import_cache_and_invalidates_custom_cache() -> None:
     """Retain built-in caches while keeping the legacy custom-model invalidation contract."""
     from datamodel_code_generator.model import DataModel, get_data_model_types
@@ -111,8 +134,10 @@ def test_parser_retains_builtin_import_cache_and_invalidates_custom_cache() -> N
 
     class CacheProbeJsonSchemaParser(JsonSchemaParser):
         cache_reuse_manifest: tuple[str, ...] = ()
+        module_processing_calls: int = 0
 
         def _process_single_module(self, module_: Any, models: list[Any], *args: Any, **kwargs: Any) -> Any:
+            self.module_processing_calls += 1
             for model in models:
                 _ = model.imports
             cached_imports = tuple(model.__dict__[model._IMPORTS_CACHE_KEY] for model in models)
@@ -162,6 +187,10 @@ def test_parser_retains_builtin_import_cache_and_invalidates_custom_cache() -> N
     parser = CacheProbeJsonSchemaParser(input_path, **parser_options)
     assert_output(parser.parse(), EXPECTED_MAIN_PATH / "builtin_import_cache_retention.py")
     assert_output(
+        f"{parser.module_processing_calls}\n",
+        EXPECTED_MAIN_PATH / "process_single_module_single_call.txt",
+    )
+    assert_output(
         "\n".join(parser.cache_reuse_manifest) + "\n",
         EXPECTED_MAIN_PATH / "builtin_import_cache_retention.txt",
     )
@@ -181,8 +210,35 @@ def test_parser_retains_builtin_import_cache_and_invalidates_custom_cache() -> N
         EXPECTED_MAIN_PATH / "builtin_import_cache_unique_items_unhashable.py",
     )
     assert_output(
+        f"{unhashable_default_parser.module_processing_calls}\n",
+        EXPECTED_MAIN_PATH / "process_single_module_single_call.txt",
+    )
+    assert_output(
         "\n".join(unhashable_default_parser.cache_reuse_manifest) + "\n",
         EXPECTED_MAIN_PATH / "builtin_import_cache_unique_items_unhashable.txt",
+    )
+
+    input_path = DATA_PATH / "performance" / "large_models.json"
+    parser = CacheProbeJsonSchemaParser(
+        input_path,
+        **{**parser_options, "base_path": input_path.parent},
+    )
+    large_models = cast(
+        "dict[tuple[str, ...], Any]",
+        parser.parse(module_split_mode=datamodel_code_generator.ModuleSplitMode.Single),
+    )
+
+    assert_output(
+        large_models["model499.py",].body,
+        EXPECTED_MAIN_PATH / "module_split_large_models_model499.py",
+    )
+    assert_output(
+        f"{type(large_models).__name__}\n{len(large_models)}\nmodel499.py\n",
+        EXPECTED_MAIN_PATH / "module_split_large_models_manifest.txt",
+    )
+    assert_output(
+        f"{parser.module_processing_calls}\n",
+        EXPECTED_MAIN_PATH / "process_single_module_large_models_calls.txt",
     )
 
     input_path = JSON_SCHEMA_DATA_PATH / "person.json"
@@ -1062,7 +1118,7 @@ def test_run_generate_from_config_generate_kwargs_are_pinned() -> None:
         ("config", "cast('Any', generation_config)"),
     ])
     assert _run_generate_from_config_model_copy_updates() == snapshot([
-        ("input_filename", "None"),
+        ("input_filename", "input_filename"),
         ("output", "output"),
         ("preset", "None"),
         ("extra_template_data", "extra_template_data"),
@@ -3968,6 +4024,34 @@ def test_generate_returns_dict_for_multiple_modules(tmp_path: Path) -> None:
         EXPECTED_MAIN_PATH / "generate_returns_dict_for_multiple_modules",
         transform=lambda output: output.replace("#   filename:  <dict>", "#   filename:  <tmpdir>"),
     )
+
+
+def test_generate_modular_stdout_and_directory_match_fixture(output_dir: Path) -> None:
+    """Keep API stdout and directory emission aligned with the modular fixture."""
+    generate_options = {
+        "input_file_type": InputFileType.OpenAPI,
+    }
+    expected_directory = EXPECTED_MAIN_PATH / "openapi" / "modular"
+
+    with freeze_time(TIMESTAMP):
+        generated = generate(OPEN_API_DATA_PATH / "modular.yaml", **generate_options)
+        assert_generated_modules_output(generated, expected_directory, transform=lambda output: f"{output}\n")
+
+        generate(OPEN_API_DATA_PATH / "modular.yaml", output=output_dir, **generate_options)
+    assert_directory_content(output_dir, expected_directory)
+
+
+def test_generate_multimodule_builtin_directory_matches_fixture(output_dir: Path) -> None:
+    """Keep deferred non-Ruff directory output on its existing write-only path."""
+    generate(
+        JSON_SCHEMA_DATA_PATH / "all_exports_multi_file",
+        input_file_type=InputFileType.JsonSchema,
+        output=output_dir,
+        formatters=[Formatter.BUILTIN],
+        disable_timestamp=True,
+        all_exports_scope=AllExportsScope.Recursive,
+    )
+    assert_directory_content(output_dir, EXPECTED_MAIN_PATH / "jsonschema" / "all_exports_multi_file")
 
 
 @pytest.mark.allow_direct_assert
