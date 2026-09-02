@@ -21,21 +21,14 @@ from xml.etree import ElementTree as ET  # noqa: S405
 
 from typing_extensions import Unpack
 
-from datamodel_code_generator import Error, YamlValue
+from datamodel_code_generator import Error
 from datamodel_code_generator._format_types import DatetimeClassType
+from datamodel_code_generator._xmlschema_detection import XML_SCHEMA_NAMESPACE, XML_SCHEMA_TAG
+from datamodel_code_generator._xmlschema_detection import is_xml_schema_text as _is_xml_schema_text
 from datamodel_code_generator.enums import VersionMode, XMLSchemaVersion
 from datamodel_code_generator.parser import _xmlschema_literals
 from datamodel_code_generator.parser._convert_common import _copy_schema, _namespace_name, _unique_name
-from datamodel_code_generator.parser._math_imports import apply_math_imports_to_parse_result
-from datamodel_code_generator.parser._xmlschema_detection import (
-    XML_SCHEMA_NAMESPACE,
-    XML_SCHEMA_TAG,
-)
-from datamodel_code_generator.parser._xmlschema_detection import (
-    is_xml_schema_text as _is_xml_schema_text,
-)
 from datamodel_code_generator.parser._xmlschema_literals import (
-    _collect_python_expression_imports,
     _PythonExpression,
     _safe_bool,
     _safe_date_expression,
@@ -46,12 +39,14 @@ from datamodel_code_generator.parser._xmlschema_literals import (
 )
 from datamodel_code_generator.parser.base import Source, title_to_class_name
 from datamodel_code_generator.parser.jsonschema import JsonSchemaParser
+from datamodel_code_generator.python_literal import runtime_expression_imports
 from datamodel_code_generator.util import record_watch_dependency
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from urllib.parse import ParseResult
 
+    from datamodel_code_generator._source import YamlValue
     from datamodel_code_generator._types import XMLSchemaParserConfigDict
     from datamodel_code_generator.config import XMLSchemaParserConfig
 
@@ -67,6 +62,7 @@ XML_DATE_PATTERN = _xmlschema_literals.XML_DATE_PATTERN
 XSD_WHITESPACE_CHARS = _xmlschema_literals.XSD_WHITESPACE_CHARS
 _datetime_expression = _xmlschema_literals._datetime_expression  # noqa: SLF001
 _normalize_timezone = _xmlschema_literals._normalize_timezone  # noqa: SLF001
+_collect_python_expression_imports = runtime_expression_imports
 
 _XMLSCHEMA_LITERAL_REEXPORTS: tuple[tuple[str, object], ...] = (
     ("DAY_TIME_DURATION_PATTERN", DAY_TIME_DURATION_PATTERN),
@@ -75,6 +71,7 @@ _XMLSCHEMA_LITERAL_REEXPORTS: tuple[tuple[str, object], ...] = (
     ("XSD_WHITESPACE_CHARS", XSD_WHITESPACE_CHARS),
     ("_datetime_expression", _datetime_expression),
     ("_normalize_timezone", _normalize_timezone),
+    ("_collect_python_expression_imports", _collect_python_expression_imports),
 )
 for _xmlschema_literal_reexport_name, _xmlschema_literal_reexport in _XMLSCHEMA_LITERAL_REEXPORTS:
     if globals()[_xmlschema_literal_reexport_name] is not _xmlschema_literal_reexport:  # pragma: no cover
@@ -87,8 +84,8 @@ QNameKey = tuple[str | None, str]
 DefinitionKey = tuple[str, str | None, str]
 PYTHON_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _XML_SCHEMA_DATA_CACHE_MAX_SIZE = 128
-_XMLSchemaDataCacheKey = tuple[Path, Path, str, str, XMLSchemaVersion | None, VersionMode | None, bool]
-_XMLSchemaDataSeenKey = tuple[Path, Path, str, XMLSchemaVersion | None, VersionMode | None, bool]
+_XMLSchemaDataCacheKey = tuple[Path, Path, str, str, XMLSchemaVersion | None, VersionMode | None, bool, bool]
+_XMLSchemaDataSeenKey = tuple[Path, Path, str, XMLSchemaVersion | None, VersionMode | None, bool, bool]
 
 
 class _XMLSchemaDataCacheEntry(NamedTuple):
@@ -298,6 +295,7 @@ def _load_xml_schema_data_from_path(  # noqa: PLR0913
     xmlschema_version: XMLSchemaVersion | None,
     schema_version_mode: VersionMode | None,
     use_xmlschema_datetime_default: bool,
+    source_safe_non_finite: bool,
 ) -> dict[str, YamlValue]:
     resolved_path = path.resolve()
     resolved_base_path = base_path.resolve()
@@ -308,6 +306,7 @@ def _load_xml_schema_data_from_path(  # noqa: PLR0913
         xmlschema_version,
         schema_version_mode,
         use_xmlschema_datetime_default,
+        source_safe_non_finite,
     )
     with _xml_schema_data_cache_lock:
         use_cache = seen_key in _xml_schema_data_seen_keys
@@ -323,6 +322,7 @@ def _load_xml_schema_data_from_path(  # noqa: PLR0913
             xmlschema_version=xmlschema_version,
             schema_version_mode=schema_version_mode,
             use_xmlschema_datetime_default=use_xmlschema_datetime_default,
+            source_safe_non_finite=source_safe_non_finite,
         )
         return converter.convert(Source(path=path.relative_to(base_path), text=_read_xml_text(path, encoding)))
 
@@ -334,6 +334,7 @@ def _load_xml_schema_data_from_path(  # noqa: PLR0913
         xmlschema_version,
         schema_version_mode,
         use_xmlschema_datetime_default,
+        source_safe_non_finite,
     )
     with _xml_schema_data_cache_lock:
         if (entry := _xml_schema_data_cache.get(cache_key)) is not None and _xml_schema_cache_entry_is_fresh(entry):
@@ -346,6 +347,7 @@ def _load_xml_schema_data_from_path(  # noqa: PLR0913
         xmlschema_version=xmlschema_version,
         schema_version_mode=schema_version_mode,
         use_xmlschema_datetime_default=use_xmlschema_datetime_default,
+        source_safe_non_finite=source_safe_non_finite,
     )
     data = converter.convert(Source(path=path.relative_to(base_path), text=_read_xml_text(path, encoding)))
     dependencies = _xml_schema_cache_dependencies(converter.loaded_source_paths)
@@ -384,6 +386,26 @@ def convert_xml_schema_data(
     encoding: str = "utf-8",
 ) -> dict[str, YamlValue]:
     """Convert an XML Schema source string to JSON Schema data."""
+    return _convert_xml_schema_data(
+        raw_schema,
+        base_path=base_path,
+        xmlschema_version=xmlschema_version,
+        schema_version_mode=schema_version_mode,
+        encoding=encoding,
+        source_safe_non_finite=False,
+    )
+
+
+def _convert_xml_schema_data(  # noqa: PLR0913
+    raw_schema: Any,
+    *,
+    base_path: Path | None = None,
+    xmlschema_version: XMLSchemaVersion | None = None,
+    schema_version_mode: VersionMode | None = None,
+    encoding: str = "utf-8",
+    source_safe_non_finite: bool,
+) -> dict[str, YamlValue]:
+    """Convert XML Schema data for a parser that may need source-safe float values."""
     if not isinstance(raw_schema, str):
         msg = "XML Schema schemaFormat requires an XSD schema string"
         raise Error(msg)
@@ -392,12 +414,13 @@ def convert_xml_schema_data(
         encoding=encoding,
         xmlschema_version=xmlschema_version,
         schema_version_mode=schema_version_mode,
+        source_safe_non_finite=source_safe_non_finite,
     )
     return converter.convert(Source(path=Path("__asyncapi_schema__.xsd"), text=raw_schema))
 
 
 class _XMLSchemaConverter:
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         base_path: Path,
         encoding: str,
@@ -405,12 +428,14 @@ class _XMLSchemaConverter:
         xmlschema_version: XMLSchemaVersion | None = None,
         schema_version_mode: VersionMode | None = None,
         use_xmlschema_datetime_default: bool = False,
+        source_safe_non_finite: bool = False,
     ) -> None:
         self.base_path = base_path
         self.encoding = encoding
         self.xmlschema_version = xmlschema_version
         self.schema_version_mode = schema_version_mode or VersionMode.Lenient
         self.use_xmlschema_datetime_default = use_xmlschema_datetime_default
+        self.source_safe_non_finite = source_safe_non_finite
         self._resolved_xmlschema_version: XMLSchemaVersion | None = None
         self.namespaces: dict[str, str] = {}
         self.target_namespace: str | None = None
@@ -1011,7 +1036,7 @@ class _XMLSchemaConverter:
             case "number" if schema.get("format") == "decimal":
                 parsed = _safe_decimal(value)
             case "number":
-                parsed = _safe_float(value)
+                parsed = _safe_float(value, source_safe_non_finite=self.source_safe_non_finite)
             case "boolean":
                 parsed = _safe_bool(value)
             case _:
@@ -1045,12 +1070,16 @@ class _XMLSchemaConverter:
         item_schema = items if isinstance(items, dict) else STRING_SCHEMA
         return [self._parse_literal(item, item_schema, parse_temporal=parse_temporal) for item in value.split()]
 
-    def _parse_number(self, value: str, schema: JsonSchema) -> int | float | Decimal | str:  # noqa: PLR6301
+    def _parse_number(self, value: str, schema: JsonSchema) -> int | float | Decimal | str:
         if schema.get("type") == "integer":
             return integer if (integer := _safe_int(value)) is not None else value
         if schema.get("format") == "decimal":
             return decimal if (decimal := _safe_decimal(value)) is not None else value
-        return number if (number := _safe_float(value)) is not None else value
+        return (
+            number
+            if (number := _safe_float(value, source_safe_non_finite=self.source_safe_non_finite)) is not None
+            else value
+        )
 
     @staticmethod
     def _is_numeric_schema(schema: JsonSchema) -> bool:
@@ -1548,10 +1577,6 @@ class XMLSchemaParser(JsonSchemaParser):
                 config = config.model_copy(update=config_updates)
         super().__init__(source=source, config=config, **options)
 
-    def parse(self, *args: Any, **kwargs: Any) -> str | dict[tuple[str, ...], Any]:
-        """Parse XML Schema and add imports for non-finite float literals."""
-        return apply_math_imports_to_parse_result(super().parse(*args, **kwargs))
-
     def _source_from_xml_path(self, path: Path) -> Source:
         relative_path = path.relative_to(self.base_path)
         if not self._use_parsed_source_cache:
@@ -1567,6 +1592,7 @@ class XMLSchemaParser(JsonSchemaParser):
                 xmlschema_version=config.xmlschema_version,
                 schema_version_mode=config.schema_version_mode,
                 use_xmlschema_datetime_default=self.use_xmlschema_datetime_default,
+                source_safe_non_finite=True,
             ),
         )
 
@@ -1597,17 +1623,16 @@ class XMLSchemaParser(JsonSchemaParser):
                 xmlschema_version=config.xmlschema_version,
                 schema_version_mode=config.schema_version_mode,
                 use_xmlschema_datetime_default=self.use_xmlschema_datetime_default,
+                source_safe_non_finite=True,
             )
         )
-        self._append_python_expression_imports()
+        self._register_runtime_expression_imports()
 
-    def _append_python_expression_imports(self) -> None:
+    def _register_runtime_expression_imports(self) -> None:
+        """Scan XML defaults once so repeated field import collection stays constant time."""
         for model in self.results:
-            imports = tuple(
-                import_ for field in model.fields for import_ in _collect_python_expression_imports(field.default)
-            )
-            if imports:
-                model._additional_imports.extend(imports)  # noqa: SLF001
+            for field in model.fields:
+                field._set_runtime_expression_imports(_collect_python_expression_imports(field.default))  # noqa: SLF001
 
 
 __all__ = ["XMLSchemaParser", "convert_xml_schema_data", "detect_xmlschema_version", "is_xml_schema_text"]

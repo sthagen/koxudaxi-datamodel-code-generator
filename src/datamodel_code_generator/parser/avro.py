@@ -11,15 +11,14 @@ from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, cast
 
 from typing_extensions import Unpack
 
-from datamodel_code_generator import Error, YamlValue, load_yaml
-from datamodel_code_generator.parser import _avro_detection
-from datamodel_code_generator.parser._avro_detection import (
-    NAMED_TYPES,
-    PRIMITIVE_TYPES,
-)
-from datamodel_code_generator.parser._avro_detection import (
+from datamodel_code_generator import Error
+from datamodel_code_generator._avro_detection import COMPLEX_TYPES as _COMPLEX_TYPES
+from datamodel_code_generator._avro_detection import JSON_SCHEMA_MARKER_KEYS as _JSON_SCHEMA_MARKER_KEYS
+from datamodel_code_generator._avro_detection import NAMED_TYPES, PRIMITIVE_TYPES
+from datamodel_code_generator._avro_detection import (
     is_avro_schema_data as _is_avro_schema_data,
 )
+from datamodel_code_generator._source import YamlValue, load_yaml
 from datamodel_code_generator.parser._convert_common import _copy_schema, _namespace_name, _unique_name
 from datamodel_code_generator.parser.jsonschema import JsonSchemaParser
 
@@ -61,9 +60,9 @@ def __getattr__(name: str) -> Any:
     """Return compatibility constants moved to the lightweight detector."""
     match name:
         case "COMPLEX_TYPES":
-            return _avro_detection.COMPLEX_TYPES
+            return _COMPLEX_TYPES
         case "JSON_SCHEMA_MARKER_KEYS":
-            return _avro_detection.JSON_SCHEMA_MARKER_KEYS
+            return _JSON_SCHEMA_MARKER_KEYS
     raise AttributeError(name)
 
 

@@ -14,17 +14,21 @@ from collections import defaultdict
 from collections.abc import Callable as ABCCallable
 from collections.abc import Sequence
 from dataclasses import Field as DataclassField
+from decimal import Decimal
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, get_args, get_type_hints
 
 import black
 import pytest
 from packaging import version
+from pydantic import VERSION as PYDANTIC_VERSION
 from pydantic import ValidationError
 
 from datamodel_code_generator import (
     MIN_VERSION,
+    DanglingRefWarning,
     DataModelType,
+    DefaultValueType,
     Error,
     InputFileType,
     InvalidFileFormatError,
@@ -55,6 +59,7 @@ from tests.conftest import (
     assert_directory_content,
     assert_httpx_get_kwargs,
     assert_mutable_copy_is_isolated,
+    assert_no_uncommented_generated_code,
     assert_output,
     assert_warnings_contain,
     assert_warnings_do_not_contain,
@@ -75,7 +80,10 @@ from tests.main.conftest import (
     LEGACY_BLACK_SKIP,
     MSGSPEC_LEGACY_BLACK_SKIP,
     TIMESTAMP,
+    _assert_model_json_invalid,
     _generated_model,
+    _generated_package_module,
+    _model_json_validator,
     _uses_external_test_default_formatter,
     assert_generated_model_json_invalid,
     assert_generated_model_json_validation,
@@ -94,8 +102,113 @@ if TYPE_CHECKING:
 FixtureRequest = pytest.FixtureRequest
 
 
+class _ArrayLikeEquality:
+    __hash__ = None
+
+    def __eq__(self, other: object) -> list[bool]:
+        return [isinstance(other, _ArrayLikeEquality)]
+
+
+class _RaisingEquality:
+    __hash__ = None
+
+    def __eq__(self, other: object) -> bool:
+        raise ValueError
+
+
+class _EqualOne:
+    __hash__ = None
+
+    def __eq__(self, other: object) -> bool:
+        return other == 1
+
+
+class _HashableEqualOne:
+    def __hash__(self) -> int:
+        return hash(1)
+
+    def __eq__(self, other: object) -> bool:
+        return other == 1
+
+
 class _FallbackMsgspecDataModelField(MsgspecDataModelField):
     """Force the conventional graph-rendering path for CI parity checks."""
+
+
+@pytest.mark.parametrize(
+    ("input_name", "output_model_type", "expected_file", "template_dir_name", "field_description_args"),
+    [
+        (
+            "custom_template_docstring_escaping.json",
+            DataModelType.DataclassesDataclass.value,
+            "custom_template_docstring_escaping_dataclass.py",
+            "templates_docstring_escaping",
+            ("--use-field-description",),
+        ),
+        (
+            "custom_template_docstring_escaping.json",
+            DataModelType.TypingTypedDict.value,
+            "custom_template_docstring_escaping_typed_dict.py",
+            "templates_docstring_escaping",
+            ("--use-field-description",),
+        ),
+        (
+            "custom_template_root_docstring_escaping.json",
+            DataModelType.PydanticV2BaseModel.value,
+            "custom_template_docstring_escaping_root_model.py",
+            "templates_docstring_escaping",
+            ("--use-field-description",),
+        ),
+        (
+            "custom_template_docstring_escaping.json",
+            DataModelType.PydanticV2BaseModel.value,
+            "custom_template_docstring_escaping_format_filter.py",
+            "templates_docstring_filter_escaping",
+            ("--use-field-description",),
+        ),
+        (
+            "custom_template_docstring_escaping.json",
+            DataModelType.DataclassesDataclass.value,
+            "custom_template_docstring_escaping_without_field_descriptions.py",
+            "templates_docstring_escaping",
+            (),
+        ),
+    ],
+)
+def test_main_jsonschema_custom_template_escapes_docstrings(
+    output_file: Path,
+    input_name: str,
+    output_model_type: str,
+    expected_file: str,
+    template_dir_name: str,
+    field_description_args: tuple[str, ...],
+) -> None:
+    """Custom templates receive docstring-safe model and field descriptions."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / input_name,
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file=expected_file,
+        extra_args=[
+            "--target-python-version",
+            "3.10",
+            "--custom-template-dir",
+            str(DATA_PATH / template_dir_name),
+            "--output-model-type",
+            output_model_type,
+            "--use-schema-description",
+            *field_description_args,
+            "--formatters",
+            "builtin",
+            "--disable-timestamp",
+        ],
+        force_exec_validation=True,
+    )
+    assert_no_uncommented_generated_code(
+        output_file.read_text(encoding="utf-8"),
+        forbidden_contains=('"""; assert False; """',),
+    )
 
 
 def assert_run_main_with_args_error(args: list[str], capsys: pytest.CaptureFixture[str], expected_error: str) -> None:
@@ -631,6 +744,25 @@ def test_main_simple_pydantic_v2_fields(output_file: Path) -> None:
     )
 
 
+def test_main_simple_pydantic_v2_fields_with_custom_template(output_file: Path) -> None:
+    """Keep empty field plans compatible with custom Pydantic v2 templates."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "simple_pydantic_v2_fields.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="simple_pydantic_v2_fields.py",
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--field-constraints",
+            "--disable-timestamp",
+            "--custom-template-dir",
+            str(DATA_PATH / "templates_extensions"),
+        ],
+    )
+
+
 @pytest.mark.benchmark
 def test_main_autodetect(output_file: Path) -> None:
     """Test automatic input file type detection."""
@@ -1039,9 +1171,9 @@ def test_main_complicated_enum_default_member(
 
 @pytest.mark.cli_doc(
     options=["--set-default-enum-member"],
-    option_description="""Set the first enum member as the default value for enum fields.
+    option_description="""Use the legacy flag for deserializing enum defaults.
 
-The `--set-default-enum-member` flag configures the code generation behavior.""",
+The `--set-default-enum-member` flag is deprecated. Use `--deserialize-default-values enum` instead.""",
     input_schema="jsonschema/duplicate_enum.json",
     cli_args=["--reuse-model", "--set-default-enum-member"],
     golden_output="jsonschema/json_reuse_enum_default_member.py",
@@ -1308,6 +1440,39 @@ def test_main_jsonschema_reserved_field_names(output_file: Path) -> None:
     )
 
 
+def test_main_jsonschema_reserved_field_names_are_output_owned(output_file: Path) -> None:
+    """Keep Pydantic reserved names unchanged for neutral dataclass output."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "reserved_property.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="reserved_property_dataclass.py",
+        extra_args=["--output-model-type", "dataclasses.dataclass"],
+        force_exec_validation=True,
+        importable_module_name="generated_reserved_property_dataclass",
+        importable_module_attribute="ReservedNames",
+    )
+
+
+def test_main_jsonschema_pydantic_v2_valid_field_names_fast_path(output_file: Path) -> None:
+    """Generate ordinary Pydantic v2 field names with the built-in formatter."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "valid_field_names.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="valid_field_names.py",
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--formatters",
+            "builtin",
+            "--disable-timestamp",
+        ],
+    )
+
+
 def test_main_jsonschema_with_local_anchor(output_file: Path) -> None:
     """Test $id anchor lookup resolves without error and reuses definitions."""
     run_main_and_assert(
@@ -1328,6 +1493,70 @@ def test_main_jsonschema_anchor_ref(output_file: Path) -> None:
         assert_func=assert_file_content,
         expected_file="anchor_ref.py",
         extra_args=["--disable-timestamp"],
+    )
+
+
+@pytest.mark.parametrize(
+    ("input_name", "expected_file", "extra_args"),
+    [
+        pytest.param(
+            "simple_string.json",
+            "simple_string.py",
+            ["--formatters", "builtin", "--disable-timestamp"],
+            id="primitive-leaf",
+        ),
+        pytest.param(
+            "schema_validators.json",
+            "schema_validators.py",
+            [
+                "--generate-schema-validators",
+                "--output-model-type",
+                "pydantic_v2.BaseModel",
+                "--use-annotated",
+                "--disable-timestamp",
+            ],
+            id="children-conditional-reference",
+        ),
+        pytest.param(
+            "anchor_ref.json",
+            "anchor_ref.py",
+            ["--disable-timestamp"],
+            id="anchor-reference",
+        ),
+        pytest.param(
+            "dynamic_ref.json",
+            "dynamic_ref_pydantic_v2.py",
+            ["--output-model-type", "pydantic_v2.BaseModel"],
+            id="children-dynamic-anchor",
+        ),
+    ],
+)
+def test_main_jsonschema_leaf_schema_traversal_cli(
+    output_file: Path,
+    input_name: str,
+    expected_file: str,
+    extra_args: list[str],
+) -> None:
+    """Keep CLI output byte-identical for leaf and nested traversal schemas."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / input_name,
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file=expected_file,
+        extra_args=extra_args,
+    )
+
+
+def test_generate_jsonschema_leaf_schema_traversal_dynamic_reference(output_file: Path) -> None:
+    """Keep the public generate API aligned for dynamic child references."""
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "dynamic_ref.json",
+        output_path=output_file,
+        input_file_type=InputFileType.JsonSchema,
+        assert_func=assert_file_content,
+        expected_file="dynamic_ref_pydantic_v2.py",
+        output_model_type=DataModelType.PydanticV2BaseModel,
     )
 
 
@@ -1869,6 +2098,16 @@ def test_main_external_files_in_directory(output_file: Path) -> None:
     """Test external files in directory structure."""
     run_main_and_assert(
         input_path=JSON_SCHEMA_DATA_PATH / "external_files_in_directory" / "person.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+    )
+
+
+def test_main_jsonschema_local_reference_file_cache(output_file: Path) -> None:
+    """Generate local references with shared file parts, fragments, and recursive nested schemas."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "local_reference_file_cache" / "root.json",
         output_path=output_file,
         input_file_type="jsonschema",
         assert_func=assert_file_content,
@@ -5881,16 +6120,26 @@ def test_main_jsonschema_modular_default_enum_member(output_dir: Path) -> None:
         )
 
 
-def test_main_jsonschema_falsy_default_enum_member(output_file: Path) -> None:
+@pytest.mark.parametrize(
+    "deserialize_args",
+    [
+        pytest.param(["--deserialize-default-values", "enum"], id="generic-option"),
+        pytest.param(["--set-default-enum-member"], id="legacy-option"),
+    ],
+)
+def test_main_jsonschema_falsy_default_enum_member(deserialize_args: list[str], output_file: Path) -> None:
     """Test enum member mapping for falsy default values."""
-    run_main_and_assert(
-        input_path=JSON_SCHEMA_DATA_PATH / "falsy_default_enum_member.json",
-        output_path=output_file,
-        input_file_type="jsonschema",
-        assert_func=assert_file_content,
-        expected_file="falsy_default_enum_member.py",
-        extra_args=["--set-default-enum-member"],
-    )
+    with warnings.catch_warnings(record=True) as recorded_warnings:
+        run_main_and_assert(
+            input_path=JSON_SCHEMA_DATA_PATH / "falsy_default_enum_member.json",
+            output_path=output_file,
+            input_file_type="jsonschema",
+            assert_func=assert_file_content,
+            expected_file="falsy_default_enum_member.py",
+            extra_args=deserialize_args,
+        )
+
+    assert_warnings_do_not_contain(recorded_warnings, "--set-default-enum-member is deprecated")
 
 
 @pytest.mark.skipif(
@@ -6028,6 +6277,19 @@ def test_main_jsonschema_items_boolean(output_file: Path) -> None:
         input_file_type="jsonschema",
         assert_func=assert_file_content,
         expected_file="items_boolean.py",
+    )
+
+
+def test_main_jsonschema_array_constraint_fast_path(output_file: Path) -> None:
+    """Keep array length constraints identical when the fast path is unavailable."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "array_constraint_fast_path.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="array_constraint_fast_path.py",
+        extra_args=["--disable-timestamp", "--formatters", "builtin", "--output-model-type", "pydantic_v2.BaseModel"],
+        force_exec_validation=True,
     )
 
 
@@ -6724,6 +6986,32 @@ def test_main_jsonschema_additional_properties_value_constraints_schema_validato
     )
 
 
+def test_main_jsonschema_schema_validators_pattern_properties_own_typed_extras(output_file: Path) -> None:
+    """Let the runtime pattern dispatcher, not Pydantic typed extras, own extra values."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "schema_validators_pattern_additional_properties.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="schema_validators_pattern_additional_properties.py",
+        extra_args=[
+            "--generate-schema-validators",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--disable-timestamp",
+        ],
+        force_exec_validation=True,
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="schema_validators_pattern_additional_properties",
+        model_name="PatternAdditionalProperties",
+        valid_json='{"known":"value","pattern-number":1,"extra":"value","__pydantic_extra__":1}',
+        invalid_json='{"known":"value","pattern-number":1,"__pydantic_extra__":"invalid"}',
+        expected_error_type="int_parsing",
+    )
+
+
 def test_main_jsonschema_empty_anyof_uses_any(output_file: Path) -> None:
     """Test empty anyOf remains an unconstrained root type."""
     expected = (
@@ -7313,6 +7601,127 @@ def test_main_jsonschema_additional_properties_schema_with_properties(output_fil
         expected_error_type="int_type",
         expected_attribute_path=("__pydantic_extra__",),
         expected_attribute_value={"size": 1},
+    )
+
+
+def test_main_jsonschema_property_names_additional_properties_schema_with_properties(output_file: Path) -> None:
+    """Test propertyNames constrains typed extra keys as well as their values."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "property_names_additional_properties_schema_with_properties.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="property_names_additional_properties_schema_with_properties.py",
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
+        force_exec_validation=True,
+    )
+    # Pydantic validates constrained typed-extra keys only in this supported range.
+    if not version.parse("2.11") <= version.parse(PYDANTIC_VERSION) < version.parse("2.13"):
+        return
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="property_names_additional_properties_schema_with_properties",
+        model_name="KnownAndNamedExtra",
+        valid_json='{"name":"known","valid_key":1}',
+        invalid_json='{"name":"known","Invalid":1}',
+        expected_error_type="string_pattern_mismatch",
+        expected_attribute_path=("__pydantic_extra__",),
+        expected_attribute_value={"valid_key": 1},
+    )
+
+
+def test_main_jsonschema_property_names_true_additional_properties_schema_with_properties(output_file: Path) -> None:
+    """Test unconstrained propertyNames keeps the typed-extra string-key fast path."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "property_names_true_additional_properties_schema_with_properties.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="property_names_true_additional_properties_schema_with_properties.py",
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
+        force_exec_validation=True,
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="property_names_true_additional_properties_schema_with_properties",
+        model_name="KnownAndAnyExtra",
+        valid_json='{"name":"known","extra":1}',
+        invalid_json='{"name":"known","extra":[]}',
+        expected_error_type="int_type",
+        expected_attribute_path=("__pydantic_extra__",),
+        expected_attribute_value={"extra": 1},
+    )
+
+
+def test_main_jsonschema_property_names_ref_additional_properties_schema_with_properties(output_file: Path) -> None:
+    """Test referenced propertyNames keeps typed-extra keys as strings."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "property_names_ref_additional_properties_schema_with_properties.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="property_names_ref_additional_properties_schema_with_properties.py",
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
+        force_exec_validation=True,
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="property_names_ref_additional_properties_schema_with_properties",
+        model_name="KnownAndReferencedExtra",
+        valid_json='{"name":"known","valid_key":1}',
+        invalid_json='{"name":"known","valid_key":[]}',
+        expected_error_type="int_type",
+        expected_attribute_path=("__pydantic_extra__",),
+        expected_attribute_value={"valid_key": 1},
+    )
+
+
+def test_main_jsonschema_property_names_type_non_string_additional_properties_schema_with_properties(
+    output_file: Path,
+) -> None:
+    """Test propertyNames with a non-string branch keeps typed-extra keys as strings."""
+    run_main_and_assert(
+        input_path=(
+            JSON_SCHEMA_DATA_PATH / "property_names_type_non_string_additional_properties_schema_with_properties.json"
+        ),
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="property_names_type_non_string_additional_properties_schema_with_properties.py",
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
+        force_exec_validation=True,
+    )
+
+
+def test_main_jsonschema_property_names_forbidden_additional_properties_schema_with_properties(
+    output_file: Path,
+) -> None:
+    """Test an impossible direct propertyNames schema does not constrain typed extra keys."""
+    run_main_and_assert(
+        input_path=(
+            JSON_SCHEMA_DATA_PATH / "property_names_forbidden_additional_properties_schema_with_properties.json"
+        ),
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="property_names_forbidden_additional_properties_schema_with_properties.py",
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
+        force_exec_validation=True,
     )
 
 
@@ -8714,6 +9123,31 @@ def test_main_typed_dict_extra_items(output_file: Path) -> None:
             "--target-python-version",
             "3.10",
         ],
+    )
+
+
+@pytest.mark.parametrize(("output_model_type", "expected_name"), BACKEND_GOLDEN_CASES)
+def test_main_additional_properties_output_context(
+    output_file: Path,
+    output_model_type: str,
+    expected_name: str,
+) -> None:
+    """Preserve typed additional-properties output across every backend."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "typed_dict_extra_items.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file=f"output_context/typed_extra_{expected_name}.py",
+        extra_args=[
+            *BACKEND_GOLDEN_TARGET_ARGS,
+            "--formatters",
+            "builtin",
+            "--output-model-type",
+            output_model_type,
+            "--disable-timestamp",
+        ],
+        force_exec_validation=True,
     )
 
 
@@ -12361,6 +12795,125 @@ def test_main_jsonschema_collapse_root_models_nested_reference(output_file: Path
     )
 
 
+def test_main_jsonschema_collapse_root_models_atomic_replace(output_file: Path) -> None:
+    """Keep field and nested root replacements byte-for-byte stable."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "collapse_root_models_atomic_replace.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=["--collapse-root-models", "--disable-timestamp", "--formatters", "builtin"],
+    )
+
+
+def test_main_jsonschema_collapse_root_models_scalar_atomic_replace(output_file: Path) -> None:
+    """Track unshared scalar root replacements without changing generated output."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "collapse_root_models_scalar_atomic_replace.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=["--collapse-root-models", "--disable-timestamp", "--formatters", "builtin"],
+    )
+
+
+def test_main_jsonschema_collapse_root_models_self_reference(output_file: Path) -> None:
+    """Keep self-referential root models named instead of collapsing them infinitely."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "collapse_root_models_self_reference.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=["--collapse-root-models", "--formatters", "builtin"],
+        force_exec_validation=True,
+    )
+
+
+def test_main_jsonschema_collapse_root_models_dict_key_self_reference_retries_once(output_file: Path) -> None:
+    """Keep fallback-only circular root models named, including property-name references."""
+    with warnings.catch_warnings(record=True) as warning_records:
+        warnings.simplefilter("always", DanglingRefWarning)
+        run_main_and_assert(
+            input_path=JSON_SCHEMA_DATA_PATH / "collapse_root_models_dict_key_self_reference.json",
+            output_path=output_file,
+            input_file_type="jsonschema",
+            assert_func=assert_file_content,
+            expected_file="collapse_root_models_dict_key_self_reference.py",
+            extra_args=["--collapse-root-models", "--disable-timestamp", "--formatters", "builtin"],
+            force_exec_validation=True,
+        )
+
+    dangling_warnings = [warning for warning in warning_records if warning.category is DanglingRefWarning]
+    assert_warnings_contain(dangling_warnings, "#/$defs/Missing")
+    if len(dangling_warnings) != 1:  # pragma: no cover
+        pytest.fail(f"Expected one deduplicated dangling-ref warning, got {len(dangling_warnings)}")
+
+
+def test_main_jsonschema_collapse_root_models_parse_warning_emitted_once(output_file: Path) -> None:
+    """Do not repeat raw-parse warnings when circular root collapsing retries."""
+    warning_message = "Boolean schemas are not supported in Draft 4"
+    with warnings.catch_warnings(record=True) as warning_records:
+        warnings.simplefilter("always", UserWarning)
+        run_main_and_assert(
+            input_path=JSON_SCHEMA_DATA_PATH / "collapse_root_models_parse_warning.json",
+            output_path=output_file,
+            input_file_type="jsonschema",
+            assert_func=assert_file_content,
+            expected_file="collapse_root_models_parse_warning.py",
+            extra_args=[
+                "--collapse-root-models",
+                "--schema-version-mode",
+                "strict",
+                "--disable-timestamp",
+                "--formatters",
+                "builtin",
+            ],
+            force_exec_validation=True,
+        )
+
+    parse_warnings = [warning for warning in warning_records if warning_message in str(warning.message)]
+    assert_warnings_contain(parse_warnings, warning_message)
+    if len(parse_warnings) != 1:  # pragma: no cover
+        pytest.fail(f"Expected one deduplicated parse warning, got {len(parse_warnings)}")
+
+
+def test_main_jsonschema_collapse_root_models_dict_key_self_reference_preserves_legacy_output(
+    output_file: Path,
+) -> None:
+    """Leave dict-key-only root references collapsed when the recursion retry is not needed."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "collapse_root_models_dict_key_self_reference_legacy.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="collapse_root_models_dict_key_self_reference_legacy.py",
+        extra_args=["--collapse-root-models", "--disable-timestamp", "--formatters", "builtin"],
+        skip_code_validation=True,
+    )
+
+
+def test_main_jsonschema_collapse_root_models_transitive_reference_cycle(output_file: Path) -> None:
+    """Preserve legacy collapsed output for a root cycle that already terminated."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "collapse_root_models_transitive_reference_cycle.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=["--collapse-root-models"],
+    )
+
+
+def test_main_jsonschema_collapse_root_models_shared_reference(output_file: Path) -> None:
+    """Collapse acyclic root models that share referenced root models."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "collapse_root_models_shared_reference.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        extra_args=["--collapse-root-models"],
+    )
+
+
 @pytest.mark.cli_doc(
     options=["--collapse-root-models-name-strategy"],
     option_description="""Select which name to keep when collapsing root models with object references.
@@ -14785,9 +15338,14 @@ def test_field_validators_inline_json(output_file: Path) -> None:
 
 The `--generate-schema-validators` option emits schema-derived model validators
 for object constraints that cannot be represented as type hints alone, including
-patternProperties on composed object models, required-only oneOf/anyOf groups,
-and simple if/then/else required-property conditions. This feature is
-experimental and may change as JSON Schema coverage is expanded.""",
+minProperties/maxProperties on named object models, patternProperties on
+composed object models, required-only oneOf/anyOf groups, simple
+if/then/else required-property conditions, and uniqueItems array validation.
+This feature is experimental and may change as JSON Schema coverage is expanded.
+
+When generating uniqueItems validation, do not override
+`pydantic_v2/schema_runtime_validation_helpers.jinja2`; custom helper overrides
+are unsupported and generation fails fast.""",
     input_schema="jsonschema/schema_validators.json",
     cli_args=[
         "--generate-schema-validators",
@@ -14894,6 +15452,969 @@ def test_main_jsonschema_generate_schema_validators(output_file: Path) -> None:
         expected_attribute_path=("note",),
         expected_attribute_value="ok",
     )
+
+
+def test_main_jsonschema_unique_items_schema_validators(output_file: Path) -> None:
+    """Validate uniqueItems arrays without coercing their list values to sets."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "unique_items_schema_validators.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="unique_items_schema_validators.py",
+        extra_args=[
+            "--generate-schema-validators",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--use-annotated",
+            "--disable-timestamp",
+            "--formatters",
+            "builtin",
+        ],
+        force_exec_validation=True,
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="unique_items_strings",
+        model_name="UniqueItemsPayload",
+        valid_json=(
+            '{"strings":["first","second"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first","second"]]}'
+        ),
+        invalid_json=(
+            '{"strings":["first","first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first","second"]]}'
+        ),
+        expected_error_type="value_error",
+        expected_attribute_path=("strings",),
+        expected_attribute_value=["first", "second"],
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="unique_items_objects",
+        model_name="UniqueItemsPayload",
+        valid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"},{"id":2,"name":"second"}],'
+            '"jsonValues":[true,1],"nested":[["first"]]}'
+        ),
+        invalid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"},{"name":"first","id":1}],'
+            '"jsonValues":[true,1],"nested":[["first"]]}'
+        ),
+        expected_error_type="value_error",
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="unique_items_json_equality",
+        model_name="UniqueItemsPayload",
+        valid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],"jsonValues":[true,1],"nested":[["first"]]}'
+        ),
+        invalid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],"jsonValues":[1,1.0],"nested":[["first"]]}'
+        ),
+        expected_error_type="value_error",
+        expected_attribute_path=("jsonValues",),
+        expected_attribute_value=[True, 1],
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="unique_items_nested",
+        model_name="UniqueItemsPayload",
+        valid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first","second"]]}'
+        ),
+        invalid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first","first"]]}'
+        ),
+        expected_error_type="value_error",
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="unique_items_root",
+        model_name="RootUniqueItems",
+        valid_json='[true,1,{"first":[1,2]}]',
+        invalid_json="[1,1.0]",
+        expected_error_type="value_error",
+        expected_attribute_path=("root",),
+        expected_attribute_value=[True, 1, {"first": [1, 2]}],
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="unique_items_tuple",
+        model_name="UniqueItemsPayload",
+        valid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],"tupleItems":[["first","second"],"tail"]}'
+        ),
+        invalid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],"tupleItems":[["first","first"],"tail"]}'
+        ),
+        expected_error_type="value_error",
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="unique_items_tuple_tail",
+        model_name="UniqueItemsPayload",
+        valid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],'
+            '"tupleItemsTail":[[1,1],"prefix",["first","second"]]}'
+        ),
+        invalid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],'
+            '"tupleItemsTail":[[1,1],"prefix",["first","first"]]}'
+        ),
+        expected_error_type="value_error",
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="unique_items_mapping",
+        model_name="UniqueItemsPayload",
+        valid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],"mapping":{"values":["first","second"]}}'
+        ),
+        invalid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],"mapping":{"values":["first","first"]}}'
+        ),
+        expected_error_type="value_error",
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="unique_items_nullable_any_of",
+        model_name="UniqueItemsPayload",
+        valid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],"nullableAnyOf":[1,2]}'
+        ),
+        invalid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],"nullableAnyOf":[1,1]}'
+        ),
+        expected_error_type="value_error",
+        expected_attribute_path=("nullableAnyOf", "root"),
+        expected_attribute_value=[1, 2],
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="unique_items_nullable_any_of_null",
+        model_name="UniqueItemsPayload",
+        valid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],"nullableAnyOf":null}'
+        ),
+        invalid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],"nullableAnyOf":[1,1]}'
+        ),
+        expected_error_type="value_error",
+        expected_attribute_path=("nullableAnyOf",),
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="unique_items_unconstrained_array_any_of",
+        model_name="UniqueItemsPayload",
+        valid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],"unconstrainedArrayAnyOf":[1,1]}'
+        ),
+        invalid_json=(
+            '{"strings":["first","first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],"unconstrainedArrayAnyOf":[1,1]}'
+        ),
+        expected_error_type="value_error",
+        expected_attribute_path=("unconstrainedArrayAnyOf",),
+        expected_attribute_value=[1, 1],
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="unique_items_nullable_one_of",
+        model_name="UniqueItemsPayload",
+        valid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],"nullableOneOf":[1,2]}'
+        ),
+        invalid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],"nullableOneOf":[1,1]}'
+        ),
+        expected_error_type="value_error",
+        expected_attribute_path=("nullableOneOf", "root"),
+        expected_attribute_value=[1, 2],
+    )
+    base_data = {
+        "strings": ["first"],
+        "objects": [{"id": 1, "name": "first"}],
+        "nested": [["first"]],
+    }
+    with _generated_model(output_file, "unique_items_python_values", "UniqueItemsPayload") as model:
+        permuted_object_values = [
+            dict(zip(("one", "two", "three", "four", "five", "six"), values, strict=True))
+            for values in itertools.permutations(range(6))
+        ]
+        permuted_object_fingerprint_count = len({
+            model._json_schema_unique_items_fingerprint(value) for value in permuted_object_values
+        })
+        validated_python_values = (
+            model.model_validate({**base_data, "jsonValues": [Decimal(1), Decimal(2)]}).jsonValues,
+            model.model_validate({**base_data, "jsonValues": [[Decimal(1)], [Decimal(2)]]}).jsonValues,
+            model.model_validate({**base_data, "jsonValues": [True, Decimal(1)]}).jsonValues,
+            model.model_validate({**base_data, "jsonValues": permuted_object_values}).jsonValues,
+            model.model_validate({
+                **base_data,
+                "jsonValues": [_ArrayLikeEquality(), _ArrayLikeEquality()],
+            }).jsonValues,
+            model.model_validate({
+                **base_data,
+                "jsonValues": [_RaisingEquality(), _RaisingEquality()],
+            }).jsonValues,
+        )
+        assert_output(
+            "\n".join((
+                f"decimals={validated_python_values[0]!r}",
+                f"nested_decimals={validated_python_values[1]!r}",
+                f"bool_decimal={validated_python_values[2]!r}",
+                f"permuted_objects={len(validated_python_values[3])}",
+                f"permuted_object_fingerprints={permuted_object_fingerprint_count}",
+                f"array_like={[type(item).__name__ for item in validated_python_values[4]]!r}",
+                f"raising={[type(item).__name__ for item in validated_python_values[5]]!r}",
+            ))
+            + "\n",
+            JSON_SCHEMA_DATA_PATH / "unique_items_python_values.snapshot",
+        )
+        for values in (
+            [Decimal(1), Decimal(1)],
+            [Decimal(1), 1],
+            [1, Decimal(1)],
+            [_EqualOne(), 1],
+            [1, _EqualOne()],
+            [_HashableEqualOne(), 1],
+            [1, _HashableEqualOne()],
+            [[_EqualOne()], [1]],
+            [[1], [_EqualOne()]],
+            [{"value": _EqualOne()}, {"value": 1}],
+            [{"value": 1}, {"value": _EqualOne()}],
+            [[Decimal(1)], [Decimal(1)]],
+            [[Decimal(1)], [1]],
+            [[1], [Decimal(1)]],
+            [{"first"}, {"first"}],
+        ):
+            with pytest.raises(ValidationError, match="Array items must be unique"):
+                model.model_validate({**base_data, "jsonValues": values})
+
+
+def test_main_jsonschema_unique_items_schema_validators_collapsed_root_models(output_file: Path) -> None:
+    """Keep consumer-side uniqueItems checks when collapsed schemas remove an array wrapper."""
+    generate(
+        input_=JSON_SCHEMA_DATA_PATH / "unique_items_schema_validators.json",
+        input_file_type=InputFileType.JsonSchema,
+        output=output_file,
+        output_model_type=DataModelType.PydanticV2BaseModel,
+        collapse_root_models=True,
+        generate_schema_validators=True,
+        use_annotated=True,
+        field_constraints=True,
+        disable_timestamp=True,
+        formatters=[Formatter.BUILTIN],
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="unique_items_collapsed_nullable_any_of",
+        model_name="UniqueItemsPayload",
+        valid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],"nullableAnyOf":[1,2]}'
+        ),
+        invalid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],"nullableAnyOf":[1,1]}'
+        ),
+        expected_error_type="value_error",
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="unique_items_collapsed_nullable_any_of_null",
+        model_name="UniqueItemsPayload",
+        valid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],"nullableAnyOf":null}'
+        ),
+        invalid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],"nullableAnyOf":[1,1]}'
+        ),
+        expected_error_type="value_error",
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="unique_items_collapsed_unconstrained_array_any_of",
+        model_name="UniqueItemsPayload",
+        valid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],"unconstrainedArrayAnyOf":[1,1]}'
+        ),
+        invalid_json=(
+            '{"strings":["first","first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],"unconstrainedArrayAnyOf":[1,1]}'
+        ),
+        expected_error_type="value_error",
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="unique_items_collapsed_nullable_one_of",
+        model_name="UniqueItemsPayload",
+        valid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],"nullableOneOf":[1,2]}'
+        ),
+        invalid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],"nullableOneOf":[1,1]}'
+        ),
+        expected_error_type="value_error",
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="unique_items_collapsed_nested",
+        model_name="UniqueItemsPayload",
+        valid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first","second"]]}'
+        ),
+        invalid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first","first"]]}'
+        ),
+        expected_error_type="value_error",
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="unique_items_collapsed_tuple_tail",
+        model_name="UniqueItemsPayload",
+        valid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],'
+            '"tupleItemsTail":[[1,1],"prefix",["first","second"]]}'
+        ),
+        invalid_json=(
+            '{"strings":["first"],"objects":[{"id":1,"name":"first"}],'
+            '"jsonValues":[true,1],"nested":[["first"]],'
+            '"tupleItemsTail":[[1,1],"prefix",["first","first"]]}'
+        ),
+        expected_error_type="value_error",
+    )
+
+
+@pytest.mark.parametrize("root_model_alias_option", ["--use-type-alias", "--use-root-model-type-alias"])
+def test_main_jsonschema_unique_items_root_alias_preserves_validation(
+    output_file: Path,
+    root_model_alias_option: str,
+) -> None:
+    """Use an executable RootModel when an alias cannot run uniqueItems validation."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "unique_items_schema_validators.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=[
+            "--generate-schema-validators",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--use-annotated",
+            root_model_alias_option,
+            "--disable-timestamp",
+            "--formatters",
+            "builtin",
+        ],
+        force_exec_validation=True,
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name=f"unique_items_root_alias_{root_model_alias_option.removeprefix('--').replace('-', '_')}",
+        model_name="RootUniqueItems",
+        valid_json="[1,2]",
+        invalid_json="[1,1]",
+        expected_error_type="value_error",
+        expected_attribute_path=("root",),
+        expected_attribute_value=[1, 2],
+    )
+
+
+def test_main_jsonschema_unique_items_inline_paths_default_options(output_file: Path) -> None:
+    """Validate inline array, union, and mapping paths without RootModel wrappers."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "unique_items_inline_paths.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="unique_items_inline_paths.py",
+        extra_args=[
+            "--generate-schema-validators",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--disable-timestamp",
+            "--formatters",
+            "builtin",
+        ],
+        force_exec_validation=True,
+    )
+    valid_json = (
+        '{"nestedArray":[["first","second"]],"nullableAnyOf":[1,2],'
+        '"typedMapping":{"known":[1,1],"patternValues":[1,1],"extra":[1,2]},'
+        '"patternMapping":{"plainOnly":[1,1],"plainList":["1",1]}}'
+    )
+    for module_name, invalid_json in (
+        (
+            "unique_items_inline_array",
+            (
+                '{"nestedArray":[["first","first"]],"nullableAnyOf":[1,2],'
+                '"typedMapping":{"known":[1,1],"patternValues":[1,1],"extra":[1,2]},'
+                '"patternMapping":{"plainOnly":[1,1],"plainList":["1",1]}}'
+            ),
+        ),
+        (
+            "unique_items_inline_nullable_union",
+            (
+                '{"nestedArray":[["first","second"]],"nullableAnyOf":[1,1],'
+                '"typedMapping":{"known":[1,1],"patternValues":[1,1],"extra":[1,2]},'
+                '"patternMapping":{"plainOnly":[1,1],"plainList":["1",1]}}'
+            ),
+        ),
+        (
+            "unique_items_typed_additional_values",
+            (
+                '{"nestedArray":[["first","second"]],"nullableAnyOf":[1,2],'
+                '"typedMapping":{"known":[1,1],"patternValues":[1,1],"extra":[1,1]},'
+                '"patternMapping":{"plainOnly":[1,1],"plainList":["1",1]}}'
+            ),
+        ),
+        (
+            "unique_items_pattern_values",
+            (
+                '{"nestedArray":[["first","second"]],"nullableAnyOf":[1,2],'
+                '"typedMapping":{"known":[1,1],"patternValues":[1,1],"extra":[1,2]},'
+                '"patternMapping":{"plainOnly":[1,1],"plainList":[1,1]}}'
+            ),
+        ),
+    ):
+        assert_generated_model_json_validation(
+            output_file,
+            module_name=module_name,
+            model_name="UniqueItemsInlinePaths",
+            valid_json=valid_json,
+            invalid_json=invalid_json,
+            expected_error_type="value_error",
+        )
+
+
+def test_main_jsonschema_generate_schema_validators_property_count(output_file: Path) -> None:
+    """Validate named object property counts only through the runtime-validator backend."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "schema_validators_property_count.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="schema_validators_property_count.py",
+        extra_args=[
+            "--generate-schema-validators",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--disable-timestamp",
+            "--formatters",
+            "builtin",
+        ],
+        force_exec_validation=True,
+    )
+    for module_suffix, model_name, valid_json, invalid_json, expected_error_type, attribute_path, attribute_value in (
+        (
+            "minimum",
+            "DirectCount",
+            '{"name":"x","label":"y"}',
+            '{"name":"x"}',
+            "value_error",
+            ("name",),
+            "x",
+        ),
+        (
+            "maximum",
+            "DirectCount",
+            '{"name":"x","label":"y"}',
+            '{"name":"x","label":"y","first":1,"second":2}',
+            "value_error",
+            ("name",),
+            "x",
+        ),
+        (
+            "all_of",
+            "ComposedCount",
+            '{"base":"x","child":"y"}',
+            '{"base":"x"}',
+            "value_error",
+            ("base",),
+            "x",
+        ),
+        (
+            "all_of_count_only",
+            "CountOnlyDerived",
+            '{"base":"x","extra":true}',
+            '{"base":"x"}',
+            "value_error",
+            ("base",),
+            "x",
+        ),
+        (
+            "ref_sibling",
+            "RefSiblingCount",
+            '{"base":"x","child":"y","extra":true}',
+            '{"base":"x","child":"y"}',
+            "value_error",
+            ("base",),
+            "x",
+        ),
+        (
+            "optional_nested",
+            "DirectCount",
+            '{"name":"x","label":"y"}',
+            '{"name":"x","label":"y","child":{}}',
+            "value_error",
+            ("name",),
+            "x",
+        ),
+        (
+            "non_dict",
+            "DirectCount",
+            '{"name":"x","label":"y"}',
+            "[]",
+            "model_type",
+            ("name",),
+            "x",
+        ),
+        (
+            "zero_maximum",
+            "ZeroMaximum",
+            "{}",
+            '{"value":"x"}',
+            "value_error",
+            (),
+            None,
+        ),
+    ):
+        assert_generated_model_json_validation(
+            output_file,
+            module_name=f"output_property_count_{module_suffix}",
+            model_name=model_name,
+            valid_json=valid_json,
+            invalid_json=invalid_json,
+            expected_error_type=expected_error_type,
+            expected_attribute_path=attribute_path,
+            expected_attribute_value=attribute_value,
+        )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="output_property_count_keywords",
+        model_name="DirectCount",
+        valid_json='{"name":"x","label":"y"}',
+        invalid_json='{"name":"x"}',
+        expected_error_type="value_error",
+        invalid_keyword_arguments=(
+            ({"name": "x"}, "value_error"),
+            ({"name": "x", "label": "y", "first": 1, "second": 2}, "value_error"),
+        ),
+    )
+
+
+def test_main_jsonschema_property_count_default_generation_is_unchanged(output_file: Path) -> None:
+    """Keep named-object property counts opt-in for schema-runtime validators."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "schema_validators_property_count.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="schema_validators_property_count_default.py",
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--disable-timestamp",
+            "--formatters",
+            "builtin",
+        ],
+        force_exec_validation=True,
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="output_property_count_default",
+        model_name="DirectCount",
+        valid_json="{}",
+        invalid_json="[]",
+        expected_error_type="model_type",
+    )
+
+
+def test_main_jsonschema_property_count_uses_raw_alias_input_keys(output_file: Path) -> None:
+    """Count duplicate AliasChoices input keys before Pydantic merges them."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "schema_validators_multiple_aliases_property_count.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="schema_validators_multiple_aliases_property_count.py",
+        extra_args=[
+            "--aliases",
+            str(ALIASES_DATA_PATH / "multiple_aliases.json"),
+            "--generate-schema-validators",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--disable-timestamp",
+            "--formatters",
+            "builtin",
+        ],
+        force_exec_validation=True,
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="output_property_count_aliases",
+        model_name="Root",
+        valid_json='{"my-field":"first","myField":"second"}',
+        invalid_json='{"my-field":"first"}',
+        expected_error_type="value_error",
+        expected_attribute_path=("my_field",),
+        expected_attribute_value="first",
+    )
+
+
+def test_main_jsonschema_property_count_root_model_keeps_field_constraints(output_file: Path) -> None:
+    """Do not add runtime validators to dictionary root models with count bounds."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "object_max_properties_zero.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="object_max_properties_zero.py",
+        extra_args=[
+            "--generate-schema-validators",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+        ],
+        force_exec_validation=True,
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="output_property_count_root_model",
+        model_name="ObjectMaxPropertiesZero",
+        valid_json="{}",
+        invalid_json='{"key":1}',
+        expected_error_type="too_long",
+    )
+
+
+def test_main_jsonschema_property_count_root_collapse_keeps_helper_imports(output_file: Path) -> None:
+    """Keep property-count helper imports when an earlier runtime RootModel is collapsed."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "schema_validators_property_count_root_collapse.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="schema_validators_property_count_root_collapse.py",
+        extra_args=[
+            "--collapse-root-models",
+            "--generate-schema-validators",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--disable-timestamp",
+            "--formatters",
+            "builtin",
+        ],
+        force_exec_validation=True,
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="output_property_count_root_collapse",
+        model_name="Survivor",
+        valid_json='{"value":"x"}',
+        invalid_json="{}",
+        expected_error_type="value_error",
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="output_property_count_root_collapse_pattern",
+        model_name="DisposableBag",
+        valid_json='{"item_one":1,"other":2}',
+        invalid_json='{"item_one":"bad"}',
+        expected_error_type="int_parsing",
+    )
+
+
+def test_main_jsonschema_property_count_ref_survives_root_collapse(output_file: Path) -> None:
+    """Keep map property-count constraints when collapsing a referenced RootModel."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "schema_validators_property_count_ref_collapse.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="schema_validators_property_count_ref_collapse.py",
+        extra_args=[
+            "--collapse-root-models",
+            "--generate-schema-validators",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--disable-timestamp",
+            "--formatters",
+            "builtin",
+        ],
+        force_exec_validation=True,
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="output_property_count_ref_collapse",
+        model_name="Payload",
+        valid_json='{"values":{"first":1,"second":2}}',
+        invalid_json='{"values":{"only":1}}',
+        expected_error_type="too_short",
+    )
+
+
+def test_main_jsonschema_property_count_with_generic_base_class(output_file: Path) -> None:
+    """Keep runtime helpers executable before the generated generic base class."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "schema_validators_property_count_root_collapse.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="schema_validators_property_count_root_collapse_generic_base.py",
+        extra_args=[
+            "--collapse-root-models",
+            "--extra-fields",
+            "forbid",
+            "--enable-faux-immutability",
+            "--generate-schema-validators",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--use-generic-base-class",
+            "--disable-timestamp",
+            "--formatters",
+            "builtin",
+        ],
+        force_exec_validation=True,
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="output_property_count_generic_base",
+        model_name="Survivor",
+        valid_json='{"value":"x"}',
+        invalid_json="{}",
+        expected_error_type="value_error",
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="output_property_count_generic_base_pattern",
+        model_name="DisposableBag",
+        valid_json='{"item_one":1,"other":2}',
+        invalid_json='{"item_one":"bad"}',
+        expected_error_type="int_parsing",
+    )
+
+
+def test_main_jsonschema_runtime_root_merges_generic_base_config(output_dir: Path) -> None:
+    """Retain and import RootModel config when the generic base is external."""
+    expected_directory = EXPECTED_JSON_SCHEMA_PATH / "schema_validators_runtime_root_cross_module"
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "schema_validators_runtime_root_cross_module",
+        output_path=output_dir,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        output_to_expected=(
+            ("a.py", expected_directory / "a.py"),
+            ("z.py", expected_directory / "z.py"),
+        ),
+        extra_args=[
+            "--enable-faux-immutability",
+            "--extra-fields",
+            "forbid",
+            "--generate-schema-validators",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--use-generic-base-class",
+            "--disable-timestamp",
+            "--formatters",
+            "builtin",
+        ],
+        force_exec_validation=True,
+        runtime_validation_module="a",
+        runtime_validation_model_name="AModel",
+        runtime_validation_data={"mixed": "alpha"},
+    )
+    with _generated_package_module(output_dir, "a") as module:
+        validate_json = _model_json_validator(module.AModel)
+        parsed = validate_json('{"mixed":"alpha"}')
+        _assert_model_json_invalid(validate_json, '{"mixed":"beta"}', "string_pattern_mismatch")
+        _assert_model_json_invalid(validate_json, '{"mixed":[1,1]}', "value_error")
+        with pytest.raises(ValidationError, match="Instance is frozen"):
+            parsed.mixed.root = [1, 2]
+
+
+def test_main_jsonschema_property_count_cross_module_with_generic_base_class(output_dir: Path) -> None:
+    """Reuse an imported generic base before runtime helpers in split modules."""
+    expected_directory = EXPECTED_JSON_SCHEMA_PATH / "schema_validators_property_count_cross_module_generic_base"
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "schema_validators_property_count_cross_module",
+        output_path=output_dir,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        output_to_expected=(
+            ("required_parent.py", expected_directory / "required_parent.py"),
+            ("property_parent.py", expected_directory / "property_parent.py"),
+        ),
+        extra_args=[
+            "--extra-fields",
+            "forbid",
+            "--generate-schema-validators",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--use-generic-base-class",
+            "--disable-timestamp",
+            "--formatters",
+            "builtin",
+        ],
+        force_exec_validation=True,
+        runtime_validation_module="property_parent",
+        runtime_validation_model_name="PropertyParent",
+        runtime_validation_data={"value": "x", "second": "y"},
+    )
+    with _generated_package_module(output_dir, "property_parent") as module:
+        validate_json = _model_json_validator(module.PropertyParent)
+        _assert_model_json_invalid(validate_json, '{"value":"x"}', "value_error")
+        _assert_model_json_invalid(validate_json, '{"value":"x","second":"y","extra":1}', "extra_forbidden")
+
+
+def test_main_jsonschema_property_count_cross_module_capabilities(output_dir: Path) -> None:
+    """Retain property and core validators across module-boundary allOf inheritance."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "schema_validators_property_count_cross_module",
+        output_path=output_dir,
+        input_file_type="jsonschema",
+        expected_directory=EXPECTED_JSON_SCHEMA_PATH / "schema_validators_property_count_cross_module",
+        extra_args=[
+            "--generate-schema-validators",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--disable-timestamp",
+            "--formatters",
+            "builtin",
+        ],
+        force_exec_validation=True,
+        runtime_validation_module="property_child",
+        runtime_validation_model_name="PropertyChild",
+        runtime_validation_data={"base": "x", "child": "y"},
+    )
+    for module_path, model_name, valid_json, invalid_json, expected_error_type in (
+        (
+            "property_child",
+            "PropertyChild",
+            '{"base":"x","extra_value":1}',
+            '{"base":"x","extra_value":"invalid"}',
+            "int_parsing",
+        ),
+        (
+            "core_child",
+            "CoreChild",
+            '{"value":"x","second":"y","child":"z","extra_value":1}',
+            '{"child":"y"}',
+            "value_error",
+        ),
+        (
+            "property_child_inherited",
+            "PropertyChildInherited",
+            '{"value":"x","second":"y","child":"z"}',
+            '{"child":"y"}',
+            "value_error",
+        ),
+        (
+            "property_child_conditional",
+            "PropertyChildConditional",
+            '{"kind":"metric","metric":"x"}',
+            '{"kind":"metric","note":"x"}',
+            "value_error",
+        ),
+        (
+            "property_child_conditional_intermediate",
+            "PropertyChildConditionalIntermediate",
+            '{"kind":"metric","metric":"x"}',
+            '{"kind":"metric","note":"x"}',
+            "value_error",
+        ),
+        (
+            "property_child_required",
+            "PropertyChildRequired",
+            '{"left":"x","child":"y"}',
+            '{"child":"y"}',
+            "missing",
+        ),
+        (
+            "property_child_intermediate",
+            "PropertyChildIntermediate",
+            '{"left":"x","child":"y"}',
+            "{}",
+            "value_error",
+        ),
+        (
+            "external_core_pattern_child",
+            "ExternalCorePatternChild",
+            '{"values":[1,2]}',
+            '{"values":[1,1]}',
+            "value_error",
+        ),
+        (
+            "external_core_unique_child",
+            "ExternalCoreUniqueChild",
+            '{"baseValues":[1,2],"x-values":[3,4]}',
+            '{"x-values":[1,1]}',
+            "value_error",
+        ),
+        (
+            "external_core_unique_child",
+            "ExternalCoreUniqueChild",
+            '{"baseValues":[1,2],"x-values":[3,4]}',
+            '{"baseValues":[1,1]}',
+            "value_error",
+        ),
+        (
+            "external_core_conditional_child",
+            "ExternalCoreConditionalChild",
+            '{"kind":"metric","metric":"x","values":[1,2]}',
+            '{"kind":"metric","values":[1,2]}',
+            "value_error",
+        ),
+        (
+            "external_core_conditional_child",
+            "ExternalCoreConditionalChild",
+            '{"kind":"metric","metric":"x","values":[1,2]}',
+            '{"kind":"metric","metric":"x","values":[1,1]}',
+            "value_error",
+        ),
+        (
+            "external_core_required_child",
+            "ExternalCoreRequiredChild",
+            '{"left":"x","values":[1,2]}',
+            '{"values":[1,2]}',
+            "value_error",
+        ),
+        (
+            "external_core_required_child",
+            "ExternalCoreRequiredChild",
+            '{"left":"x","values":[1,2]}',
+            '{"left":"x","values":[1,1]}',
+            "value_error",
+        ),
+    ):
+        with _generated_package_module(output_dir, module_path) as module:
+            validate_json = _model_json_validator(getattr(module, model_name))
+            validate_json(valid_json)
+            _assert_model_json_invalid(validate_json, invalid_json, expected_error_type)
 
 
 @pytest.mark.cli_doc(
@@ -16400,6 +17921,41 @@ def test_main_dataclass_non_finite_number_values(output_file: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    ("output_model_type", "expected_file", "module_name"),
+    [
+        (
+            DataModelType.PydanticV2Dataclass.value,
+            "pydantic_v2_dataclass_non_finite_number_values.py",
+            "generated_pydantic_v2_dataclass_non_finite_number_values",
+        ),
+        (
+            DataModelType.TypingTypedDict.value,
+            "typed_dict_non_finite_number_values.py",
+            "generated_typed_dict_non_finite_number_values",
+        ),
+    ],
+)
+def test_main_jsonschema_non_finite_number_values_remaining_backends(
+    output_model_type: str,
+    expected_file: str,
+    module_name: str,
+    output_file: Path,
+) -> None:
+    """Keep every remaining built-in backend valid for non-finite schemas."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "non_finite_number_values.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=["--output-model-type", output_model_type],
+        assert_func=assert_file_content,
+        expected_file=expected_file,
+        force_exec_validation=True,
+        importable_module_name=module_name,
+        importable_module_attribute="Model",
+    )
+
+
+@pytest.mark.parametrize(
     ("output_model", "module_name", "expected_file"),
     [
         (
@@ -16505,42 +18061,87 @@ def test_main_dataclass_enum_member_special_defaults(output_file: Path) -> None:
         input_path=JSON_SCHEMA_DATA_PATH / "enum_member_special_defaults.json",
         output_path=output_file,
         input_file_type="jsonschema",
-        extra_args=["--output-model-type", "dataclasses.dataclass"],
+        extra_args=["--output-model-type", "dataclasses.dataclass", "--no-deserialize-default-values"],
         assert_func=assert_file_content,
         expected_file="dataclass_enum_member_special_defaults.py",
         importable_module_name="generated_dataclass_enum_member_special_defaults",
     )
 
 
-def test_main_jsonschema_enum_member_typed_defaults(output_file: Path) -> None:
+def test_main_jsonschema_enum_member_special_defaults(output_file: Path) -> None:
+    """Deserialize quoted scalar and list defaults through the generic option."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "enum_member_special_defaults.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=["--deserialize-default-values", "enum"],
+        assert_func=assert_file_content,
+        expected_file="enum_member_special_defaults.py",
+        importable_module_name="generated_enum_member_special_defaults",
+    )
+
+
+@pytest.mark.parametrize(
+    "deserialize_args",
+    [
+        pytest.param(["--deserialize-default-values", "enum"], id="generic-option"),
+        pytest.param(["--set-default-enum-member"], id="legacy-option"),
+    ],
+)
+def test_main_jsonschema_enum_member_typed_defaults(deserialize_args: list[str], output_file: Path) -> None:
     """Test enum defaults resolve to the member with a matching JSON type."""
     run_main_and_assert(
         input_path=JSON_SCHEMA_DATA_PATH / "enum_member_typed_defaults.json",
         output_path=output_file,
         input_file_type="jsonschema",
-        extra_args=["--output-model-type", "pydantic_v2.BaseModel", "--set-default-enum-member"],
+        extra_args=["--output-model-type", "pydantic_v2.BaseModel", *deserialize_args],
         assert_func=assert_file_content,
         expected_file="enum_member_typed_defaults.py",
         importable_module_name="generated_enum_member_typed_defaults",
     )
 
 
+def test_main_jsonschema_enum_deserialization_preset_opt_out(output_file: Path) -> None:
+    """Let an explicit no-option disable preset enum deserialization."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "enum_member_typed_defaults.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=[
+            "--preset",
+            "standard-py310-20260826",
+            "--no-deserialize-default-values",
+            "--formatters",
+            "builtin",
+        ],
+        assert_func=assert_file_content,
+        expected_file="enum_member_typed_defaults_preset_opt_out.py",
+        importable_module_name="generated_enum_member_typed_defaults_preset_opt_out",
+    )
+
+
 @pytest.mark.parametrize(
-    "custom_template_dir",
+    ("custom_template_dir", "default_options"),
     [
-        pytest.param(None, id="builtin-template"),
-        pytest.param(DATA_PATH / "templates_extensions", id="existing-custom-enum-template"),
+        pytest.param(None, {"deserialize_default_values": (DefaultValueType.Enum,)}, id="generic-option"),
+        pytest.param(
+            DATA_PATH / "templates_extensions",
+            {"set_default_enum_member": True},
+            id="legacy-option-custom-template",
+        ),
     ],
 )
-def test_generate_jsonschema_structured_enum_values(custom_template_dir: Path | None) -> None:
+def test_generate_jsonschema_structured_enum_values(
+    custom_template_dir: Path | None, default_options: dict[str, object]
+) -> None:
     """Keep raw enum values distinct from rendered source through the generate API."""
     run_generate_and_assert(
         input_=JSON_SCHEMA_DATA_PATH / "structured_enum_values.json",
         expected_file=EXPECTED_JSON_SCHEMA_PATH / "structured_enum_values.py",
         input_file_type=InputFileType.JsonSchema,
         output_model_type=DataModelType.PydanticV2BaseModel,
-        set_default_enum_member=True,
         custom_template_dir=custom_template_dir,
+        **default_options,
     )
 
 

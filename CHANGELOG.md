@@ -5,6 +5,186 @@ This changelog is automatically generated from GitHub Releases.
 
 ---
 
+## [0.76.0](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.76.0) - 2026-08-29
+
+## Breaking Changes
+
+
+### API/CLI Changes
+* `--list-deprecations` output format changed - The deprecations listing now includes a new `Status` column and renames the `Warning since` column header to `Since` across all output formats (`table`, `json`, and `markdown`). Table rows also no longer emit trailing whitespace padding, so column widths and spacing differ. Scripts or tooling that parse the `--list-deprecations` output may need to be updated. The JSON output additionally gains a `status` field per entry (the existing `warning_since` field is retained). (#3810)
+```text
+# Before
+ID   Kind   Target   Warning since   Removal   Replacement
+
+# After
+ID   Status   Kind   Target   Since   Removal   Replacement
+```
+
+## What's Changed
+* Update CHANGELOG for 0.75.1 by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3789
+* Update release benchmark data by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3790
+* Cache local reference file resolution by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3799
+* Reuse empty Pydantic field render plans by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3800
+* Optimize unconstrained array schemas by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3801
+* Skip child traversal for leaf schemas by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3802
+* Bump the github-actions group with 5 updates by @dependabot[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3798
+* Install bundled Agent Skill by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3804
+* Validate Pydantic extra property names by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3794
+* Deserialize Decimal defaults by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3792
+* Structure runtime expression imports by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3795
+* Complete scheduled deprecation support by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3810
+* Deserialize enum defaults by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3811
+* Move shared parser helpers by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3805
+* Refactor input model compatibility by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3806
+* Decouple parser backend capabilities by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3807
+* Enforce architecture boundaries by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3808
+
+
+**Full Changelog**: https://github.com/koxudaxi/datamodel-code-generator/compare/0.75.1...0.76.0
+
+---
+
+## [0.75.1](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.75.1) - 2026-08-24
+
+## What's Changed
+* Update CHANGELOG for 0.75.0 by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3787
+* Update release benchmark data by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3788
+* fix(parser): preserve recursive root models by @gtxy27 in https://github.com/koxudaxi/datamodel-code-generator/pull/3786
+* [pre-commit.ci] pre-commit autoupdate by @pre-commit-ci[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3775
+
+## New Contributors
+* @gtxy27 made their first contribution in https://github.com/koxudaxi/datamodel-code-generator/pull/3786
+
+**Full Changelog**: https://github.com/koxudaxi/datamodel-code-generator/compare/0.75.0...0.75.1
+
+---
+
+## [0.75.0](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.75.0) - 2026-08-24
+
+## Breaking Changes
+
+
+* minProperties/maxProperties now generate runtime validators - When using the experimental `--generate-schema-validators` option, `minProperties`/`maxProperties` constraints on named object models are now emitted as Pydantic v2 model validators. Previously these constraints were ignored. Data that omits or exceeds the allowed property count will now be rejected at validation time, and generated models gain a new `__json_schema_property_count_rule__` class variable (#3780)
+* Runtime-validation helper base class renamed in mixed modules - When a module contains both core validators (patternProperties / required groups / conditional required) and the new property-count validators, the shared helper base class previously named `_JsonSchemaRuntimeValidationBase` is now split: the core helper is renamed to `_JsonSchemaRuntimeValidationBaseCore` and a new `_JsonSchemaRuntimeValidationBase` subclass is inserted. Code that references the generated helper class name by hand will need to be updated (#3780)
+
+```python
+# Before (--generate-schema-validators)
+class _JsonSchemaRuntimeValidationBase(BaseModel):
+    __json_schema_conditional_required__: ClassVar[tuple[Any, ...]] = ()
+    ...
+
+class ApiConditionalEnvelopeRequestModel(_JsonSchemaRuntimeValidationBase):
+    __json_schema_conditional_required__: ClassVar[tuple[Any, ...]] = (...)
+
+# After
+class _JsonSchemaRuntimeValidationBaseCore(BaseModel):
+    __json_schema_conditional_required__: ClassVar[tuple[Any, ...]] = ()
+    ...
+
+class _JsonSchemaRuntimeValidationBase(_JsonSchemaRuntimeValidationBaseCore):
+    __json_schema_property_count_rule__: ClassVar[tuple[Any, ...]] = ()
+    ...
+
+class ApiConditionalEnvelopeRequestModel(_JsonSchemaRuntimeValidationBase):
+    __json_schema_property_count_rule__: ClassVar[tuple[Any, ...]] = (2, 2)
+    __json_schema_conditional_required__: ClassVar[tuple[Any, ...]] = (...)
+```
+
+## What's Changed
+* Update CHANGELOG for 0.74.0 by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3773
+* Update release benchmark data by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3774
+* Bump the github-actions group with 6 updates by @dependabot[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3778
+* Bump python from 3.14.6-slim-bookworm to 3.14.7-slim-bookworm by @dependabot[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3779
+* fix(jsonschema): generate property count validators by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3780
+* fix(jsonschema): generate uniqueItems validators by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3781
+* Fix payload runtime validation exclusions by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3784
+
+
+**Full Changelog**: https://github.com/koxudaxi/datamodel-code-generator/compare/0.74.0...0.75.0
+
+---
+
+## [0.74.0](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.74.0) - 2026-08-17
+
+## Breaking Changes
+
+### Code Generation Changes
+* Non-finite float values now render as structural `float(...)` expressions - Generated code for non-finite floats (`inf`, `-inf`, `nan`) from Protocol Buffers, XML Schema, and AsyncAPI-embedded schemas — as field defaults, constraint bounds, list items, and enum values — now renders inline as `float('inf')`, `float('-inf')`, and `float('nan')` instead of emitting bare `inf`/`nan` literals with an injected `from math import inf, nan` header. Users relying on the previous output (e.g. snapshot/golden tests, or importing `inf`/`nan` from the generated module) will see different generated code (#3770)
+
+```python
+# Before
+from math import inf
+
+class Model(BaseModel):
+    value: float | None = inf
+
+# After
+class Model(BaseModel):
+    value: float | None = float('inf')
+```
+
+## What's Changed
+* Update CHANGELOG for 0.73.0 by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3767
+* Update release benchmark data by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3768
+* Deploy release benchmark data updates by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3771
+* fix(parser): render non-finite values structurally by @Aryan-Pardeshi in https://github.com/koxudaxi/datamodel-code-generator/pull/3770
+
+## New Contributors
+* @Aryan-Pardeshi made their first contribution in https://github.com/koxudaxi/datamodel-code-generator/pull/3770
+
+**Full Changelog**: https://github.com/koxudaxi/datamodel-code-generator/compare/0.73.0...0.74.0
+
+---
+
+## [0.73.0](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.73.0) - 2026-08-15
+
+## Breaking Changes
+
+
+### Error Handling Changes
+* Additional imports are now validated as Python import paths - Values passed via `--additional-imports`, the Python config API (`GenerateConfig`, `JSONSchemaParserConfig`, etc.), or `--extra-template-data` must now be dotted sequences of Python identifiers. Previously any value was accepted and split on commas without validation; now inputs that are not valid import paths (e.g. containing newlines, semicolons, or non-identifier syntax) raise an `Error` and abort generation instead of being emitted into the generated output. Valid dotted paths (optionally whitespace-padded) continue to work unchanged. (#3763)
+```
+additional_imports must be a Python import path composed of identifiers: 'collections.deque\nINJECTION_MARKER = 1'
+```
+
+### Default Behavior Changes
+* Reserved template keys in `--extra-template-data` now raise an error for built-in templates - When rendering a built-in (project-owned) template, supplying any generator-reserved key through `--extra-template-data` (or the `extra_template_data` API argument) now raises an `Error` and aborts generation instead of injecting the value. The reserved keys are `class_body_lines`, `config_items`, `schema_runtime_validation`, `schema_runtime_validation_base_class_name`, `schema_runtime_validation_use_base`, `sequence_base_class`, `sequence_item_type`, `sequence_slice_type`, `_safe_config_items`, `typed_dict_kwargs`, and `typed_dict_kwargs_suffix`. To inject raw code via these keys you must now use a custom root template through `--custom-template-dir`. (#3765)
+* Stricter `extra_template_data` validation - `extra_template_data` that is not a dictionary, contains non-string keys, or contains duplicate (normalized) keys now raises an `Error` rather than being silently accepted. (#3765)
+
+### Code Generation Changes
+* Built-in templates now serialize `extra_template_data` values as non-executing literals - For built-in templates, user-supplied values that were previously emitted as raw Python source are now serialized as quoted, non-executing literals. This affects GraphQL scalar `py_type`, TypedDict `additionalPropertiesType`, `ConfigDict` values, msgspec `base_class_kwargs`, and comments. Only bare or dotted identifiers (e.g. `datetime.date`) are still emitted unquoted; more complex expressions become string literals. For example, a scalar `py_type` supplied as a type expression is now rendered as:
+```python
+Evil = TypeAliasType("Evil", "__import__('os').system('id') or str")
+```
+Trusted custom root templates (`--custom-template-dir` providing the root template) keep the previous unrestricted raw behavior. (#3765)
+* Include-only custom template directories no longer receive raw built-in context - "Custom root" detection changed from `template_file_path.is_absolute()` to `_uses_custom_root_template`. A `--custom-template-dir` that only supplies include/partial templates (not the model's root template) no longer opts the built-in root into the unrestricted raw-context path; its `extra_template_data` is now treated with the hardened built-in rules (and reserved keys raise an error). (#3765)
+
+## What's Changed
+* Update CHANGELOG for 0.72.4 by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3736
+* Update release benchmark data by @dcg-generated-docs[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3737
+* Guard refactor contracts by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3739
+* Tighten generation types by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3740
+* Simplify generation dispatch by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3741
+* Simplify parser metadata flow by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3742
+* Optimize built-in generation performance by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3738
+* Optimize simple field construction by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3754
+* Optimize msgspec unset field rendering by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3755
+* Optimize false reference handling by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3750
+* Compile built-in templates by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3757
+* Optimize Pydantic field name resolution by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3758
+* Avoid Jinja in the playground runtime by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3759
+* Fix main lint workflow by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3761
+* Bump the github-actions group with 5 updates by @dependabot[bot] in https://github.com/koxudaxi/datamodel-code-generator/pull/3751
+* Fix payload runtime validation exclusions by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3764
+* Validate additional import paths by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3763
+* Harden built-in template data by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3765
+* Restrict template source paths by @koxudaxi in https://github.com/koxudaxi/datamodel-code-generator/pull/3766
+
+
+**Full Changelog**: https://github.com/koxudaxi/datamodel-code-generator/compare/0.72.4...0.73.0
+
+---
+
 ## [0.72.4](https://github.com/koxudaxi/datamodel-code-generator/releases/tag/0.72.4) - 2026-08-12
 
 ## What's Changed

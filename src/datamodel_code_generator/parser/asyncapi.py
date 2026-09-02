@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from pydantic import Field, StrictStr, ValidationError
 from typing_extensions import Unpack
 
-from datamodel_code_generator import Error, InputFileType, YamlValue, snooper_to_methods
+from datamodel_code_generator import Error, InputFileType, snooper_to_methods
 from datamodel_code_generator.deprecations import warn_deprecated
 from datamodel_code_generator.enums import AsyncAPIVersion
 from datamodel_code_generator.parser.jsonschema import get_model_by_path, unescape_json_pointer_segment
@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from urllib.parse import ParseResult
 
+    from datamodel_code_generator._source import YamlValue
     from datamodel_code_generator._types import AsyncAPIParserConfigDict
     from datamodel_code_generator.config import AsyncAPIParserConfig
     from datamodel_code_generator.parser.schema_version import OpenAPISchemaFeatures
@@ -384,28 +385,30 @@ class AsyncAPIParser(OpenAPIParser):
                 context = self._schema_context_for_converted_schema(converted_schema, path)
                 return [self._schema(name, converted_schema, context.root_parts, context, parse_as_file=True)]
             case "protobuf":
-                from datamodel_code_generator.parser.protobuf import convert_protobuf_schema_data  # noqa: PLC0415
+                from datamodel_code_generator.parser.protobuf import _convert_protobuf_schema_data  # noqa: PLC0415
 
                 context = self._current_asyncapi_context()
                 return self._iter_converted_schema_schemas(
                     name,
-                    convert_protobuf_schema_data(
+                    _convert_protobuf_schema_data(
                         raw_schema,
                         base_path=context.base_path,
                         encoding=self.encoding,
+                        source_safe_non_finite=True,
                     ),
                     path,
                 )
             case "xmlschema":
-                from datamodel_code_generator.parser.xmlschema import convert_xml_schema_data  # noqa: PLC0415
+                from datamodel_code_generator.parser.xmlschema import _convert_xml_schema_data  # noqa: PLC0415
 
                 context = self._current_asyncapi_context()
                 return self._iter_converted_schema_schemas(
                     name,
-                    convert_xml_schema_data(
+                    _convert_xml_schema_data(
                         raw_schema,
                         base_path=context.base_path,
                         encoding=self.encoding,
+                        source_safe_non_finite=True,
                     ),
                     path,
                     include_root_schema=True,

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from datamodel_code_generator._format_types import DateClassType, DatetimeClassType, Formatter, PythonVersion
+from datamodel_code_generator._shared_types import LiteralType
 from datamodel_code_generator.deprecations import deprecation_message
 from datamodel_code_generator.enums import (
     DEFAULT_SHARED_MODULE_NAME,
@@ -27,6 +28,7 @@ from datamodel_code_generator.enums import (
     CustomFileHeaderMode,
     DataclassArguments,
     DataModelType,
+    DefaultValueType,
     FieldTypeCollisionStrategy,
     HTTPBackend,
     InputFileType,
@@ -42,7 +44,6 @@ from datamodel_code_generator.enums import (
     UnionMode,
     VersionMode,
 )
-from datamodel_code_generator.parser import LiteralType
 from datamodel_code_generator.preset_names import PRESET_NAMES
 
 if TYPE_CHECKING:
@@ -722,7 +723,7 @@ typing_options.add_argument(
 )
 typing_options.add_argument(
     "--set-default-enum-member",
-    help="Set enum members as default values for enum field",
+    help=f"Deprecated: {deprecation_message('cli.set-default-enum-member')}",
     action="store_true",
     default=None,
 )
@@ -1121,6 +1122,21 @@ template_options.add_argument(
     type=str,
 )
 template_options.add_argument(
+    "--deserialize-default-values",
+    help="Deserialize serialized schema defaults for selected generated types. Supported values: decimal, enum.",
+    choices=[default_value_type.value for default_value_type in DefaultValueType],
+    nargs="+",
+    default=None,
+)
+template_options.add_argument(
+    "--no-deserialize-default-values",
+    dest="deserialize_default_values",
+    help="Disable schema default value deserialization.",
+    action="store_const",
+    const=(),
+    default=None,
+)
+template_options.add_argument(
     "--custom-file-header",
     help="Custom file header",
     type=str,
@@ -1449,6 +1465,32 @@ general_options.add_argument(
     action="store_true",
     default=False,
     help="Ignore pyproject.toml configuration",
+)
+general_options.add_argument(
+    "--install-skill",
+    choices=["codex", "claude-code"],
+    default=None,
+    metavar="{codex,claude-code}",
+    help=(
+        "Install the bundled datamodel-code-generator Agent Skill and exit (experimental). "
+        "Use --skill-scope to select a project or personal installation."
+    ),
+)
+general_options.add_argument(
+    "--skill-scope",
+    choices=["project", "user"],
+    default=None,
+    metavar="{project,user}",
+    help=(
+        "Installation scope for --install-skill (default: project). "
+        "Project installs use .agents/skills or .claude/skills; user installs use the matching home directory."
+    ),
+)
+general_options.add_argument(
+    "--overwrite-skill",
+    action="store_true",
+    default=False,
+    help="Replace an existing regular skill directory when used with --install-skill.",
 )
 general_options.add_argument(
     "--profile",

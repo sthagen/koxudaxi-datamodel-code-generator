@@ -19,7 +19,7 @@ Input sources, output paths, and schema version handling.
 - `--external-ref-mapping`: Map external $ref file paths to Python import packages instead of generating duplicate classes. Accepts one or more mappings after a single flag. Format: "path/to/schema.yaml=mypackage.models". When a $ref points to a mapped file, an import statement is generated instead of a class definition.
 - `--output`: Output file (default: stdout)
 - `--emit-model-metadata`: Write a separate JSON map from source schema references to generated models and fields.
-- `--preset`: Apply an immutable built-in option preset. Preset names include the target Python version so generated syntax is pinned. Choices: `standard-py310-20260619`, `standard-py311-20260619`, `standard-py312-20260619`, `standard-py313-20260619`, `standard-py314-20260619`, `practical-py310-20260619`, `practical-py311-20260619`, `practical-py312-20260619`, `practical-py313-20260619`, `practical-py314-20260619`.
+- `--preset`: Apply an immutable built-in option preset. Preset names include the target Python version so generated syntax is pinned. Choices: `standard-py310-20260619`, `standard-py311-20260619`, `standard-py312-20260619`, `standard-py313-20260619`, `standard-py314-20260619`, `practical-py310-20260619`, `practical-py311-20260619`, `practical-py312-20260619`, `practical-py313-20260619`, `practical-py314-20260619`, `standard-py310-20260826`, `standard-py311-20260826`, `standard-py312-20260826`, `standard-py313-20260826`, `standard-py314-20260826`, `practical-py310-20260826`, `practical-py311-20260826`, `practical-py312-20260826`, `practical-py313-20260826`, `practical-py314-20260826`.
 - `--url`: Input file URL. `--input` is ignored when `--url` is used. For HTTP(S), datamodel-code-generator[http] remains the stable HTTPX backend and is not deprecated, while datamodel-code-generator[httpx2] is experimental. The default --http-backend auto policy selects stable HTTPX when its client module is installed and selects HTTPX2 only when that module is absent. Select --http-backend httpx2 to require the experimental backend. Explicit selections and paired dependency errors do not fall back.
 - `--input-model`: Python import path or file path to a Pydantic v2 model or schema dict (e.g., 'mypackage.module:ClassName', './models.py:ClassName', or 'mypackage.schemas:SCHEMA_DICT'). Can be specified multiple times for related models with inheritance. For dict input, --input-file-type is required. Cannot be used with --input or --url.
 - `--input-model-ref-strategy`: Strategy for referenced types in --input-model. 'regenerate-all': Regenerate all types. 'reuse-foreign': Reuse types from different families (Enum, etc.), regenerate same-family. 'reuse-all': Reuse all referenced types via import. If not specified, defaults to regenerate-all behavior. Choices: `regenerate-all`, `reuse-foreign`, `reuse-all`.
@@ -77,7 +77,7 @@ Field naming, aliases, defaults, and constraints.
 - `--use-title-as-name`: use titles as class names of models
 - `--infer-union-variant-names`: Infer inline oneOf/anyOf branch model names from literal discriminator-style fields
 - `--field-constraints`: Use field constraints and not con* annotations
-- `--set-default-enum-member`: Set enum members as default values for enum field
+- `--set-default-enum-member` (deprecated): Deprecated: --set-default-enum-member is deprecated. Use --deserialize-default-values enum instead.
 - `--use-enum-values-in-discriminator`: Use enum member literals in discriminator fields instead of string literals
 - `--capitalise-enum-members`: Capitalize field names on enum
 - `--capitalize-enum-members`: Capitalize field names on enum
@@ -101,6 +101,8 @@ Field naming, aliases, defaults, and constraints.
 - `--field-type-collision-strategy`: Strategy for handling field name and type name collisions (Pydantic v2 only). 'rename-field': rename field with suffix and add alias (default). 'rename-type': rename type class with suffix to preserve field name. Choices: `rename-field`, `rename-type`.
 - `--aliases`: Alias mapping as inline JSON or a JSON file path for renaming fields. Format: {'<schema_field>': '<python_name>'} - the schema field name becomes the Pydantic alias. Supports hierarchical formats: Flat: {'id': 'id_'} applies to all occurrences. Scoped: {'User.name': 'user_name'} applies to specific class. Priority: scoped > flat. Multiple aliases (Pydantic v2 only): {'field': ['alt1', 'alt2']} uses AliasChoices for validation. Example: {'User.name': 'user_name', 'id': 'id_'} generates `id_: ... = Field(alias='id')`.
 - `--default-values`: Default value overrides as inline JSON or a JSON file path. Supports hierarchical formats: Flat: {'field': value} applies to all occurrences. Scoped: {'ClassName.field': value} applies to specific class. Priority: scoped > flat. Note: Scoped keys use the generated class name for JSON Schema/OpenAPI. Required fields remain required unless --use-default is also specified. Example: {'User.status': 'active', 'page': 1, 'limit': 10}
+- `--deserialize-default-values`: Deserialize serialized schema defaults for selected generated types. Supported values: decimal, enum. Choices: `decimal`, `enum`.
+- `--no-deserialize-default-values`: Disable schema default value deserialization.
 
 ## Model Customization
 
@@ -242,6 +244,9 @@ General utility, HTTP, checking, and project integration options.
 - `--generate-cli-command`: Generate CLI command from pyproject.toml configuration and exit
 - `--generate-prompt`: Generate a prompt for consulting LLMs about CLI options. Optionally provide your question as an argument. Pipe to CLI tools (e.g., `| claude -p`, `| codex exec`) or copy to clipboard (e.g., `| pbcopy`, `| xclip`) for web LLM chats.
 - `--ignore-pyproject`: Ignore pyproject.toml configuration
+- `--install-skill`: Install the bundled datamodel-code-generator Agent Skill and exit (experimental). Use --skill-scope to select a project or personal installation. Choices: `codex`, `claude-code`.
+- `--skill-scope`: Installation scope for --install-skill (default: project). Project installs use .agents/skills or .claude/skills; user installs use the matching home directory. Choices: `project`, `user`.
+- `--overwrite-skill`: Replace an existing regular skill directory when used with --install-skill.
 - `--profile`: Use a named profile from pyproject.toml [tool.datamodel-codegen.profiles.<name>]
 - `--job`: Run a named job from pyproject.toml [tool.datamodel-codegen.jobs.<name>] (experimental). Can be repeated.
 - `--all-jobs`: Run every named job from pyproject.toml in declaration order (experimental).

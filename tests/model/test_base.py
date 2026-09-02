@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +14,7 @@ from unittest.mock import Mock
 import pytest
 from typing_extensions import TypedDict, Unpack
 
+from datamodel_code_generator import Error
 from datamodel_code_generator._format_types import PythonVersion
 from datamodel_code_generator.imports import (
     IMPORT_ANNOTATED,
@@ -38,6 +41,8 @@ from datamodel_code_generator.model.base import (
     _refresh_custom_template_paths,
     _remember_missing_custom_template_subdir,
     _RenderedDataModelField,
+    _safe_dataclass_arguments,
+    _safe_extra_template_data,
     _TypingImportRequirements,
     comment_safe,
     escape_docstring,
@@ -64,13 +69,29 @@ from datamodel_code_generator.model.pydantic_base import DataModelField as Pydan
 from datamodel_code_generator.model.pydantic_v2 import BaseModel
 from datamodel_code_generator.model.pydantic_v2 import DataModelField as PydanticV2DataModelField
 from datamodel_code_generator.model.pydantic_v2.base_model import (
+    Constraints as PydanticV2Constraints,
+)
+from datamodel_code_generator.model.pydantic_v2.base_model import (
+    _safe_config_dict_items,
     _strip_legacy_pydantic_extra_post_class_assignment,
 )
 from datamodel_code_generator.model.pydantic_v2.dataclass import DataClass as PydanticDataclassModel
 from datamodel_code_generator.model.pydantic_v2.dataclass import DataModelField as PydanticDataclassField
-from datamodel_code_generator.model.pydantic_v2.imports import IMPORT_FIELD, IMPORT_MISSING
+from datamodel_code_generator.model.pydantic_v2.imports import IMPORT_CONSTR, IMPORT_FIELD, IMPORT_MISSING
+from datamodel_code_generator.model.runtime_validation import (
+    RequiredGroupsRule,
+    SchemaRuntimeValidation,
+    _InternalSchemaRuntimeValidation,
+)
+from datamodel_code_generator.model.scalar import DataTypeScalarTypeBackport
 from datamodel_code_generator.model.typed_dict import DataModelField as TypedDictDataModelField
 from datamodel_code_generator.model.typed_dict import TypedDict as TypedDictModel
+from datamodel_code_generator.python_literal import (
+    PythonCode,
+    _InternalTypeExpression,
+    _make_internal_type_expression,
+    is_safe_public_type_name,
+)
 from datamodel_code_generator.reference import Reference
 from datamodel_code_generator.types import ANY, NONE, DataType, Types
 
@@ -195,6 +216,513 @@ def test_msgspec_apply_discriminator_tag() -> None:
     assert field.extras["is_classvar"] is True
 
 
+def test_msgspec_custom_template_data_keeps_raw_options() -> None:
+    """Trusted custom templates continue to receive their raw msgspec options."""
+    reference = Reference(path="Model", original_name="Model", name="Model")
+    extra_template_data = defaultdict(dict, {"Model": {"base_class_kwargs": {"tag": "raw"}}})
+    model = MsgspecStruct(fields=[], reference=reference, extra_template_data=extra_template_data)
+    model.add_base_class_kwarg("kw_only", "True")
+
+    assert model._custom_template_data()["base_class_kwargs"] == {"tag": "raw", "kw_only": "True"}
+
+    empty_model = MsgspecStruct(
+        fields=[],
+        reference=Reference(path="Empty", original_name="Empty", name="Empty"),
+        extra_template_data=defaultdict(dict, {"Empty": {"base_class_kwargs": "invalid"}}),
+    )
+    assert empty_model._custom_template_data()["base_class_kwargs"] == "invalid"
+
+
+def test_builtin_pydantic_config_literals_are_safe() -> None:
+    """Built-in ConfigDict output only uses serialized extension data."""
+
+    class StringOnly:
+        def __str__(self) -> str:
+            return "config object"
+
+    config_items = _safe_config_dict_items({
+        "alias_generator": "to_camel",
+        "legacy": "True",
+        "quoted": "'quoted'",
+        "number": "'1'",
+        "broken": "'broken\\'",
+        "nested": [{"value": "safe"}, ("one",)],
+        "fallback": StringOnly(),
+        "regex_engine": '"python-re"',
+        "not-valid": True,
+        "class": True,
+    })
+
+    assert config_items == [
+        ("alias_generator", "to_camel"),
+        ("legacy", "True"),
+        ("quoted", "'quoted'"),
+        ("number", "'1'"),
+        ("broken", "\"'broken\\\\'\""),
+        ("nested", "[{'value': 'safe'}, ('one',)]"),
+        ("fallback", "'config object'"),
+        ("regex_engine", '"python-re"'),
+    ]
+
+
+def test_builtin_renderers_normalize_hostile_public_string_subclasses() -> None:
+    """Built-in Python syntax never trusts overridable methods on ``str`` subclasses."""
+
+    class HostileString(str):  # noqa: FURB189, SLOT000 - intentionally exercises hostile string subclasses
+        def __str__(self) -> str:  # pragma: no cover - the renderer must bypass this override
+            return "__import__('os').system('marker')"
+
+        def split(
+            self, *_: object, **__: object
+        ) -> list[str]:  # pragma: no cover - the renderer must bypass this override
+            return ["str"]
+
+    class HostileComment(HostileString):
+        def replace(self, *_: object, **__: object) -> str:  # pragma: no cover - the renderer must bypass this override
+            return self
+
+    class HostileDocstring(HostileString):
+        def strip(self, *_: object, **__: object) -> str:  # pragma: no cover - the renderer must bypass this override
+            return self
+
+        def replace(self, *_: object, **__: object) -> str:  # pragma: no cover - the renderer must bypass this override
+            return self
+
+        def __contains__(self, _: object) -> bool:  # pragma: no cover - the renderer must bypass this override
+            return False
+
+    class EvilInt(int):
+        def __repr__(self) -> str:  # pragma: no cover - the renderer must bypass this override
+            return marker
+
+    class EvilFloat(float):
+        def __repr__(self) -> str:  # pragma: no cover - the renderer must bypass this override
+            return marker
+
+    marker = "__import__('os').system('marker')"
+    scalar = DataTypeScalarTypeBackport(
+        fields=[],
+        reference=Reference(path="Evil", original_name="Evil", name="Evil"),
+        extra_template_data=defaultdict(dict, {"Evil": {"py_type": HostileString(marker)}}),
+    )
+    typed_dict = TypedDictModel(
+        fields=[],
+        reference=Reference(path="Typed", original_name="Typed", name="Typed"),
+        extra_template_data=defaultdict(dict, {"Typed": {"additionalPropertiesType": HostileString(marker)}}),
+    )
+    safe_typed_dict = TypedDictModel(
+        fields=[],
+        reference=Reference(path="SafeTyped", original_name="SafeTyped", name="SafeTyped"),
+        extra_template_data=defaultdict(dict, {"SafeTyped": {"additionalPropertiesType": HostileString("str")}}),
+    )
+    pydantic_dataclass = PydanticDataclassModel(
+        fields=[],
+        reference=Reference(path="Data", original_name="Data", name="Data"),
+        extra_template_data=defaultdict(
+            dict,
+            {
+                "Data": {
+                    "config": {
+                        "alias_generator": HostileString("to_camel"),
+                        "json_schema_extra": {"integer": EvilInt(1), "floating": EvilFloat(1.5)},
+                    }
+                }
+            },
+        ),
+    )
+    msgspec = MsgspecStruct(
+        fields=[],
+        reference=Reference(path="Struct", original_name="Struct", name="Struct"),
+        extra_template_data=defaultdict(
+            dict,
+            {"Struct": {"base_class_kwargs": {1: "ignored", "class": "ignored", "tag": EvilInt(1)}}},
+        ),
+    )
+    base_model = BaseModel(
+        fields=[],
+        reference=Reference(path="Model", original_name="Model", name="Model"),
+        description=HostileDocstring(f'"""\n{marker}'),
+        extra_template_data=defaultdict(dict, {"Model": {"comment": HostileComment(f"safe\n{marker}")}}),
+    )
+    field_description_model = BaseModel(
+        fields=[
+            PydanticV2DataModelField(
+                name="value",
+                data_type=DataType(type="str"),
+                required=True,
+                description=HostileDocstring(f'"""\n{marker}'),
+                use_inline_field_description=True,
+            )
+        ],
+        reference=Reference(path="WithField", original_name="WithField", name="WithField"),
+    )
+
+    scalar_rendered = scalar.render()
+    typed_dict_rendered = typed_dict.render()
+    safe_typed_dict_rendered = safe_typed_dict.render()
+    pydantic_dataclass_rendered = pydantic_dataclass.render()
+    msgspec_rendered = msgspec.render()
+    base_model_rendered = base_model.render()
+    field_description_rendered = field_description_model.render()
+
+    assert typed_dict._internal_template_data["typed_dict_kwargs"] == {"extra_items": repr(marker)}
+    assert safe_typed_dict._internal_template_data["typed_dict_kwargs"] == {"extra_items": "str"}
+    assert "alias_generator=to_camel" in pydantic_dataclass_rendered
+    assert "'integer': 1" in pydantic_dataclass_rendered
+    assert "tag=1" in msgspec_rendered
+    assert "# " + marker in base_model_rendered
+    for rendered in (
+        scalar_rendered,
+        typed_dict_rendered,
+        safe_typed_dict_rendered,
+        pydantic_dataclass_rendered,
+        msgspec_rendered,
+        base_model_rendered,
+        field_description_rendered,
+    ):
+        assert not any(isinstance(node, ast.Name) and node.id == "__import__" for node in ast.walk(ast.parse(rendered)))
+
+
+def test_builtin_renderers_quote_non_string_public_type_and_kwargs() -> None:
+    """Public non-string scalar types and non-mapping kwargs remain data."""
+    msgspec = MsgspecStruct(
+        fields=[],
+        reference=Reference(path="RawStruct", original_name="RawStruct", name="RawStruct"),
+        extra_template_data=defaultdict(dict, {"RawStruct": {"base_class_kwargs": "not-a-dictionary"}}),
+    )
+    scalar = DataTypeScalarTypeBackport(
+        fields=[],
+        reference=Reference(path="PublicCode", original_name="PublicCode", name="PublicCode"),
+        extra_template_data=defaultdict(
+            dict,
+            {"PublicCode": {"py_type": 1}},
+        ),
+    )
+
+    msgspec_rendered = msgspec.render()
+    scalar_rendered = scalar.render()
+
+    assert "base_class_kwargs" not in msgspec_rendered
+    assert 'TypeAliasType("PublicCode", 1)' in scalar_rendered
+    assert ast.parse(msgspec_rendered)
+    assert not any(
+        isinstance(node, ast.Name) and node.id == "__import__" for node in ast.walk(ast.parse(scalar_rendered))
+    )
+
+
+def test_pydantic_dataclass_uses_safe_config_items() -> None:
+    """Pydantic dataclass config is prepared in the private template context."""
+    model = PydanticDataclassModel(
+        fields=[],
+        reference=Reference(path="Model", original_name="Model", name="Model"),
+        extra_template_data=defaultdict(dict, {"Model": {"config": {"title": "safe"}}}),
+    )
+
+    assert model._internal_template_data["_safe_config_items"] == [("title", "'safe'")]
+
+
+def test_pydantic_dataclass_ignores_invalid_config_keys_and_alias_generators() -> None:
+    """Built-in ConfigDict rendering ignores invalid keys and quotes unknown aliases."""
+    model = PydanticDataclassModel(
+        fields=[],
+        reference=Reference(path="Data", original_name="Data", name="Data"),
+        extra_template_data=defaultdict(
+            dict,
+            {"Data": {"config": {"alias_generator": "unknown_alias", 1: "ignored"}}},
+        ),
+    )
+
+    rendered = model.render()
+
+    assert "alias_generator='unknown_alias'" in rendered
+    assert "ignored" not in rendered
+    assert ast.parse(rendered)
+
+
+def test_pydantic_validators_are_prepared_in_private_template_data() -> None:
+    """Validated Pydantic validators never reuse public prepared source fragments."""
+    model = BaseModel(
+        fields=[],
+        reference=Reference(path="Model", original_name="Model", name="Model"),
+        extra_template_data=defaultdict(
+            dict,
+            {
+                "Model": {
+                    "prepared_validators": [{"function_name": "ignored"}],
+                    "validators": [{"field": "name", "function": "myapp.validators.validate_name", "mode": "before"}],
+                }
+            },
+        ),
+    )
+
+    assert "prepared_validators" not in model.extra_template_data
+    assert model._internal_template_data["prepared_validators"] == [
+        {
+            "fields_str": "'name'",
+            "mode_str": "mode='before'",
+            "method_name": "validate_name_validator",
+            "function_name": "validate_name",
+            "mode": "before",
+        }
+    ]
+
+
+def test_typed_dict_template_type_expressions_are_non_executing() -> None:
+    """PEP 728 public template data accepts only simple type names."""
+    assert is_safe_public_type_name("datetime.date")
+    assert not is_safe_public_type_name("dict[str, int] | None")
+    assert not is_safe_public_type_name("__import__('os')")
+
+    reference = Reference(path="Typed", original_name="Typed", name="Typed")
+    public_model = TypedDictModel(
+        fields=[],
+        reference=reference,
+        extra_template_data=defaultdict(
+            dict,
+            {"Typed": {"additionalPropertiesType": "datetime.date"}},
+        ),
+    )
+    parser_model = TypedDictModel(
+        fields=[],
+        reference=Reference(path="Parser", original_name="Parser", name="Parser"),
+        extra_template_data=defaultdict(
+            dict,
+            {"Parser": {"additionalPropertiesType": _make_internal_type_expression("dict[str, int]")}},
+        ),
+    )
+    unsafe_model = TypedDictModel(
+        fields=[],
+        reference=Reference(path="Unsafe", original_name="Unsafe", name="Unsafe"),
+        extra_template_data=defaultdict(
+            dict,
+            {"Unsafe": {"additionalPropertiesType": "__import__('os')"}},
+        ),
+    )
+    code_model = TypedDictModel(
+        fields=[],
+        reference=Reference(path="Code", original_name="Code", name="Code"),
+        extra_template_data=defaultdict(
+            dict,
+            {"Code": {"additionalPropertiesType": PythonCode("__import__('os').system('id')")}},
+        ),
+    )
+    reference_model = TypedDictModel(
+        fields=[],
+        reference=Reference(path="Reference", original_name="Reference", name="Reference"),
+        extra_template_data=defaultdict(
+            dict,
+            {
+                "Reference": {
+                    "additionalPropertiesType": PythonCode("__import__('os').system('id')"),
+                    "additionalPropertiesReferenceClasses": {"ReferenceType"},
+                }
+            },
+        ),
+    )
+
+    assert public_model._internal_template_data["typed_dict_kwargs"] == {"extra_items": "datetime.date"}
+    assert public_model._has_pep728_kwargs is True
+    assert parser_model._internal_template_data["typed_dict_kwargs"] == {"extra_items": "dict[str, int]"}
+    assert unsafe_model._internal_template_data["typed_dict_kwargs"] == {"extra_items": "\"__import__('os')\""}
+    assert code_model._internal_template_data["typed_dict_kwargs"] == {
+        "extra_items": "\"__import__('os').system('id')\""
+    }
+    assert reference_model._internal_template_data["typed_dict_kwargs"] == {
+        "extra_items": "\"__import__('os').system('id')\""
+    }
+
+    with pytest.raises(TypeError, match="must be created by the parser"):
+        _InternalTypeExpression("dict[str, int]", object())
+
+
+def test_typed_dict_include_only_custom_dir_keeps_builtin_context_safe(tmp_path: Path) -> None:
+    """A custom include directory cannot make a built-in TypedDict consume raw kwargs."""
+    model = TypedDictModel(
+        fields=[],
+        reference=Reference(path="Typed", original_name="Typed", name="Typed"),
+        custom_template_dir=tmp_path,
+        extra_template_data=defaultdict(dict, {"Typed": {"typed_dict_kwargs": {"closed": "True"}}}),
+    )
+
+    assert not model._uses_custom_root_template
+    with pytest.raises(Error, match="typed_dict_kwargs is reserved"):
+        model.render()
+
+
+def test_builtin_template_data_comment_preserves_missing_none_and_values() -> None:
+    """Built-in comment normalization preserves missing and explicit values."""
+
+    class Comment:
+        def __str__(self) -> str:
+            return "custom\nstatement"
+
+    missing = _safe_extra_template_data({})
+    explicit_none = _safe_extra_template_data({"comment": None})
+
+    assert "comment" not in missing
+    assert explicit_none["comment"] is None
+    assert _safe_extra_template_data({"comment": False})["comment"] == "False"
+    assert not _safe_extra_template_data({"comment": ""})["comment"]
+    assert _safe_extra_template_data({"comment": Comment()})["comment"] == "custom\n# statement"
+
+
+def test_builtin_template_data_normalizes_public_mapping_keys() -> None:
+    """Built-in key checks cannot be bypassed by a stateful string subclass."""
+
+    class StatefulKey(str):  # noqa: FURB189, SLOT000 - intentionally violates the hash contract
+        calls = 0
+        __eq__ = str.__eq__
+
+        def __hash__(self) -> int:
+            type(self).calls += 1
+            return 0 if type(self).calls < 3 else hash(str.__str__(self))
+
+    class BenignKey(str):  # noqa: FURB189, SLOT000 - intentionally exercises public string-subclass keys
+        pass
+
+    class HiddenDict(dict[str, Any]):  # noqa: FURB189 - intentionally lies about public template data
+        def __iter__(self) -> Any:  # pragma: no cover - built-in rendering bypasses this override
+            return iter(())
+
+    marker = "__import__('os').system('marker')"
+    reserved_model = BaseModel(
+        fields=[],
+        reference=Reference(path="Reserved", original_name="Reserved", name="Reserved"),
+        extra_template_data=defaultdict(dict, {"Reserved": {StatefulKey("class_body_lines"): [marker]}}),
+    )
+    comment_model = BaseModel(
+        fields=[],
+        reference=Reference(path="Comment", original_name="Comment", name="Comment"),
+        extra_template_data=defaultdict(dict, {"Comment": {StatefulKey("comment"): f"safe\n{marker}"}}),
+    )
+    hidden_model = BaseModel(
+        fields=[],
+        reference=Reference(path="Hidden", original_name="Hidden", name="Hidden"),
+        extra_template_data=defaultdict(dict, {"Hidden": HiddenDict({BenignKey("class_body_lines"): [marker]})}),
+    )
+
+    with pytest.raises(Error, match="class_body_lines is reserved"):
+        reserved_model.render()
+    with pytest.raises(Error, match="class_body_lines is reserved"):
+        hidden_model.render()
+
+    comment_rendered = comment_model.render()
+    normalized = _safe_extra_template_data({BenignKey("extra"): "value"})
+
+    assert type(next(iter(normalized))) is str
+    assert normalized == {"extra": "value"}
+    assert "# " + marker in comment_rendered
+    assert not any(
+        isinstance(node, ast.Name) and node.id == "__import__" for node in ast.walk(ast.parse(comment_rendered))
+    )
+
+
+def test_builtin_dataclass_arguments_are_typed_and_custom_templates_remain_raw() -> None:
+    """Decorator arguments are safe in built-in templates and unchanged in custom roots."""
+
+    class EvilArgument:
+        def __repr__(self) -> str:
+            return "__import__('os').system('marker')"
+
+    class FabricatedArguments(dict[str, Any]):  # noqa: FURB189 - intentionally lies about public decorator data
+        def __bool__(self) -> bool:  # pragma: no cover - built-in rendering receives an exact snapshot
+            return True
+
+        def items(self) -> Any:  # pragma: no cover - built-in rendering bypasses this override
+            return (("slots", EvilArgument()),)
+
+    marker = "__import__('os').system('marker')"
+    builtin_models = (
+        DataclassModel(
+            fields=[],
+            reference=Reference(path="Data", original_name="Data", name="Data"),
+            dataclass_arguments={"slots": EvilArgument()},  # type: ignore[typeddict-item]
+        ),
+        PydanticDataclassModel(
+            fields=[],
+            reference=Reference(path="PydanticData", original_name="PydanticData", name="PydanticData"),
+            dataclass_arguments={"slots": EvilArgument()},  # type: ignore[typeddict-item]
+        ),
+    )
+    custom_model = PydanticDataclassModel(
+        fields=[],
+        reference=Reference(path="Custom", original_name="Custom", name="Custom"),
+        custom_template_dir=Path("tests/data/templates_pydantic_v2_dataclass_legacy"),
+        dataclass_arguments={"slots": EvilArgument()},  # type: ignore[typeddict-item]
+    )
+    fabricated_model = DataclassModel(
+        fields=[],
+        reference=Reference(path="Fabricated", original_name="Fabricated", name="Fabricated"),
+        dataclass_arguments=FabricatedArguments(),  # type: ignore[arg-type]
+    )
+
+    for model in builtin_models:
+        with pytest.raises(Error, match="dataclass argument 'slots' must be a bool"):
+            model.render()
+
+    assert marker in custom_model.render()
+    fabricated_rendered = fabricated_model.render()
+    assert marker not in fabricated_rendered
+    assert ast.parse(fabricated_rendered)
+
+
+def test_builtin_template_context_rejects_invalid_public_mapping_shapes() -> None:
+    """Built-in syntax context rejects malformed and duplicate public keys."""
+
+    class DuplicateKey(str):  # noqa: FURB189, SLOT000 - intentionally violates the hash contract
+        __eq__ = str.__eq__
+
+        def __hash__(self) -> int:
+            return object.__hash__(self)
+
+    duplicate_template_data = {DuplicateKey("extra"): "one", DuplicateKey("extra"): "two"}
+    duplicate_dataclass_arguments = {DuplicateKey("slots"): True, DuplicateKey("slots"): False}
+
+    with pytest.raises(Error, match="extra template data must be a dictionary"):
+        _safe_extra_template_data([])  # type: ignore[arg-type]
+    with pytest.raises(Error, match="extra template data keys must be strings"):
+        _safe_extra_template_data({1: "value"})  # type: ignore[dict-item]
+    with pytest.raises(Error, match="duplicate key 'extra'"):
+        _safe_extra_template_data(duplicate_template_data)
+    with pytest.raises(Error, match="dataclass_arguments must be a dictionary"):
+        _safe_dataclass_arguments([])  # type: ignore[arg-type]
+    with pytest.raises(Error, match="dataclass_arguments keys must be strings"):
+        _safe_dataclass_arguments({1: True})  # type: ignore[dict-item]
+    with pytest.raises(Error, match="invalid dataclass argument 'invalid'"):
+        _safe_dataclass_arguments({"invalid": True})
+    with pytest.raises(Error, match="duplicate key 'slots'"):
+        _safe_dataclass_arguments(duplicate_dataclass_arguments)
+
+
+def test_builtin_schema_runtime_validation_requires_parser_provenance() -> None:
+    """A public runtime-validation object cannot reach the built-in repr filter."""
+
+    class EvilString(str):  # noqa: FURB189, SLOT000 - intentionally exercises hostile string subclasses
+        def __repr__(self) -> str:  # pragma: no cover - built-in rendering rejects this object before repr()
+            return "__import__('os').system('marker')"
+
+    model = BaseModel(
+        fields=[],
+        reference=Reference(path="Model", original_name="Model", name="Model"),
+        extra_template_data=defaultdict(
+            dict,
+            {
+                "Model": {
+                    "schema_runtime_validation": SchemaRuntimeValidation(
+                        required_groups=[RequiredGroupsRule(keyword="oneOf", groups=(((EvilString("value"),),),))]
+                    )
+                }
+            },
+        ),
+    )
+
+    with pytest.raises(Error, match="schema_runtime_validation is reserved"):
+        model.render()
+
+    with pytest.raises(TypeError, match="must be created by the parser"):
+        _InternalSchemaRuntimeValidation(object())
+
+
 def test_default_apply_discriminator_tag_is_noop() -> None:
     """Models without tagged unions leave fields and template data unchanged."""
     field = TypedDictDataModelField(name="kind", data_type=DataType(literals=["pet"]))
@@ -258,6 +786,13 @@ def test_data_model() -> None:
     assert data_model.render() == "@validate\n@dataclass\nclass test_model:\n    a: str"
 
 
+def test_data_model_module_code_hooks_default_to_noop() -> None:
+    """Keep shared module-code hooks free for model types without helpers."""
+    assert DataModel.get_module_code_insertion_index([]) == 0
+    assert DataModel.prepare_module_code([]) is None
+    assert DataModel.invalidate_module_code_cache([]) is None
+
+
 def test_data_model_custom_base_class_list() -> None:
     """Preserve every explicitly configured custom base class."""
     model = BaseModel(
@@ -288,6 +823,75 @@ def test_data_model_relative_custom_template_without_adapter() -> None:
     )
 
     assert Path(model.template.filename).parts[-2:] == ("pydantic_v2", "BaseModel.jinja2")
+
+
+def test_relative_custom_root_template_keeps_raw_template_data() -> None:
+    """An existing relative custom root remains an explicit trusted-template opt-in."""
+    model = BaseModel(
+        fields=[],
+        reference=Reference(path="Model", original_name="Model", name="Model"),
+        custom_template_dir=Path("tests/data/templates_pydantic_extra_pre_3593"),
+        extra_template_data=defaultdict(dict, {"Model": {"class_body_lines": ["raw_custom_code = True"]}}),
+    )
+
+    assert model._uses_custom_root_template
+    assert "raw_custom_code = True" in model.render()
+
+
+def test_template_fields_escape_only_changed_custom_docstrings() -> None:
+    """Custom roots use escaped proxies only for the fields that need them."""
+    custom_model = BaseModel(
+        fields=[
+            PydanticV2DataModelField(name="first", data_type=DataType(type="str"), required=True),
+            PydanticV2DataModelField(
+                name="escaped",
+                data_type=DataType(type="str"),
+                required=True,
+                extras={"description": 'contains """'},
+                use_field_description=True,
+            ),
+            PydanticV2DataModelField(
+                name="escaped_again",
+                data_type=DataType(type="str"),
+                required=True,
+                extras={"description": 'also contains """'},
+                use_field_description=True,
+            ),
+            PydanticV2DataModelField(name="last", data_type=DataType(type="str"), required=True),
+        ],
+        reference=Reference(path="Custom", original_name="Custom", name="Custom"),
+        custom_template_dir=Path("tests/data/templates_pydantic_extra_pre_3593"),
+    )
+    builtin_model = BaseModel(
+        fields=[],
+        reference=Reference(path="Builtin", original_name="Builtin", name="Builtin"),
+    )
+
+    custom_rendered = custom_model.render()
+    builtin_rendered = builtin_model.render()
+
+    assert 'contains \\"\\"\\"' in custom_rendered
+    assert 'also contains \\"\\"\\"' in custom_rendered
+    assert "class Builtin(BaseModel):" in builtin_rendered
+
+
+def test_legacy_relative_custom_root_template_remains_trusted() -> None:
+    """The legacy top-level BaseModel template remains a custom root template."""
+
+    class RawComment:
+        def __str__(self) -> str:
+            return "safe\nraw_custom_marker = True"
+
+    model = BaseModel(
+        fields=[],
+        reference=Reference(path="Model", original_name="Model", name="Model"),
+        custom_template_dir=Path("tests/data/templates_old_style"),
+        extra_template_data=defaultdict(dict, {"Model": {"comment": RawComment()}}),
+    )
+
+    assert model._uses_custom_root_template
+    assert Path(model.template.filename).resolve() == Path("tests/data/templates_old_style/BaseModel.jinja2").resolve()
+    assert "\nraw_custom_marker = True" in model.render()
 
 
 def test_pydantic_custom_template_legacy_root_keeps_precedence(tmp_path: Path) -> None:
@@ -378,6 +982,93 @@ def test_pydantic_v2_base_model_create_typed_extra_field() -> None:
     assert field.original_name == "__pydantic_extra__"
     assert field.data_type is data_type
     assert field.required is True
+
+
+@pytest.mark.parametrize(
+    ("dict_key", "is_supported"),
+    [
+        pytest.param(
+            DataType(type="constr", is_func=True, kwargs={"pattern": "^[a-z]+$"}, import_=IMPORT_CONSTR),
+            True,
+            id="constrained-string",
+        ),
+        pytest.param(DataType(literals=["named"]), True, id="string-literal"),
+        pytest.param(DataType(literals=[1]), False, id="non-string-literal"),
+        pytest.param(DataType(type="int", literals=["named"]), False, id="integer-with-string-literal"),
+        pytest.param(DataType(type="str"), False, id="plain-string"),
+        pytest.param(DataType(type="int"), False, id="integer"),
+        pytest.param(DataType(type="bool"), False, id="boolean"),
+        pytest.param(DataType(type="constr", import_=IMPORT_CONSTR), False, id="unconfigured-constr"),
+        pytest.param(DataType(enum_member_literals=[("Key", "member")]), False, id="enum-member-literal"),
+        pytest.param(DataType(is_optional=True), False, id="optional"),
+        pytest.param(DataType(is_dict=True), False, id="dict"),
+        pytest.param(DataType(is_list=True), False, id="list"),
+        pytest.param(DataType(is_set=True), False, id="set"),
+        pytest.param(DataType(is_frozen_set=True), False, id="frozen-set"),
+        pytest.param(DataType(is_mapping=True), False, id="mapping"),
+        pytest.param(DataType(is_sequence=True), False, id="sequence"),
+        pytest.param(DataType(is_tuple=True), False, id="tuple"),
+        pytest.param(
+            DataType(data_types=[DataType(type="str"), DataType(type="int")]),
+            False,
+            id="compound",
+        ),
+    ],
+)
+def test_pydantic_v2_base_model_typed_extra_dict_key_capability(
+    dict_key: DataType,
+    is_supported: bool,
+) -> None:
+    """Test Pydantic v2 keeps only supported typed-extra key types."""
+    data_type = DataType(data_types=[DataType(type="int")], is_dict=True, dict_key=dict_key)
+
+    field = BaseModel.create_typed_extra_field(
+        field_model=PydanticV2DataModelField,
+        data_type=data_type,
+    )
+
+    if not is_supported:
+        assert field.data_type.dict_key is None
+    else:
+        assert field.data_type.dict_key is dict_key
+
+
+def test_pydantic_v2_base_model_typed_extra_dict_key_capability_unregisters_references() -> None:
+    """Test discarded typed-extra key types leave no reverse-reference registration."""
+    reference = Reference(path="Key", original_name="Key", name="Key")
+    nested_data_type = DataType(reference=reference)
+    dict_key = DataType(data_types=[nested_data_type])
+    data_type = DataType(data_types=[DataType(type="int")], is_dict=True, dict_key=dict_key)
+
+    BaseModel.create_typed_extra_field(
+        field_model=PydanticV2DataModelField,
+        data_type=data_type,
+    )
+
+    assert data_type.dict_key is None
+    assert dict_key.parent is None
+    assert nested_data_type.parent is None
+    assert nested_data_type not in reference.children
+
+
+def test_pydantic_v2_base_model_typed_extra_dict_key_capability_fails_closed() -> None:
+    """Test typed-extra key constraints are discarded without a backend capability."""
+
+    class NoKeyCapabilityBaseModel(BaseModel):
+        _TYPED_EXTRA_DICT_KEY_CAPABILITY = None
+
+    data_type = DataType(
+        data_types=[DataType(type="int")],
+        is_dict=True,
+        dict_key=DataType(type="constr", is_func=True, kwargs={"pattern": "^[a-z]+$"}, import_=IMPORT_CONSTR),
+    )
+
+    field = NoKeyCapabilityBaseModel.create_typed_extra_field(
+        field_model=PydanticV2DataModelField,
+        data_type=data_type,
+    )
+
+    assert field.data_type.dict_key is None
 
 
 def test_data_model_dedup_key_uses_model_base_to_hashable_seam(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -783,6 +1474,87 @@ def test_pydantic_v2_field_render_plan_preserves_explicit_null_default() -> None
     assert str(field) == "Field(None)"
     assert field.field == "Field(default=None)"
     assert field.annotated == "Annotated[None, Field(None)]"
+
+
+def test_pydantic_v2_empty_field_render_plan_is_shared_for_builtin_fields() -> None:
+    """Built-in fields without Field() syntax share one immutable empty plan."""
+    first = PydanticV2DataModelField(name="first", data_type=DataType(type="str"), required=True)
+    second = PydanticV2DataModelField(name="second", data_type=DataType(type="int"), required=True)
+    BaseModel(
+        fields=[first, second],
+        reference=Reference(path="Model", name="Model"),
+    )
+
+    first_plan = first._get_field_render_plan()
+
+    assert first_plan is second._get_field_render_plan()
+    assert not first_plan.rendered
+    assert first_plan.assignment is None
+    assert first_plan.arguments == ()
+    assert first_plan.default_factory is None
+    assert first.imports == ()
+
+
+def test_pydantic_v2_empty_field_render_plan_falls_back_for_extensions_and_field_syntax() -> None:
+    """Custom templates, subclasses, and Field() features retain the conventional plan."""
+    plain = PydanticV2DataModelField(name="plain", data_type=DataType(type="str"), required=True)
+    BaseModel(fields=[plain], reference=Reference(path="Plain", name="Plain"))
+    shared_plan = plain._get_field_render_plan()
+
+    hook_calls = 0
+
+    class CustomField(PydanticV2DataModelField):
+        def _get_field_render_plan(self) -> Any:
+            nonlocal hook_calls
+            hook_calls += 1
+            return super()._get_field_render_plan()
+
+    custom_field = CustomField(name="custom", data_type=DataType(type="str"), required=True)
+    custom_template_field = PydanticV2DataModelField(
+        name="custom_template",
+        data_type=DataType(type="str"),
+        required=True,
+    )
+    constrained_field = PydanticV2DataModelField(
+        name="constrained",
+        data_type=DataType(type="str"),
+        required=False,
+        constraints=PydanticV2Constraints(minLength=1),
+    )
+    alias_field = PydanticV2DataModelField(
+        name="alias",
+        data_type=DataType(type="str"),
+        required=False,
+        alias="alias-value",
+    )
+    for field, model in (
+        (
+            custom_field,
+            BaseModel(fields=[custom_field], reference=Reference(path="Custom", name="Custom")),
+        ),
+        (
+            custom_template_field,
+            BaseModel(
+                fields=[custom_template_field],
+                reference=Reference(path="CustomTemplate", name="CustomTemplate"),
+                custom_template_dir=Path(__file__).parents[1] / "data" / "templates_extensions",
+            ),
+        ),
+        (
+            constrained_field,
+            BaseModel(fields=[constrained_field], reference=Reference(path="Constrained", name="Constrained")),
+        ),
+        (
+            alias_field,
+            BaseModel(fields=[alias_field], reference=Reference(path="Alias", name="Alias")),
+        ),
+    ):
+        assert field.parent is model
+        assert field._get_field_render_plan() is not shared_plan
+
+    assert hook_calls == 1
+    assert str(constrained_field) == "Field(None, min_length=1)"
+    assert str(alias_field) == "Field(None, alias='alias-value')"
 
 
 def test_pydantic_field_render_plan_preserves_required_nullable_marker() -> None:

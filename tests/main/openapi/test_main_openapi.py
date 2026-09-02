@@ -894,6 +894,22 @@ def test_main_invalid_dotted_schema_name_stdout(capsys: pytest.CaptureFixture[st
 
 
 @pytest.mark.isolate_builtin_formatter_config
+def test_main_collapse_root_models_recursive_invalid_dotted_stdout(capsys: pytest.CaptureFixture[str]) -> None:
+    """Carry the circular-root fallback into the invalid-dotted stdout repair."""
+    expected_path = EXPECTED_OPENAPI_PATH / "collapse_root_models_recursive_invalid_dotted_stdout.py"
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "collapse_root_models_recursive_invalid_dotted.yaml",
+        output_path=None,
+        input_file_type="openapi",
+        extra_args=["--collapse-root-models", "--disable-timestamp", "--formatters", "builtin"],
+        expected_stdout_path=expected_path,
+        capsys=capsys,
+        assert_no_stderr=True,
+    )
+    validate_generated_code(expected_path.read_text(), str(expected_path), do_exec=True)
+
+
+@pytest.mark.isolate_builtin_formatter_config
 def test_main_invalid_dotted_mixed_keys_stdout(capsys: pytest.CaptureFixture[str]) -> None:
     """Fingerprint parsed YAML with heterogeneous mapping keys before a safe retry."""
     expected_path = EXPECTED_OPENAPI_PATH / "invalid_dotted_mixed_keys_stdout.py"
@@ -8804,6 +8820,23 @@ def test_main_openapi_read_only_write_only_variant_graph_schema_validators(
         expected_attribute_path=("payload", "metricLeaf", "id"),
         expected_attribute_value=1,
     )
+    assert_generated_model_json_invalid(
+        output_file,
+        module_name="read_only_write_only_variant_graph_validator_response_property_count",
+        model_name="ApiConditionalForwardWrapperResponseModel",
+        invalid_json='{"payload":{"kind":"metric","metricLeaf":{"id":1},"extra":true}}',
+        expected_error_type="value_error",
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="read_only_write_only_variant_graph_validator_request_property_count",
+        model_name="ApiConditionalForwardWrapperRequestModel",
+        valid_json='{"payload":{"kind":"metric","metricLeaf":{}}}',
+        invalid_json='{"payload":{"kind":"metric","metricLeaf":{},"extra":true}}',
+        expected_error_type="value_error",
+        expected_attribute_path=("payload", "kind"),
+        expected_attribute_value="metric",
+    )
 
 
 def test_main_openapi_dot_notation_inheritance(output_dir: Path) -> None:
@@ -9156,6 +9189,18 @@ def test_main_openapi_x_enum_names(output_file: Path) -> None:
         input_file_type="openapi",
         assert_func=assert_file_content,
         expected_file="x_enum_names.py",
+    )
+
+
+def test_main_openapi_x_enum_descriptions_null(output_file: Path) -> None:
+    """Treat null x-enum-descriptions entries as missing descriptions."""
+    run_main_and_assert(
+        input_path=OPEN_API_DATA_PATH / "x_enum_descriptions_null.yaml",
+        output_path=output_file,
+        input_file_type="openapi",
+        assert_func=assert_file_content,
+        expected_file="x_enum_descriptions_null.py",
+        extra_args=["--use-field-description"],
     )
 
 

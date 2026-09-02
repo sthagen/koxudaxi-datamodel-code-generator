@@ -106,7 +106,7 @@ For detailed usage, see: https://datamodel-code-generator.koxudaxi.dev
   --output OUTPUT       Output file (default: stdout)
   --output-model-type {pydantic_v2.BaseModel,pydantic_v2.dataclass,dataclasses.dataclass,typing.TypedDict,msgspec.Struct}
                         Output model type (default: pydantic_v2.BaseModel)
-  --preset {standard-py310-20260619,standard-py311-20260619,standard-py312-20260619,standard-py313-20260619,standard-py314-20260619,practical-py310-20260619,practical-py311-20260619,practical-py312-20260619,practical-py313-20260619,practical-py314-20260619}
+  --preset {standard-py310-20260619,standard-py311-20260619,standard-py312-20260619,standard-py313-20260619,standard-py314-20260619,practical-py310-20260619,practical-py311-20260619,practical-py312-20260619,practical-py313-20260619,practical-py314-20260619,standard-py310-20260826,standard-py311-20260826,standard-py312-20260826,standard-py313-20260826,standard-py314-20260826,practical-py310-20260826,practical-py311-20260826,practical-py312-20260826,practical-py313-20260826,practical-py314-20260826}
                         Apply an immutable built-in option preset. Preset
                         names include the target Python version so generated
                         syntax is pinned.
@@ -181,7 +181,8 @@ For detailed usage, see: https://datamodel-code-generator.koxudaxi.dev
                         Example: '{"TypedDict": "my_project.typing_compat",
                         "NotRequired": "my_project.typing_compat"}'.
   --set-default-enum-member
-                        Set enum members as default values for enum field
+                        Deprecated: --set-default-enum-member is deprecated.
+                        Use --deserialize-default-values enum instead.
   --strict-types {str,bytes,int,float,bool} [{str,bytes,int,float,bool} ...]
                         Use strict types
   --type-mappings TYPE_MAPPINGS [TYPE_MAPPINGS ...]
@@ -550,6 +551,9 @@ For detailed usage, see: https://datamodel-code-generator.koxudaxi.dev
                         fields remain required unless --use-default is also
                         specified. Example: {'User.status': 'active', 'page':
                         1, 'limit': 10}
+  --deserialize-default-values {decimal,enum} [{decimal,enum} ...]
+                        Deserialize serialized schema defaults for selected
+                        generated types. Supported values: decimal, enum.
   --encoding ENCODING   The encoding of input and output (default: utf-8)
   --extra-template-data EXTRA_TEMPLATE_DATA
                         Extra template data for output models as inline JSON
@@ -564,6 +568,8 @@ For detailed usage, see: https://datamodel-code-generator.koxudaxi.dev
                         Generate Pydantic v2 model validators for JSON Schema
                         rules that cannot be represented as type hints
                         (experimental).
+  --no-deserialize-default-values
+                        Disable schema default value deserialization.
   --schema-validator-base-class-name SCHEMA_VALIDATOR_BASE_CLASS_NAME
                         Set the generated shared Pydantic v2 schema runtime
                         validator base class name.
@@ -660,6 +666,10 @@ For detailed usage, see: https://datamodel-code-generator.koxudaxi.dev
                         Generate pyproject.toml configuration from the
                         provided CLI arguments and exit
   --ignore-pyproject    Ignore pyproject.toml configuration
+  --install-skill {codex,claude-code}
+                        Install the bundled datamodel-code-generator Agent
+                        Skill and exit (experimental). Use --skill-scope to
+                        select a project or personal installation.
   --job NAME            Run a named job from pyproject.toml [tool.datamodel-
                         codegen.jobs.<name>] (experimental). Can be repeated.
   --list-deprecations [{table,json,markdown}]
@@ -675,8 +685,15 @@ For detailed usage, see: https://datamodel-code-generator.koxudaxi.dev
   --output-format-json-schema {config,generate-prompt,generation,model-metadata,structured-output}
                         Output JSON Schema for the selected JSON output or
                         JSON configuration format and exit.
+  --overwrite-skill     Replace an existing regular skill directory when used
+                        with --install-skill.
   --profile PROFILE     Use a named profile from pyproject.toml
                         [tool.datamodel-codegen.profiles.<name>]
+  --skill-scope {project,user}
+                        Installation scope for --install-skill (default:
+                        project). Project installs use .agents/skills or
+                        .claude/skills; user installs use the matching home
+                        directory.
   --version             show version
   --watch               Watch input file(s) for changes and regenerate output
                         automatically

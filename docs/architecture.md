@@ -154,16 +154,16 @@ classDiagram
 
 | Config model | Field count | Purpose |
 | --- | ---: | --- |
-| `BaseGenerateConfig` | 150 | Shared generation options. |
-| `GenerateConfig` | 165 | Public `generate()` configuration. |
-| `ParserConfig` | 141 | Base parser dependency injection and parser options. |
-| `JSONSchemaParserConfig` | 143 | JSON Schema parser options. |
-| `OpenAPIParserConfig` | 149 | OpenAPI-specific parser options. |
-| `AsyncAPIParserConfig` | 150 | AsyncAPI-specific parser options. |
-| `XMLSchemaParserConfig` | 144 | XML Schema-specific parser options. |
-| `ProtobufParserConfig` | 144 | Protocol Buffers-specific parser options. |
-| `AvroParserConfig` | 143 | Avro-specific parser options. |
-| `GraphQLParserConfig` | 144 | GraphQL-specific parser options. |
+| `BaseGenerateConfig` | 151 | Shared generation options. |
+| `GenerateConfig` | 166 | Public `generate()` configuration. |
+| `ParserConfig` | 142 | Base parser dependency injection and parser options. |
+| `JSONSchemaParserConfig` | 144 | JSON Schema parser options. |
+| `OpenAPIParserConfig` | 150 | OpenAPI-specific parser options. |
+| `AsyncAPIParserConfig` | 151 | AsyncAPI-specific parser options. |
+| `XMLSchemaParserConfig` | 145 | XML Schema-specific parser options. |
+| `ProtobufParserConfig` | 145 | Protocol Buffers-specific parser options. |
+| `AvroParserConfig` | 144 | Avro-specific parser options. |
+| `GraphQLParserConfig` | 145 | GraphQL-specific parser options. |
 
 ### Formatter Names
 
@@ -238,6 +238,38 @@ Parsers do not hard-code Pydantic, dataclass, TypedDict, or msgspec classes. `ge
 
 The same parser output can therefore render into different Python model styles while sharing the same reference and
 module-generation pipeline.
+
+## Layer Dependency Rules
+
+The pipeline is also a dependency boundary. Configuration and entry points select behavior, parsers normalize source
+formats, and output models own rendering-framework behavior. Keep these rules when adding features or optimizing hot
+paths:
+
+- Parser modules may depend on neutral `DataModel`, `DataModelFieldBase`, and declared capability hooks. They must not
+  import or identify concrete Pydantic, dataclass, TypedDict, or msgspec output implementations.
+- Output-specific constructor, forward-reference, runtime-validation, import-conflict, and rendering behavior belongs
+  to the output model that implements it. The parser calls the neutral capability without switching on backend names.
+- Output models inject reserved-field and generated-import conflict handling through `FIELD_NAME_RESOLVER_CLASS`;
+  `ModelResolver` owns only neutral normalization and lazily creates the selected resolver.
+  Legacy resolver imports and default `ModelResolver` policies resolve those output-owned providers lazily.
+- Reusable graph, detection, enum, cache, and parser retry-signal helpers belong in neutral package modules. Code outside `parser/` must not
+  import private `parser._*` helpers.
+- Input-model conversion reads output-family compatibility from the output selection registry. It must not maintain a
+  second `DataModelType`-to-backend mapping.
+- Input-model build tokens must resolve to neutral `input_model_result` schema annotations before parser construction.
+  Parsers consume that IR and must not import the private input-model transport. The former token table and parser
+  factory remain lazy private compatibility paths and are not allocated by normal generation.
+- Configuration must not acquire new parser or concrete output-backend dependencies. Historical concrete defaults are
+  narrowly allowlisted until they can be migrated without changing the public `ParserConfig` surface.
+- Entry points project source and reference settings into a frozen `ParserSourceContext` attached to their lightweight,
+  already-validated config; direct parser APIs retain typed configuration and validation.
+
+Run `python scripts/check_architecture_boundaries.py` to validate these rules. The checker parses imports and semantic
+backend inspection with the Python AST, including lazy and dynamic imports. Entrypoint, parser, configuration,
+input-model, reference, and output-model files are classified explicitly, so private parser lifecycle access and
+reference-owned backend policy cannot hide in the shared layer. Its legacy allowlist is keyed by file, enclosing symbol,
+rule, and target; extra occurrences fail, and removed dependencies make stale entries fail so the exception cannot
+silently become permanent. The same check runs in pre-commit and pytest with actionable diagnostics.
 
 ## Rendering And Formatting
 

@@ -76,6 +76,7 @@ datamodel-codegen [OPTIONS]
 | [`--aliases`](field-customization.md#aliases) | Apply custom field and class name aliases via inline JSON or a JSON file path. |
 | [`--capitalize-enum-members`](field-customization.md#capitalize-enum-members) | Capitalize enum member names to UPPER_CASE format. |
 | [`--default-values`](field-customization.md#default-values) | Override field default values via inline JSON or a JSON file path. |
+| [`--deserialize-default-values`](field-customization.md#deserialize-default-values) | Deserialize selected direct scalar field defaults into their generated Python ty... |
 | [`--empty-enum-field-name`](field-customization.md#empty-enum-field-name) | Name for empty string enum field values. |
 | [`--extra-fields`](field-customization.md#extra-fields) | Configure how generated models handle extra fields not defined in schema. |
 | [`--field-constraints`](field-customization.md#field-constraints) | Generate Field() with validation constraints from schema. |
@@ -85,10 +86,11 @@ datamodel-codegen [OPTIONS]
 | [`--field-type-collision-strategy`](field-customization.md#field-type-collision-strategy) | Rename type class instead of field when names collide (Pydantic v2 only). |
 | [`--infer-union-variant-names`](field-customization.md#infer-union-variant-names) | Infer names for inline oneOf/anyOf object variants from literal fields. |
 | [`--no-alias`](field-customization.md#no-alias) | Disable Field alias generation for non-Python-safe property names. |
+| [`--no-deserialize-default-values`](field-customization.md#no-deserialize-default-values) | Keep serialized schema defaults instead of deserializing selected types. |
 | [`--original-field-name-delimiter`](field-customization.md#original-field-name-delimiter) | Specify delimiter for original field names when using snake-case conversion. |
 | [`--remove-special-field-name-prefix`](field-customization.md#remove-special-field-name-prefix) | Remove the special prefix from field names. |
 | [`--serialization-aliases`](field-customization.md#serialization-aliases) | Apply custom Pydantic v2 serialization aliases via inline JSON or a JSON file pa... |
-| [`--set-default-enum-member`](field-customization.md#set-default-enum-member) | Set the first enum member as the default value for enum fields. |
+| [`--set-default-enum-member`](field-customization.md#set-default-enum-member) | Use the legacy flag for deserializing enum defaults. |
 | [`--snake-case-field`](field-customization.md#snake-case-field) | Convert field names to snake_case format. |
 | [`--special-field-name-prefix`](field-customization.md#special-field-name-prefix) | Prefix to add to special field names (like reserved keywords). |
 | [`--use-attribute-docstrings`](field-customization.md#use-attribute-docstrings) | Generate field descriptions as attribute docstrings instead of Field description... |
@@ -238,13 +240,16 @@ datamodel-codegen [OPTIONS]
 | [`--debug`](utility-options.md#debug) | Show debug messages during code generation |
 | [`--generate-prompt`](utility-options.md#generate-prompt) | Generate a prompt for consulting LLMs about CLI options |
 | [`--help`](utility-options.md#help) | Show help message and exit |
+| [`--install-skill`](utility-options.md#install-skill) | Install the bundled Agent Skill (experimental) |
 | [`--job`](utility-options.md#job) | Run a named generation job from pyproject.toml (experimental) |
 | [`--list-deprecations`](utility-options.md#list-deprecations) | List registered deprecations and scheduled breaking changes |
 | [`--list-experimental`](utility-options.md#list-experimental) | List registered experimental features |
 | [`--no-color`](utility-options.md#no-color) | Disable colorized output |
 | [`--output-format`](utility-options.md#output-format) | Choose the command output format |
 | [`--output-format-json-schema`](utility-options.md#output-format-json-schema) | Output JSON Schema for structured command output or JSON configuration |
+| [`--overwrite-skill`](utility-options.md#overwrite-skill) | Replace an existing Agent Skill installation |
 | [`--profile`](utility-options.md#profile) | Use a named profile from pyproject.toml |
+| [`--skill-scope`](utility-options.md#skill-scope) | Choose an Agent Skill installation scope |
 | [`--version`](utility-options.md#version) | Show program version and exit |
 
 ---
@@ -287,6 +292,7 @@ All options sorted alphabetically:
 - [`--dataclass-arguments`](model-customization.md#dataclass-arguments) - Customize dataclass decorator arguments via JSON dictionary.
 - [`--debug`](utility-options.md#debug) - Show debug messages during code generation
 - [`--default-values`](field-customization.md#default-values) - Override field default values via inline JSON or a JSON file...
+- [`--deserialize-default-values`](field-customization.md#deserialize-default-values) - Deserialize selected direct scalar field defaults into their...
 - [`--diff-against`](general-options.md#diff-against) - Compare generated code from a baseline input with the curren...
 - [`--disable-appending-item-suffix`](template-customization.md#disable-appending-item-suffix) - Disable appending 'Item' suffix to array item types.
 - [`--disable-future-imports`](typing-customization.md#disable-future-imports) - Prevent automatic addition of __future__ imports in generate...
@@ -335,6 +341,7 @@ All options sorted alphabetically:
 - [`--input-file-type`](base-options.md#input-file-type) - Specify the input file type for code generation.
 - [`--input-model`](base-options.md#input-model) - Import a Python type or dict schema from a module or Python ...
 - [`--input-model-ref-strategy`](base-options.md#input-model-ref-strategy) - Strategy for referenced types when using --input-model.
+- [`--install-skill`](utility-options.md#install-skill) - Install the bundled Agent Skill (experimental)
 - [`--job`](utility-options.md#job) - Run a named generation job from pyproject.toml (experimental)
 - [`--keep-model-order`](model-customization.md#keep-model-order) - Keep generated model order deterministic while respecting de...
 - [`--keyword-only`](model-customization.md#keyword-only) - Generate dataclasses with keyword-only fields (Python 3.10+)...
@@ -349,6 +356,7 @@ All options sorted alphabetically:
 - [`--naming-strategy`](model-customization.md#naming-strategy) - Use parent-prefixed naming strategy for duplicate model name...
 - [`--no-alias`](field-customization.md#no-alias) - Disable Field alias generation for non-Python-safe property ...
 - [`--no-color`](utility-options.md#no-color) - Disable colorized output
+- [`--no-deserialize-default-values`](field-customization.md#no-deserialize-default-values) - Keep serialized schema defaults instead of deserializing sel...
 - [`--no-treat-dot-as-module`](template-customization.md#no-treat-dot-as-module) - Keep dots in schema names as underscores for flat output.
 - [`--no-use-closed-typed-dict`](typing-customization.md#no-use-closed-typed-dict) - Disable PEP 728 TypedDict closed/extra_items generation.
 - [`--no-use-specialized-enum`](typing-customization.md#no-use-specialized-enum) - Disable specialized Enum classes for Python 3.11+ code gener...
@@ -365,6 +373,7 @@ All options sorted alphabetically:
 - [`--output-format`](utility-options.md#output-format) - Choose the command output format
 - [`--output-format-json-schema`](utility-options.md#output-format-json-schema) - Output JSON Schema for structured command output or JSON configuration
 - [`--output-model-type`](model-customization.md#output-model-type) - Select the output model type (Pydantic v2, Pydantic v2 datac...
+- [`--overwrite-skill`](utility-options.md#overwrite-skill) - Replace an existing Agent Skill installation
 - [`--parent-scoped-naming`](model-customization.md#parent-scoped-naming) - Namespace models by their parent scope to avoid naming confl...
 - [`--preset`](base-options.md#preset) - Apply an immutable built-in option preset.
 - [`--profile`](utility-options.md#profile) - Use a named profile from pyproject.toml
@@ -377,8 +386,9 @@ All options sorted alphabetically:
 - [`--schema-version`](base-options.md#schema-version) - Schema version to use for parsing.
 - [`--schema-version-mode`](base-options.md#schema-version-mode) - Schema version validation mode.
 - [`--serialization-aliases`](field-customization.md#serialization-aliases) - Apply custom Pydantic v2 serialization aliases via inline JS...
-- [`--set-default-enum-member`](field-customization.md#set-default-enum-member) - Set the first enum member as the default value for enum fiel...
+- [`--set-default-enum-member`](field-customization.md#set-default-enum-member) - Use the legacy flag for deserializing enum defaults.
 - [`--shared-module-name`](general-options.md#shared-module-name) - Customize the name of the shared module for deduplicated mod...
+- [`--skill-scope`](utility-options.md#skill-scope) - Choose an Agent Skill installation scope
 - [`--skip-root-model`](model-customization.md#skip-root-model) - Skip generation of root model when schema contains nested de...
 - [`--snake-case-field`](field-customization.md#snake-case-field) - Convert field names to snake_case format.
 - [`--special-field-name-prefix`](field-customization.md#special-field-name-prefix) - Prefix to add to special field names (like reserved keywords...

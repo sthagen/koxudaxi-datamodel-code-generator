@@ -9,7 +9,7 @@ from pathlib import Path  # noqa: TC003 - used at runtime by Pydantic
 from threading import RLock
 from typing import TYPE_CHECKING, Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
 from datamodel_code_generator._format_types import (
     DateClassType,
@@ -18,7 +18,8 @@ from datamodel_code_generator._format_types import (
     PythonVersion,
     PythonVersionMin,
 )
-from datamodel_code_generator.base_config import BaseGenerateConfig
+from datamodel_code_generator._shared_types import DefaultPutDict, LiteralType
+from datamodel_code_generator.base_config import BaseGenerateConfig, _validate_additional_import_paths
 from datamodel_code_generator.enums import (
     DEFAULT_SHARED_MODULE_NAME,
     AliasGenerator,
@@ -30,6 +31,7 @@ from datamodel_code_generator.enums import (
     ClassNameAffixScope,
     CollapseRootModelsNameStrategy,
     DataclassArguments,
+    DefaultValueType,
     FieldTypeCollisionStrategy,
     GraphQLScope,
     HTTPBackend,
@@ -53,7 +55,6 @@ from datamodel_code_generator.model.base import (  # noqa: TC001 - used by Pydan
 )
 from datamodel_code_generator.model.scalar import DataTypeScalar
 from datamodel_code_generator.model.union import DataTypeUnion
-from datamodel_code_generator.parser import DefaultPutDict, LiteralType
 from datamodel_code_generator.types import DataTypeManager, StrictTypes
 from datamodel_code_generator.validators import ModelValidators  # noqa: TC001 - used by Pydantic at runtime
 
@@ -62,6 +63,8 @@ DumpResolveReferenceAction = Callable[[Iterable[str]], str]
 _CONFIG_REBUILD_LOCK = RLock()
 DefaultPutDictSchema = DefaultPutDict[str, str]
 if TYPE_CHECKING:
+    from datamodel_code_generator._parser_context import ParserSourceContext
+
     ExtraTemplateDataType = defaultdict[str, dict[str, Any]]
 else:
     ExtraTemplateDataType = defaultdict[str, Annotated[dict[str, Any], Field(default_factory=dict)]]
@@ -112,7 +115,10 @@ def _rebuild_config_model(model_type: type[BaseModel], types_namespace: dict[str
 
 
 def _rebuild_generate_config() -> None:
-    _rebuild_config_model(GenerateConfig, {"StrictTypes": StrictTypes, "UnionMode": UnionMode})
+    _rebuild_config_model(
+        GenerateConfig,
+        {"DefaultValueType": DefaultValueType, "StrictTypes": StrictTypes, "UnionMode": UnionMode},
+    )
 
 
 class ParserConfig(BaseModel):
@@ -124,6 +130,22 @@ class ParserConfig(BaseModel):
         protected_namespaces=(),
         defer_build=True,
     )
+
+    _source_context: ParserSourceContext | None = PrivateAttr(default=None)
+    # These CLI-only flags are kept private while the stdout repair flow is
+    # migrated out of the parser configuration in a later boundary change.
+    _repair_invalid_dotted_stdout: bool = PrivateAttr(default=False)
+    _forced_invalid_dotted_stdout_repair_modules: tuple[tuple[str, ...], ...] = PrivateAttr(default=())
+
+    @property
+    def repair_invalid_dotted_stdout(self) -> bool:
+        """Return the internal stdout repair switch used by generation retries."""
+        return self._repair_invalid_dotted_stdout
+
+    @property
+    def forced_invalid_dotted_stdout_repair_modules(self) -> tuple[tuple[str, ...], ...]:
+        """Return modules explicitly selected by the stdout repair retry."""
+        return self._forced_invalid_dotted_stdout_repair_modules
 
     data_model_type: type[DataModel] = pydantic_v2.BaseModel
     data_model_root_type: type[DataModel] = pydantic_v2.RootModel
@@ -168,6 +190,7 @@ class ParserConfig(BaseModel):
     use_inline_field_description: bool = False
     use_single_line_docstring: bool = False
     use_default_kwarg: bool = False
+    deserialize_default_values: Sequence[DefaultValueType] = ()
     use_missing_sentinel: bool = False
     reuse_model: bool = False
     reuse_scope: ReuseScope | None = None
@@ -266,6 +289,12 @@ class ParserConfig(BaseModel):
     target_pydantic_version: TargetPydanticVersion | None = None
     default_value_overrides: Mapping[str, Any] | None = None
     external_ref_mapping: dict[str, str] | None = None
+
+    @field_validator("additional_imports")
+    @classmethod
+    def validate_additional_imports(cls, value: list[str] | None) -> list[str] | None:
+        """Require additional imports to be safe Python import paths."""
+        return _validate_additional_import_paths(value)
 
     _validate_schema_validator_base_class_name = field_validator("schema_validator_base_class_name")(
         validate_schema_validator_base_class_name

@@ -150,6 +150,9 @@ MANUAL_DOCS: frozenset[str] = frozenset({
     "--output-format-json-schema",
     "--no-color",
     "--generate-prompt",
+    "--install-skill",
+    "--skill-scope",
+    "--overwrite-skill",
     "--list-deprecations",
     "--list-experimental",
 })
@@ -450,10 +453,19 @@ CLI_OPTION_META: dict[str, CLIOptionMeta] = {
         name="--remove-special-field-name-prefix", category=OptionCategory.FIELD
     ),
     "--empty-enum-field-name": CLIOptionMeta(name="--empty-enum-field-name", category=OptionCategory.FIELD),
-    "--set-default-enum-member": CLIOptionMeta(name="--set-default-enum-member", category=OptionCategory.FIELD),
+    "--set-default-enum-member": CLIOptionMeta(
+        name="--set-default-enum-member",
+        category=OptionCategory.FIELD,
+        deprecated=True,
+        deprecated_message=deprecation_message("cli.set-default-enum-member"),
+    ),
     "--aliases": CLIOptionMeta(name="--aliases", category=OptionCategory.FIELD),
     "--serialization-aliases": CLIOptionMeta(name="--serialization-aliases", category=OptionCategory.FIELD),
     "--default-values": CLIOptionMeta(name="--default-values", category=OptionCategory.FIELD),
+    "--deserialize-default-values": CLIOptionMeta(name="--deserialize-default-values", category=OptionCategory.FIELD),
+    "--no-deserialize-default-values": CLIOptionMeta(
+        name="--no-deserialize-default-values", category=OptionCategory.FIELD
+    ),
     "--alias-generator": CLIOptionMeta(name="--alias-generator", category=OptionCategory.MODEL),
     "--no-alias": CLIOptionMeta(name="--no-alias", category=OptionCategory.FIELD),
     "--use-serialization-alias": CLIOptionMeta(name="--use-serialization-alias", category=OptionCategory.FIELD),

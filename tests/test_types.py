@@ -7,9 +7,15 @@ from typing import TYPE_CHECKING, ClassVar
 
 import pytest
 
-from datamodel_code_generator.imports import IMPORT_ANY, IMPORT_TUPLE
-from datamodel_code_generator.parser._math_imports import add_math_imports_for_non_finite_literals
-from datamodel_code_generator.python_literal import PythonCode, represent_python_value
+from datamodel_code_generator.imports import IMPORT_ANY, IMPORT_DECIMAL, IMPORT_TUPLE, Import
+from datamodel_code_generator.python_literal import (
+    PythonCode,
+    _normalize_string,
+    is_safe_public_type_name,
+    represent_python_value,
+    represent_untrusted_public_type_name,
+    represent_untrusted_python_value,
+)
 from datamodel_code_generator.reference import Reference
 from datamodel_code_generator.types import (
     DataType,
@@ -284,6 +290,21 @@ def test_hostname_regex_aliases_canonical_data_type_manager() -> None:
     assert pydantic_v2_types.DataTypeManager.HOSTNAME_REGEX is BaseDataTypeManager.HOSTNAME_REGEX
 
 
+def test_common_data_type_manager_declares_only_decimal_value_semantics() -> None:
+    """Common Python model outputs classify Decimal without knowing Pydantic helpers."""
+    from datamodel_code_generator.model.types import DataTypeManager as CommonDataTypeManager
+    from datamodel_code_generator.types import DECIMAL_DEFAULT_VALUE_DESCRIPTOR
+
+    data_type_manager = CommonDataTypeManager()
+
+    assert (
+        data_type_manager.get_default_value_descriptor(DataType(import_=IMPORT_DECIMAL))
+        is DECIMAL_DEFAULT_VALUE_DESCRIPTOR
+    )
+    assert data_type_manager.get_default_value_descriptor(DataType()) is None
+    assert data_type_manager.get_default_value_descriptor(DataType(import_=Import("condecimal", "pydantic"))) is None
+
+
 def test_python_literal_helpers_render_code_and_tuple_values() -> None:
     """Test Python literal rendering for raw code and tuple containers."""
     raw = PythonCode("datetime_module.date.fromisoformat('2026-01-01')", "2026-01-01")
@@ -292,29 +313,77 @@ def test_python_literal_helpers_render_code_and_tuple_values() -> None:
     assert represent_python_value((raw,)) == "(datetime_module.date.fromisoformat('2026-01-01'),)"
     assert represent_python_value((1, "two")) == "(1, 'two')"
     assert represent_python_value(set()) == "set()"
-
-
-def test_add_math_imports_inserts_after_generated_header() -> None:
-    """Test non-finite math imports are inserted after headers and future imports."""
-    body = "# generated\nfrom __future__ import annotations\n\nvalue = inf\n"
-
-    assert add_math_imports_for_non_finite_literals(body) == (
-        "# generated\nfrom __future__ import annotations\n\nfrom math import inf\nvalue = inf"
+    assert represent_untrusted_python_value(raw) == "'2026-01-01'"
+    assert represent_untrusted_python_value({"items": [raw], "single": (raw,)}) == (
+        "{'items': ['2026-01-01'], 'single': ('2026-01-01',)}"
+    )
+    assert represent_untrusted_python_value(None) == "None"
+    assert represent_untrusted_python_value(1.5) == "1.5"
+    assert represent_python_value(float("nan")) == "float('nan')"
+    assert represent_untrusted_python_value({"values": {"a", "b"}, "empty": set()}) == (
+        "{'values': {'a', 'b'}, 'empty': set()}"
     )
 
+    class StringOnly:
+        def __str__(self) -> str:
+            return "not code"
 
-def test_add_math_imports_keeps_existing_import() -> None:
-    """Test non-finite math imports are not duplicated."""
-    body = "from math import inf, nan\n\nvalue = inf\nother = nan\n"
+    assert represent_untrusted_python_value(StringOnly()) == "'not code'"
+    assert is_safe_public_type_name("datetime.date")
+    assert not is_safe_public_type_name("list[str] | None")
+    assert not is_safe_public_type_name("__import__('os')")
+    assert not is_safe_public_type_name("class")
+    assert not is_safe_public_type_name(object())
+    assert represent_untrusted_public_type_name("datetime.date") == "datetime.date"
+    assert represent_untrusted_public_type_name(PythonCode("__import__('os').system('id')")) == (
+        "\"__import__('os').system('id')\""
+    )
 
-    assert add_math_imports_for_non_finite_literals(body) == body
+    class HostileTypeName(str):  # noqa: FURB189, SLOT000 - intentionally exercises hostile string subclasses
+        def split(
+            self, *_: object, **__: object
+        ) -> list[str]:  # pragma: no cover - the serializer must bypass this override
+            return ["str"]
 
+        def __str__(self) -> str:  # pragma: no cover - the serializer must bypass this override
+            return "__import__('os').system('marker') or str"
 
-def test_add_math_imports_ignores_non_literal_matches() -> None:
-    """Test non-finite math imports ignore strings, attributes, and longer names."""
-    body = "label = 'inf'\nvalue = math.nan\nname = infinite\n"
+    hostile_type_name = HostileTypeName("__import__('os').system('marker') or str")
+    safe_type_name = HostileTypeName("str")
+    assert type(_normalize_string(safe_type_name)) is str
+    assert not is_safe_public_type_name(hostile_type_name)
+    assert represent_untrusted_public_type_name(hostile_type_name) == "\"__import__('os').system('marker') or str\""
 
-    assert add_math_imports_for_non_finite_literals(body) == body
+    class EvilInt(int):
+        def __repr__(self) -> str:  # pragma: no cover - the serializer must bypass this override
+            return "__import__('os').system('marker')"
+
+    class EvilFloat(float):
+        def __repr__(self) -> str:  # pragma: no cover - the serializer must bypass this override
+            return "__import__('os').system('marker')"
+
+    class EvilList(list[object]):  # noqa: FURB189 - intentionally exercises hostile container subclasses
+        def __repr__(self) -> str:  # pragma: no cover - the serializer must bypass this override
+            return "__import__('os').system('marker')"
+
+    class EvilTuple(tuple[object, ...]):  # noqa: SLOT001 - intentionally exercises hostile container subclasses
+        def __repr__(self) -> str:  # pragma: no cover - the serializer must bypass this override
+            return "__import__('os').system('marker')"
+
+    class EvilDict(dict[object, object]):  # noqa: FURB189 - intentionally exercises hostile container subclasses
+        def __repr__(self) -> str:  # pragma: no cover - the serializer must bypass this override
+            return "__import__('os').system('marker')"
+
+    class EvilSet(set[object]):
+        def __repr__(self) -> str:  # pragma: no cover - the serializer must bypass this override
+            return "__import__('os').system('marker')"
+
+    assert represent_untrusted_python_value(EvilInt(1)) == "1"
+    assert represent_untrusted_python_value(EvilFloat(float("nan"))) == "float('nan')"
+    assert represent_untrusted_python_value(EvilList([EvilInt(1)])) == "[1]"
+    assert represent_untrusted_python_value(EvilTuple((EvilInt(1),))) == "(1,)"
+    assert represent_untrusted_python_value(EvilDict({"value": EvilInt(1)})) == "{'value': 1}"
+    assert represent_untrusted_python_value(EvilSet({EvilInt(1)})) == "{1}"
 
 
 def test_decimal_detection_and_integer_constraint_edges() -> None:

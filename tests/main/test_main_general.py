@@ -34,9 +34,10 @@ from datamodel_code_generator import (
     HTTPBackend,
     InputFileType,
     SchemaParseError,
+    _create_parser_config,
+    _create_typed_parser_config,
     _find_future_import_insertion_point,
     _generate_config_values,
-    _get_internal_parser_config_model,
     chdir,
     generate,
     snooper_to_methods,
@@ -51,6 +52,7 @@ from datamodel_code_generator.__main__ import (
 )
 from datamodel_code_generator.arguments import _dataclass_arguments, arg_parser
 from datamodel_code_generator.config import GenerateConfig
+from datamodel_code_generator.deprecations import DEPRECATIONS, Deprecation
 from datamodel_code_generator.format import CodeFormatter, Formatter, PythonVersion
 from datamodel_code_generator.model.pydantic_v2 import UnionMode
 from datamodel_code_generator.parser import LiteralType
@@ -103,6 +105,57 @@ class _GenerateParseAbort(BaseException):
     """Test-only parse abort that is not an Exception subclass."""
 
 
+@pytest.mark.allow_direct_assert
+def test_collapse_root_models_retry_reraises_second_recursion_error(mocker: MockerFixture) -> None:
+    """Retry root-model collapsing exactly once and expose the second recursion error."""
+    assert datamodel_code_generator._CollapseRootModelsRecursionError.__module__ == "datamodel_code_generator"
+    retry_error = RecursionError("retry parse recursion")
+
+    def raise_collapse_recursion(*_: Any, **__: Any) -> None:
+        try:
+            raise retry_error
+        except RecursionError as exc:
+            raise datamodel_code_generator._CollapseRootModelsRecursionError from exc
+
+    parse_with_disposal = mocker.patch.object(
+        datamodel_code_generator,
+        "_parse_with_disposal",
+        side_effect=raise_collapse_recursion,
+    )
+
+    with pytest.raises(RecursionError, match="retry parse recursion") as exc_info:
+        generate(
+            {"type": "object"},
+            input_file_type=InputFileType.JsonSchema,
+            collapse_root_models=True,
+        )
+
+    assert exc_info.value is retry_error
+    assert parse_with_disposal.call_count == 2
+
+
+@pytest.mark.allow_direct_assert
+def test_collapse_root_models_retry_normalizes_sentinel_without_cause(mocker: MockerFixture) -> None:
+    """Never expose the private retry sentinel when an abnormal retry loses its cause."""
+    initial_error = datamodel_code_generator._CollapseRootModelsRecursionError()
+    initial_error.__cause__ = RecursionError("initial parse recursion")
+    parse_with_disposal = mocker.patch.object(
+        datamodel_code_generator,
+        "_parse_with_disposal",
+        side_effect=[initial_error, datamodel_code_generator._CollapseRootModelsRecursionError("retry recursion")],
+    )
+
+    with pytest.raises(RecursionError, match="retry recursion") as exc_info:
+        generate(
+            {"type": "object"},
+            input_file_type=InputFileType.JsonSchema,
+            collapse_root_models=True,
+        )
+
+    assert type(exc_info.value) is RecursionError
+    assert parse_with_disposal.call_count == 2
+
+
 def test_parser_collects_empty_model_metadata() -> None:
     """Collect an empty metadata payload when parsing emits no models."""
     from datamodel_code_generator.model_metadata import dump_model_metadata
@@ -124,6 +177,93 @@ def test_parser_collects_empty_model_metadata() -> None:
         )
     finally:
         parser._dispose()
+
+
+def test_parser_run_context_preserves_subclass_lifecycle_hooks(tmp_path: Path) -> None:
+    """Keep custom parser hooks and output stable under facade-managed run settings."""
+    from datamodel_code_generator.parser.base import ParserRunContext
+    from datamodel_code_generator.parser.jsonschema import JsonSchemaParser
+
+    class RunContextJsonSchemaParser(JsonSchemaParser):
+        events: list[str]
+
+        def parse_raw(self) -> None:
+            self.events.append(f"parse:{self._source_path_for_diagnostics()}")
+            warnings.warn("custom parse warning", stacklevel=1)
+            super().parse_raw()
+
+        def _report_parse_diagnostics(self) -> None:
+            self.events.append(f"diagnostics:{self._source_path_for_diagnostics()}")
+            warnings.warn("custom diagnostic warning", stacklevel=1)
+            super()._report_parse_diagnostics()
+
+        def _build_code_formatter(
+            self,
+            settings_path: Path | None,
+            *,
+            is_multi_module_output: bool,
+        ) -> CodeFormatter:
+            formatter_cwd = self.run_context.formatter_cwd
+            self.events.append(f"formatter:{formatter_cwd.name if formatter_cwd is not None else None}")
+            return super()._build_code_formatter(
+                settings_path,
+                is_multi_module_output=is_multi_module_output,
+            )
+
+        def _dispose(self) -> None:
+            self.events.append("dispose")
+            super()._dispose()
+
+    input_path = JSON_SCHEMA_DATA_PATH / "person.json"
+    formatter_cwd = tmp_path / "formatter-root"
+    formatter_cwd.mkdir()
+    parser = RunContextJsonSchemaParser(
+        input_path,
+        base_path=input_path.parent,
+        builtin_format_line_length=88,
+        formatters=[Formatter.BUILTIN],
+        use_standard_collections=True,
+        use_union_operator=True,
+    )
+    parser.events = []
+    parser.configure_run_context(
+        diagnostic_source_path=Path("diagnostic-person.json"),
+        formatter_cwd=formatter_cwd,
+        preserve_circular_root_models=True,
+        suppress_parse_warnings=True,
+    )
+    parser.events.append(f"preserve:{parser.run_context.preserve_circular_root_models}")
+    with warnings.catch_warnings(record=True) as warning_records:
+        warnings.simplefilter("always")
+        generated = parser.parse()
+    parser.dispose()
+    parser.configure_run_context()
+    parser.events.append(f"default:{parser.run_context == ParserRunContext()}")
+    parser._diagnostic_source_path = Path("legacy.json")
+    parser._formatter_cwd = formatter_cwd
+    parser._preserve_circular_root_models = True
+    legacy_diagnostic_source_path = parser._diagnostic_source_path
+    legacy_formatter_cwd = parser._formatter_cwd
+    parser.events.append(
+        "legacy:"
+        f"{legacy_diagnostic_source_path.name if legacy_diagnostic_source_path is not None else None},"
+        f"{legacy_formatter_cwd.name if legacy_formatter_cwd is not None else None},"
+        f"{parser._preserve_circular_root_models}"
+    )
+
+    assert_output(
+        "# generated by datamodel-codegen:\n#   filename:  person.json\n\n" + generated,
+        EXPECTED_MAIN_PATH / "person.py",
+    )
+    assert_output(
+        "\n".join(parser.events) + "\n",
+        EXPECTED_MAIN_PATH / "parser_run_context_lifecycle.txt",
+    )
+    assert_warnings_do_not_contain(
+        warning_records,
+        "custom parse warning",
+        "custom diagnostic warning",
+    )
 
 
 def test_parser_retains_builtin_import_cache_and_invalidates_custom_cache() -> None:
@@ -154,8 +294,8 @@ def test_parser_retains_builtin_import_cache_and_invalidates_custom_cache() -> N
             cache_state = "cached" if self._IMPORTS_CACHE_KEY in self.__dict__ else "empty"
             history = self.__dict__.setdefault("cache_clear_history", [])
             history.append(cache_state)
-            if (extra_template_data := getattr(self, "extra_template_data", None)) is not None:
-                extra_template_data["class_body_lines"] = [f"cache_clear_history = {history!r}"]
+            if getattr(self, "_internal_template_data", None) is not None:
+                self._set_internal_template_data("class_body_lines", [f"cache_clear_history = {history!r}"])
             super().clear_imports_cache()
 
     class InjectingJsonSchemaParser(JsonSchemaParser):
@@ -948,6 +1088,41 @@ def test_list_deprecations_json(capsys: pytest.CaptureFixture[str]) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("format_", "expected_file"),
+    [
+        ("table", "list_scheduled_deprecations.txt"),
+        ("json", "list_scheduled_deprecations_json.txt"),
+        ("markdown", "list_scheduled_deprecations_markdown.txt"),
+    ],
+)
+def test_list_scheduled_deprecations(
+    format_: str,
+    expected_file: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """List scheduled entries with their status through every CLI format."""
+    scheduled = Deprecation(
+        id="test.scheduled-change",
+        kind="cli-option",
+        target="--scheduled-change",
+        message="--scheduled-change will be deprecated.",
+        warning_since="8.0.0",
+        removal_version=None,
+        replacement="--replacement",
+        status="scheduled",
+    )
+    monkeypatch.setitem(DEPRECATIONS, scheduled.id, scheduled)
+
+    run_main_with_args(
+        ["--list-deprecations", format_],
+        capsys=capsys,
+        expected_stdout_path=EXPECTED_MAIN_PATH / expected_file,
+        assert_no_stderr=True,
+    )
+
+
 def test_list_experimental(capsys: pytest.CaptureFixture[str]) -> None:
     """List registered experimental features without requiring an input schema."""
     run_main_with_args(
@@ -1044,23 +1219,6 @@ def test_create_config_pyproject_branch_keeps_input_source_override() -> None:
 
 
 @pytest.mark.allow_direct_assert
-def test_internal_parser_config_model_copy_supports_deep_update() -> None:
-    """The internal parser config keeps the parser-facing model_copy contract."""
-    nested = {"items": [1]}
-    config = _get_internal_parser_config_model().model_construct(name="before", nested=nested)
-    plain_copy = config.model_copy()
-    copied = config.model_copy(
-        update={"name": "after"},
-        deep=True,
-    )
-    nested["items"].append(2)
-
-    assert plain_copy.name == "before"
-    assert copied.name == "after"
-    assert copied.nested == {"items": [1]}
-
-
-@pytest.mark.allow_direct_assert
 def test_generate_config_values_supports_non_pydantic_config() -> None:
     """Non-Pydantic config-like objects keep the public generate(config=...) fallback."""
 
@@ -1071,6 +1229,59 @@ def test_generate_config_values_supports_non_pydantic_config() -> None:
     config_like.dynamic = "value"
 
     assert _generate_config_values(cast("Any", config_like)) == {"dynamic": "value"}
+
+
+@pytest.mark.allow_direct_assert
+def test_internal_parser_config_model_copy_supports_deep_update() -> None:
+    """The private compatibility config keeps its model-copy contract."""
+    nested = {"items": [1]}
+    config = _create_parser_config(
+        GenerateConfig(),
+        cast("Any", {"name": "before", "nested": nested}),
+    )
+    plain_copy = config.model_copy()
+    copied = config.model_copy(update={"name": "after"}, deep=True)
+    retry_copy = config.model_copy(
+        update={
+            "repair_invalid_dotted_stdout": False,
+            "forced_invalid_dotted_stdout_repair_modules": (("models",),),
+        }
+    )
+    nested["items"].append(2)
+
+    assert plain_copy.name == "before"
+    assert copied.name == "after"
+    assert copied.nested == {"items": [1]}
+    assert retry_copy.repair_invalid_dotted_stdout is False
+    assert retry_copy.forced_invalid_dotted_stdout_repair_modules == (("models",),)
+    assert config._source_context is not None
+    assert config._source_context.encoding == "utf-8"
+
+
+@pytest.mark.allow_direct_assert
+def test_create_parser_config_filters_generation_fields_and_freezes_source_context() -> None:
+    """Parser config owns declared fields while source policy stays in a typed context."""
+    from dataclasses import FrozenInstanceError
+
+    from datamodel_code_generator._parser_context import ParserSourceContext
+    from datamodel_code_generator.config import JSONSchemaParserConfig
+
+    config = GenerateConfig(output=Path("generated.py"), encoding="utf-16", http_timeout=3.5)
+    parser_config = _create_typed_parser_config(
+        config,
+        JSONSchemaParserConfig,
+        cast("Any", {"schema_version_mode": None}),
+    )
+    source_context = parser_config._source_context
+
+    assert isinstance(source_context, ParserSourceContext)
+    assert parser_config.http_timeout == pytest.approx(3.5)
+    assert not hasattr(parser_config, "output")
+    assert source_context.encoding == "utf-16"
+    assert not hasattr(source_context, "__dict__")
+    attribute = "encoding"
+    with pytest.raises(FrozenInstanceError):
+        setattr(source_context, attribute, "utf-8")
 
 
 @pytest.mark.allow_direct_assert
@@ -1970,6 +2181,91 @@ def test_import_overrides_apply_to_additional_imports(output_file: Path) -> None
             '{"TypeAlias": "typing", "annotations": "custom.future"}',
         ],
     )
+
+
+def test_generate_config_accepts_additional_imports(output_file: Path) -> None:
+    """Keep documented bare and dotted imports available through the public config API."""
+    config = GenerateConfig(
+        input_file_type=InputFileType.JsonSchema,
+        additional_imports=["collections"],
+        disable_timestamp=True,
+        formatters=[Formatter.BUILTIN],
+        output=output_file,
+    )
+    generate(JSON_SCHEMA_DATA_PATH / "person.json", config=config)
+    assert_file_content(output_file, "additional_imports_generate_config.py")
+
+
+@pytest.mark.parametrize(
+    ("import_path", "expected_paths"),
+    [
+        (" collections.deque ", ["collections.deque"]),
+        (" café.モジュール ", ["café.モジュール"]),
+        (None, None),
+    ],
+)
+@pytest.mark.allow_direct_assert
+def test_generate_config_normalizes_valid_additional_imports(
+    import_path: str | None,
+    expected_paths: list[str] | None,
+) -> None:
+    """Accept whitespace-padded and Unicode Python identifiers through GenerateConfig."""
+    additional_imports = None if import_path is None else [import_path]
+    assert GenerateConfig(additional_imports=additional_imports).additional_imports == expected_paths
+
+
+@pytest.mark.parametrize(
+    "import_path",
+    [
+        "from.collections",
+        "collections.deque; INJECTION_MARKER = 1",
+        "collections.deque\nINJECTION_MARKER = 1",
+    ],
+)
+def test_generate_config_rejects_invalid_additional_imports(import_path: str) -> None:
+    """Reject non-import syntax before a public config can generate source."""
+    with pytest.raises(Error, match="additional_imports must be a Python import path composed of identifiers"):
+        GenerateConfig(additional_imports=[import_path])
+
+
+def test_generate_revalidates_mutated_additional_imports() -> None:
+    """Retain import-path validation when a caller mutates a public config object."""
+    config = GenerateConfig(input_file_type=InputFileType.JsonSchema)
+    config.additional_imports = ["collections.deque\nINJECTION_MARKER = 1"]
+    with pytest.raises(Error, match="additional_imports must be a Python import path composed of identifiers"):
+        generate(JSON_SCHEMA_DATA_PATH / "person.json", config=config)
+
+
+def test_main_rejects_additional_import_injection(output_file: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Reject CLI import values that would otherwise escape the generated import block."""
+    invalid_import_path = (DATA_PATH / "config" / "additional_imports_invalid.txt").read_text(encoding="utf-8").strip()
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=["--additional-imports", invalid_import_path],
+        expected_exit=Exit.ERROR,
+        output_should_not_exist=True,
+    )
+    assert_output(capsys.readouterr().err, EXPECTED_MAIN_PATH / "additional_imports_invalid.txt")
+
+
+def test_main_rejects_additional_import_injection_in_extra_template_data(
+    output_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Reject extra template data import values before source generation starts."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=[
+            "--extra-template-data",
+            str(DATA_PATH / "config" / "additional_imports_injection_extra_template_data.json"),
+        ],
+        expected_exit=Exit.ERROR,
+        output_should_not_exist=True,
+    )
+    assert_output(capsys.readouterr().err, EXPECTED_MAIN_PATH / "additional_imports_invalid.txt")
 
 
 @pytest.mark.cli_doc(
@@ -4054,6 +4350,41 @@ def test_generate_multimodule_builtin_directory_matches_fixture(output_dir: Path
     assert_directory_content(output_dir, EXPECTED_MAIN_PATH / "jsonschema" / "all_exports_multi_file")
 
 
+def test_generate_builtin_string_normalization_matches_fixture(output_file: Path) -> None:
+    """Keep double-quote normalization byte-compatible with the external fixture."""
+    run_generate_file_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        input_file_type=InputFileType.JsonSchema,
+        formatters=[Formatter.BUILTIN],
+        use_double_quotes=True,
+        disable_timestamp=True,
+        assert_func=assert_file_content,
+        expected_file=EXPECTED_MAIN_PATH / "jsonschema" / "person_use_double_quotes.py",
+    )
+
+
+def test_generate_builtin_string_normalization_module_split(output_dir: Path) -> None:
+    """Keep double-quote normalization byte-compatible for every generated module."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "module_split_single" / "input.json",
+        output_path=output_dir,
+        input_file_type="jsonschema",
+        extra_args=[
+            "--disable-timestamp",
+            "--formatters",
+            "builtin",
+            "--use-double-quotes",
+            "--module-split-mode",
+            "single",
+            "--all-exports-scope",
+            "recursive",
+            "--use-exact-imports",
+        ],
+        expected_directory=EXPECTED_MAIN_PATH / "jsonschema" / "module_split_single",
+    )
+
+
 @pytest.mark.allow_direct_assert
 def test_generated_modules_type_alias_is_exported() -> None:
     """Test that GeneratedModules is exported from the module."""
@@ -4535,6 +4866,14 @@ _EXTRA_TEMPLATE_COMMENT_ROOT_SCHEMA = """
 }
 """
 _EXTRA_TEMPLATE_COMMENT_FORBIDDEN_STARTS = ("print(", "raise ", "import os", "exec(")
+_BUILTIN_TEMPLATE_DATA_MARKER = "builtin_template_data_marker"
+_BUILTIN_TEMPLATE_CONFIG_DATA_PATH = JSON_SCHEMA_DATA_PATH / "extra_data_builtin_template_config.json"
+_BUILTIN_TEMPLATE_MSGSPEC_DATA_PATH = JSON_SCHEMA_DATA_PATH / "extra_data_builtin_template_msgspec.json"
+_BUILTIN_TEMPLATE_RESERVED_DATA_PATH = JSON_SCHEMA_DATA_PATH / "extra_data_builtin_template_reserved.json"
+_BUILTIN_TEMPLATE_TYPED_DICT_DATA_PATH = JSON_SCHEMA_DATA_PATH / "extra_data_builtin_template_typed_dict.json"
+_BUILTIN_TEMPLATE_CUSTOM_DIR = DATA_PATH / "templates_builtin_template_data"
+_BUILTIN_TEMPLATE_INCLUDE_ONLY_DIR = DATA_PATH / "templates_include_only"
+_BUILTIN_TEMPLATE_EXPECTED_PATH = EXPECTED_MAIN_PATH / "template_data"
 
 
 def _generate_with_extra_template_comment(input_: str, **generate_kwargs: Any) -> str:
@@ -4631,6 +4970,163 @@ def test_main_extra_template_data_comment_is_safe(output_file: Path, tmp_path: P
     )
 
 
+def test_generate_builtin_template_data_is_non_executing() -> None:
+    """Render public built-in template data as literals rather than Python source."""
+    generated = generate(
+        input_=JSON_SCHEMA_DATA_PATH / "person.json",
+        input_file_type=InputFileType.JsonSchema,
+        output_model_type=DataModelType.PydanticV2BaseModel,
+        disable_timestamp=True,
+        formatters=[Formatter.BUILTIN],
+        extra_template_data=json.loads(_BUILTIN_TEMPLATE_CONFIG_DATA_PATH.read_text(encoding="utf-8")),
+    )
+    if not isinstance(generated, str):  # pragma: no cover
+        pytest.fail(f"Expected generate() to return str, got {type(generated).__name__}")
+    validate_generated_code(generated, "<generated>")
+    assert_output(f"{generated}\n", _BUILTIN_TEMPLATE_EXPECTED_PATH / "api_builtin_config.py")
+    tree = ast.parse(generated)
+    marker_assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == _BUILTIN_TEMPLATE_DATA_MARKER for target in node.targets)
+    ]
+    if marker_assignments:  # pragma: no cover - assertion reports the exact source-safety regression
+        pytest.fail(f"Generated AST contains injected marker assignments: {marker_assignments!r}")
+
+
+@pytest.mark.parametrize(
+    ("output_model_type", "template_data_path", "expected_file"),
+    [
+        pytest.param(
+            "pydantic_v2.BaseModel",
+            _BUILTIN_TEMPLATE_CONFIG_DATA_PATH,
+            _BUILTIN_TEMPLATE_EXPECTED_PATH / "builtin_config.py",
+            id="pydantic-config",
+        ),
+        pytest.param(
+            "msgspec.Struct",
+            _BUILTIN_TEMPLATE_MSGSPEC_DATA_PATH,
+            _BUILTIN_TEMPLATE_EXPECTED_PATH / "builtin_msgspec.py",
+            id="msgspec-base-class-kwargs",
+        ),
+        pytest.param(
+            "typing.TypedDict",
+            _BUILTIN_TEMPLATE_TYPED_DICT_DATA_PATH,
+            _BUILTIN_TEMPLATE_EXPECTED_PATH / "builtin_typed_dict.py",
+            id="typed-dict-extra-items",
+        ),
+    ],
+)
+def test_main_builtin_template_data_is_non_executing(
+    output_file: Path,
+    output_model_type: str,
+    template_data_path: Path,
+    expected_file: Path,
+) -> None:
+    """Keep built-in CLI template data literal-only with fixture-backed output."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=[
+            "--disable-timestamp",
+            "--formatters",
+            "builtin",
+            "--output-model-type",
+            output_model_type,
+            "--target-python-version",
+            "3.10",
+            "--extra-template-data",
+            str(template_data_path),
+        ],
+        assert_func=assert_file_content,
+        expected_file=expected_file,
+    )
+
+
+def test_main_rejects_reserved_builtin_template_data(capsys: pytest.CaptureFixture[str], output_file: Path) -> None:
+    """Reject code-bearing template context keys before built-in output is written."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--extra-template-data",
+            str(_BUILTIN_TEMPLATE_RESERVED_DATA_PATH),
+        ],
+        expected_exit=Exit.ERROR,
+        output_should_not_exist=True,
+        capsys=capsys,
+        expected_stderr_contains="class_body_lines is reserved",
+    )
+
+
+def test_main_partial_custom_template_dir_keeps_builtin_template_data_safe(
+    capsys: pytest.CaptureFixture[str], output_file: Path
+) -> None:
+    """An include-only custom directory cannot opt a built-in root into raw context."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=[
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--custom-template-dir",
+            str(_BUILTIN_TEMPLATE_INCLUDE_ONLY_DIR),
+            "--extra-template-data",
+            str(_BUILTIN_TEMPLATE_RESERVED_DATA_PATH),
+        ],
+        expected_exit=Exit.ERROR,
+        output_should_not_exist=True,
+        capsys=capsys,
+        expected_stderr_contains="class_body_lines is reserved",
+    )
+
+
+def test_main_custom_template_data_remains_unrestricted(output_file: Path) -> None:
+    """Trusted custom templates retain their longstanding raw-context contract."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=[
+            "--disable-timestamp",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--custom-template-dir",
+            str(_BUILTIN_TEMPLATE_CUSTOM_DIR),
+            "--extra-template-data",
+            str(_BUILTIN_TEMPLATE_RESERVED_DATA_PATH),
+        ],
+        assert_func=assert_file_content,
+        expected_file=_BUILTIN_TEMPLATE_EXPECTED_PATH / "custom_template.py",
+    )
+
+
+def test_generate_extra_template_data_comment_object_is_safe() -> None:
+    """Built-in comments stringify extension objects before treating newlines as comments."""
+
+    class Comment:
+        def __str__(self) -> str:
+            return "safe\n__import__('os').system('id')"
+
+    generated = generate(
+        input_=_EXTRA_TEMPLATE_COMMENT_OBJECT_SCHEMA,
+        input_file_type=InputFileType.JsonSchema,
+        output_model_type=DataModelType.PydanticV2BaseModel,
+        disable_timestamp=True,
+        extra_template_data=defaultdict(dict, {"Model": {"comment": Comment()}}),
+    )
+    if not isinstance(generated, str):  # pragma: no cover
+        pytest.fail(f"Expected generate() to return str, got {type(generated).__name__}")
+    validate_generated_code(generated, "<generated>")
+    assert_no_uncommented_generated_code(generated, forbidden_starts=("__import__(",))
+
+
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="type statement requires Python 3.12+")
 @pytest.mark.skipif(version.parse(black.__version__) < version.parse("23.3.0"), reason="black too old")
 def test_generate_extra_template_data_comment_is_safe_for_type_statement() -> None:
@@ -4683,14 +5179,14 @@ def test_generate_disposes_parser_when_parse_raises(parse_error: BaseException, 
     """Test generate() releases parser-owned references while preserving parse failures."""
     parser = mocker.Mock()
     parser.parse.side_effect = parse_error
-    parser._dispose.side_effect = RuntimeError("dispose failed")
+    parser.dispose.side_effect = RuntimeError("dispose failed")
     mocker.patch.object(datamodel_code_generator, "_build_parser", return_value=parser)
 
     with pytest.raises(type(parse_error)) as exc_info:
         generate("{}", input_file_type=InputFileType.JsonSchema, formatters=[])
 
     assert exc_info.value is parse_error
-    parser._dispose.assert_called_once_with()
+    parser.dispose.assert_called_once_with()
 
 
 def test_parser_with_config_and_options_raises_error() -> None:

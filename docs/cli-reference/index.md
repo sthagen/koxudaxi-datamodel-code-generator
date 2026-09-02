@@ -10,13 +10,13 @@ This documentation is auto-generated from test cases.
 |----------|---------|-------------|
 | 📁 [Base Options](base-options.md) | 13 | Input/output configuration |
 | 🔧 [Typing Customization](typing-customization.md) | 34 | Type annotation and import behavior |
-| 🏷️ [Field Customization](field-customization.md) | 27 | Field naming and docstring behavior |
+| 🏷️ [Field Customization](field-customization.md) | 29 | Field naming and docstring behavior |
 | 🏗️ [Model Customization](model-customization.md) | 44 | Model generation behavior |
 | 🎨 [Template Customization](template-customization.md) | 27 | Output formatting and custom rendering |
 | 📘 [OpenAPI-only Options](openapi-only-options.md) | 8 | OpenAPI-specific features |
 | 📋 [GraphQL-only Options](graphql-only-options.md) | 1 |  |
 | ⚙️ [General Options](general-options.md) | 24 | Utilities and meta options |
-| 📝 [Utility Options](utility-options.md) | 12 | Help, version, debug options |
+| 📝 [Utility Options](utility-options.md) | 15 | Help, version, debug options |
 
 ## 🎯 Focused Topics
 
@@ -114,6 +114,7 @@ These links are generated from CLI option metadata and summarize options that im
 - [`--dataclass-arguments`](model-customization.md#dataclass-arguments)
 - [`--debug`](utility-options.md#debug)
 - [`--default-values`](field-customization.md#default-values)
+- [`--deserialize-default-values`](field-customization.md#deserialize-default-values)
 - [`--diff-against`](general-options.md#diff-against)
 - [`--disable-appending-item-suffix`](template-customization.md#disable-appending-item-suffix)
 - [`--disable-future-imports`](typing-customization.md#disable-future-imports)
@@ -177,6 +178,7 @@ These links are generated from CLI option metadata and summarize options that im
 - [`--input-file-type`](base-options.md#input-file-type)
 - [`--input-model`](base-options.md#input-model)
 - [`--input-model-ref-strategy`](base-options.md#input-model-ref-strategy)
+- [`--install-skill`](utility-options.md#install-skill)
 
 ### J {#j}
 
@@ -206,6 +208,7 @@ These links are generated from CLI option metadata and summarize options that im
 - [`--naming-strategy`](model-customization.md#naming-strategy)
 - [`--no-alias`](field-customization.md#no-alias)
 - [`--no-color`](utility-options.md#no-color)
+- [`--no-deserialize-default-values`](field-customization.md#no-deserialize-default-values)
 - [`--no-treat-dot-as-module`](template-customization.md#no-treat-dot-as-module)
 - [`--no-use-closed-typed-dict`](typing-customization.md#no-use-closed-typed-dict)
 - [`--no-use-specialized-enum`](typing-customization.md#no-use-specialized-enum)
@@ -225,6 +228,7 @@ These links are generated from CLI option metadata and summarize options that im
 - [`--output-format`](utility-options.md#output-format)
 - [`--output-format-json-schema`](utility-options.md#output-format-json-schema)
 - [`--output-model-type`](model-customization.md#output-model-type)
+- [`--overwrite-skill`](utility-options.md#overwrite-skill)
 
 ### P {#p}
 
@@ -248,6 +252,7 @@ These links are generated from CLI option metadata and summarize options that im
 - [`--serialization-aliases`](field-customization.md#serialization-aliases)
 - [`--set-default-enum-member`](field-customization.md#set-default-enum-member)
 - [`--shared-module-name`](general-options.md#shared-module-name)
+- [`--skill-scope`](utility-options.md#skill-scope)
 - [`--skip-root-model`](model-customization.md#skip-root-model)
 - [`--snake-case-field`](field-customization.md#snake-case-field)
 - [`--special-field-name-prefix`](field-customization.md#special-field-name-prefix)

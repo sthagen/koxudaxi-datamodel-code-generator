@@ -18,7 +18,9 @@ import json
 import shutil
 import subprocess
 import sys
+from itertools import islice, permutations
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -26,9 +28,15 @@ from datamodel_code_generator import DataModelType, Formatter, InputFileType, Mo
 from datamodel_code_generator.model.msgspec import DataModelField as MsgspecDataModelField
 from datamodel_code_generator.model.msgspec import DataTypeManager as MsgspecDataTypeManager
 from datamodel_code_generator.model.msgspec import Struct as MsgspecStruct
+from datamodel_code_generator.model.pydantic_v2.base_model import BaseModel as PydanticV2BaseModel
+from datamodel_code_generator.model.pydantic_v2.base_model import DataModelField as PydanticV2DataModelField
 from datamodel_code_generator.model.pydantic_v2.base_model import _construct_parser_simple_field
-from datamodel_code_generator.reference import Reference
+from datamodel_code_generator.reference import PydanticFieldNameResolver, Reference
 from datamodel_code_generator.types import DataType
+from tests.main.conftest import _generated_model
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 PERFORMANCE_DATA_PATH: Path = Path(__file__).parent.parent / "data" / "performance"
 EXPECTED_STARTUP_MEASUREMENT_CASES = {
@@ -47,6 +55,26 @@ EXPECTED_STARTUP_MEASUREMENT_CASES = {
 def simple_pydantic_v2_data_types() -> list[DataType]:
     """Prepare normalized types outside the field-construction benchmark."""
     return [DataType(type="str") for _ in range(5000)]
+
+
+@pytest.fixture(scope="module")
+def plain_pydantic_v2_fields(simple_pydantic_v2_data_types: list[DataType]) -> list[PydanticV2DataModelField]:
+    """Prepare parser-style plain Pydantic v2 fields outside render-plan timing."""
+    fields = [
+        _construct_parser_simple_field(name=f"field_{index}", data_type=data_type, required=True)
+        for index, data_type in enumerate(simple_pydantic_v2_data_types)
+    ]
+    PydanticV2BaseModel(
+        reference=Reference(path="PydanticFieldRenderPlanPerformance", name="PydanticFieldRenderPlanPerformance"),
+        fields=fields,
+    )
+    return fields
+
+
+@pytest.fixture(scope="module")
+def ordinary_pydantic_field_names() -> tuple[str, ...]:
+    """Prepare resolver inputs outside the name-resolution benchmark."""
+    return tuple(f"field_{index}" for index in range(5000))
 
 
 @pytest.fixture(scope="module")
@@ -85,6 +113,202 @@ def false_reference_performance_schema() -> dict[str, YamlValue]:
             "Never": False,
             "Value": {"type": "string"},
         },
+    }
+
+
+@pytest.fixture(scope="module")
+def local_reference_file_cache_performance_input(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Prepare repeated local file fragments outside CodSpeed's measured call."""
+    schema_directory = tmp_path_factory.mktemp("local-reference-file-cache")
+    (schema_directory / "shared.json").write_text(
+        json.dumps({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$defs": {
+                "First": {"type": "object", "properties": {"name": {"type": "string"}}},
+                "Second": {"type": "object", "properties": {"count": {"type": "integer"}}},
+            },
+        }),
+        encoding="utf-8",
+    )
+    (schema_directory / "root.json").write_text(
+        json.dumps({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "LocalReferenceFileCachePerformance",
+            "type": "object",
+            "properties": {
+                f"value_{index}": {"$ref": f"shared.json#/$defs/{'First' if index % 2 else 'Second'}"}
+                for index in range(500)
+            },
+            "required": [f"value_{index}" for index in range(500)],
+        }),
+        encoding="utf-8",
+    )
+    return schema_directory / "root.json"
+
+
+@pytest.fixture(scope="module")
+def ordinary_array_constraint_performance_schema() -> dict[str, object]:
+    """Prepare ordinary arrays without derived item constraints outside CodSpeed's measured call."""
+    field_count = 4000
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "OrdinaryArrayConstraintPerformance",
+        "type": "object",
+        "properties": {f"value_{index}": {"type": "array"} for index in range(field_count)},
+    }
+
+
+@pytest.fixture(scope="module")
+def unique_items_performance_schema() -> dict[str, object]:
+    """Prepare collapsed uniqueItems references outside the measured call."""
+    field_count = 500
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "UniqueItemsPerformance",
+        "type": "object",
+        "properties": {f"value_{index}": {"$ref": "#/$defs/UniqueValues"} for index in range(field_count)},
+        "$defs": {
+            "UniqueValues": {
+                "type": "array",
+                "uniqueItems": True,
+                "items": {"type": "integer"},
+            }
+        },
+    }
+
+
+@pytest.fixture(scope="module")
+def scalar_root_performance_schema() -> dict[str, object]:
+    """Prepare unshared scalar root references outside the measured call."""
+    field_count = 500
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ScalarRootPerformance",
+        "type": "object",
+        "properties": {f"value_{index}": {"$ref": "#/$defs/Value"} for index in range(field_count)},
+        "$defs": {"Value": {"type": "string"}},
+    }
+
+
+@pytest.fixture(scope="module")
+def unique_items_runtime_model(tmp_path_factory: pytest.TempPathFactory) -> Generator[Any, None, None]:
+    """Generate and import one validated RootModel outside the runtime benchmarks."""
+    output_path = tmp_path_factory.mktemp("unique-items-runtime") / "model.py"
+    generate(
+        {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "UniqueItemsRuntime",
+            "type": "array",
+            "uniqueItems": True,
+            "items": {},
+        },
+        input_file_type=InputFileType.JsonSchema,
+        output=output_path,
+        output_model_type=DataModelType.PydanticV2BaseModel,
+        disable_timestamp=True,
+        formatters=[],
+        generate_schema_validators=True,
+    )
+    with _generated_model(output_path, "unique_items_runtime", "UniqueItemsRuntime") as model:
+        yield model
+
+
+@pytest.fixture(scope="module")
+def unique_items_nested_model(tmp_path_factory: pytest.TempPathFactory) -> Generator[Any, None, None]:
+    """Generate and import nested models outside the ownership benchmark."""
+    output_path = tmp_path_factory.mktemp("unique-items-nested") / "model.py"
+    generate(
+        {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "Parent",
+            "type": "object",
+            "properties": {
+                "child": {
+                    "type": "object",
+                    "properties": {
+                        "values": {
+                            "type": "array",
+                            "uniqueItems": True,
+                            "items": {"type": "integer"},
+                        }
+                    },
+                    "required": ["values"],
+                }
+            },
+            "required": ["child"],
+        },
+        input_file_type=InputFileType.JsonSchema,
+        output=output_path,
+        output_model_type=DataModelType.PydanticV2BaseModel,
+        disable_timestamp=True,
+        formatters=[],
+        generate_schema_validators=True,
+    )
+    with _generated_model(output_path, "unique_items_nested", "Parent") as model:
+        yield model
+
+
+@pytest.fixture(scope="module")
+def pattern_properties_runtime_model(tmp_path_factory: pytest.TempPathFactory) -> Generator[Any, None, None]:
+    """Generate and import pattern/additional dispatch outside the runtime benchmark."""
+    output_path = tmp_path_factory.mktemp("pattern-properties-runtime") / "model.py"
+    generate(
+        {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "PatternPropertiesRuntime",
+            "type": "object",
+            "patternProperties": {"^pattern-": {"type": "integer"}},
+            "additionalProperties": {"type": "string"},
+        },
+        input_file_type=InputFileType.JsonSchema,
+        output=output_path,
+        output_model_type=DataModelType.PydanticV2BaseModel,
+        disable_timestamp=True,
+        formatters=[],
+        generate_schema_validators=True,
+    )
+    with _generated_model(output_path, "pattern_properties_runtime", "PatternPropertiesRuntime") as model:
+        yield model
+
+
+@pytest.fixture(scope="module")
+def unique_items_scalar_payload() -> list[int]:
+    """Prepare 10,000 unique primitive values outside the measured runtime call."""
+    return list(range(10_000))
+
+
+@pytest.fixture(scope="module")
+def unique_items_nested_object_payload() -> list[dict[str, object]]:
+    """Prepare 1,000 unique nested objects outside the measured runtime call."""
+    return [
+        {
+            "id": index,
+            "label": f"item-{index}",
+            "metadata": {"rank": index, "values": [index, index + 1]},
+        }
+        for index in range(1_000)
+    ]
+
+
+@pytest.fixture(scope="module")
+def unique_items_nested_model_payload(unique_items_scalar_payload: list[int]) -> dict[str, object]:
+    """Reuse the prepared scalar values in one nested child payload."""
+    return {"child": {"values": unique_items_scalar_payload}}
+
+
+@pytest.fixture(scope="module")
+def unique_items_permuted_object_payload() -> list[dict[str, int]]:
+    """Prepare key-associated permutations that expose weak object fingerprints."""
+    keys = tuple(str(index) for index in range(8))
+    return [dict(zip(keys, values, strict=True)) for values in islice(permutations(range(8)), 10_000)]
+
+
+@pytest.fixture(scope="module")
+def pattern_properties_runtime_payload() -> dict[str, object]:
+    """Prepare many pattern and additional keys outside the measured runtime call."""
+    return {
+        **{f"pattern-{index}": index for index in range(1_000)},
+        **{f"extra-{index}": str(index) for index in range(1_000)},
     }
 
 
@@ -239,6 +463,149 @@ def test_perf_false_reference_validation(
 
 
 @pytest.mark.perf
+@pytest.mark.benchmark
+def test_perf_local_reference_file_resolution(local_reference_file_cache_performance_input: Path) -> None:
+    """Track repeated local file fragment resolution without formatter work."""
+    result = generate(
+        local_reference_file_cache_performance_input,
+        input_file_type=InputFileType.JsonSchema,
+        output_model_type=DataModelType.PydanticV2BaseModel,
+        formatters=[],
+        disable_timestamp=True,
+    )
+    assert isinstance(result, str)
+    assert "class LocalReferenceFileCachePerformance(BaseModel):" in result
+    assert result.endswith("    value_499: First")
+
+
+@pytest.mark.perf
+@pytest.mark.benchmark
+def test_perf_ordinary_array_constraint_generation(
+    ordinary_array_constraint_performance_schema: dict[str, object],
+) -> None:
+    """Track ordinary arrays that do not need derived item constraints."""
+    result = generate(
+        ordinary_array_constraint_performance_schema,
+        input_file_type=InputFileType.JsonSchema,
+        output_model_type=DataModelType.PydanticV2BaseModel,
+        formatters=[],
+        disable_timestamp=True,
+    )
+
+    assert isinstance(result, str)
+    assert "class OrdinaryArrayConstraintPerformance(BaseModel):" in result
+    assert result.endswith("    value_3999: list[Any] | None = None")
+
+
+@pytest.mark.perf
+@pytest.mark.benchmark
+def test_perf_unique_items_schema_validators(
+    unique_items_performance_schema: dict[str, object],
+) -> None:
+    """Track collapsed uniqueItems reference generation without formatter work."""
+    result = generate(
+        unique_items_performance_schema,
+        input_file_type=InputFileType.JsonSchema,
+        output_model_type=DataModelType.PydanticV2BaseModel,
+        collapse_root_models=True,
+        disable_timestamp=True,
+        formatters=[],
+        generate_schema_validators=True,
+    )
+    assert isinstance(result, str)
+    assert "class UniqueItemsPerformance(_JsonSchemaRuntimeValidationBase):" in result
+    assert "__json_schema_unique_items__" in result
+
+
+@pytest.mark.perf
+@pytest.mark.benchmark
+def test_perf_unique_items_collapsed_builtin(
+    unique_items_performance_schema: dict[str, object],
+) -> None:
+    """Track collapsed root-model replacement with the builtin formatter."""
+    result = generate(
+        unique_items_performance_schema,
+        input_file_type=InputFileType.JsonSchema,
+        output_model_type=DataModelType.PydanticV2BaseModel,
+        collapse_root_models=True,
+        disable_timestamp=True,
+        formatters=[Formatter.BUILTIN],
+    )
+    assert isinstance(result, str)
+    assert "class UniqueItemsPerformance(BaseModel):" in result
+    assert result.endswith("    value_499: list[int] | None = None")
+
+
+@pytest.mark.perf
+@pytest.mark.benchmark
+def test_perf_scalar_root_collapsed_builtin(
+    scalar_root_performance_schema: dict[str, object],
+) -> None:
+    """Track incremental root-reference counts with the builtin formatter."""
+    result = generate(
+        scalar_root_performance_schema,
+        input_file_type=InputFileType.JsonSchema,
+        output_model_type=DataModelType.PydanticV2BaseModel,
+        collapse_root_models=True,
+        disable_timestamp=True,
+        formatters=[Formatter.BUILTIN],
+    )
+    assert isinstance(result, str)
+    assert "class ScalarRootPerformance(BaseModel):" in result
+    assert result.endswith("    value_499: str | None = None")
+
+
+@pytest.mark.perf
+@pytest.mark.benchmark
+def test_perf_unique_items_runtime_scalar_validation(
+    unique_items_runtime_model: Any,
+    unique_items_scalar_payload: list[int],
+) -> None:
+    """Benchmark validation of 10,000 unique scalar JSON values only."""
+    unique_items_runtime_model.model_validate(unique_items_scalar_payload)
+
+
+@pytest.mark.perf
+@pytest.mark.benchmark
+def test_perf_unique_items_runtime_nested_object_validation(
+    unique_items_runtime_model: Any,
+    unique_items_nested_object_payload: list[dict[str, object]],
+) -> None:
+    """Benchmark validation of 1,000 unique nested JSON objects only."""
+    unique_items_runtime_model.model_validate(unique_items_nested_object_payload)
+
+
+@pytest.mark.perf
+@pytest.mark.benchmark
+def test_perf_unique_items_nested_model_validation(
+    unique_items_nested_model: Any,
+    unique_items_nested_model_payload: dict[str, object],
+) -> None:
+    """Benchmark one child-owned validation without repeating it on the parent."""
+    unique_items_nested_model.model_validate(unique_items_nested_model_payload)
+
+
+@pytest.mark.perf
+@pytest.mark.benchmark
+def test_perf_unique_items_permuted_object_validation(
+    unique_items_runtime_model: Any,
+    unique_items_permuted_object_payload: list[dict[str, int]],
+) -> None:
+    """Benchmark distinct objects whose key/value associations are permutations."""
+    unique_items_runtime_model.model_validate(unique_items_permuted_object_payload)
+
+
+@pytest.mark.perf
+@pytest.mark.benchmark
+def test_perf_pattern_properties_adapter_reuse(
+    pattern_properties_runtime_model: Any,
+    pattern_properties_runtime_payload: dict[str, object],
+) -> None:
+    """Benchmark reused adapters across many pattern and additional keys."""
+    pattern_properties_runtime_model.model_validate(pattern_properties_runtime_payload)
+
+
+@pytest.mark.perf
 @pytest.mark.parametrize(
     ("args", "expected_text"),
     [
@@ -293,6 +660,28 @@ def test_perf_simple_pydantic_v2_field_construction(simple_pydantic_v2_data_type
     ]
     assert len(fields) == len(simple_pydantic_v2_data_types)
     assert fields[-1].name == "field_4999"
+
+
+@pytest.mark.perf
+@pytest.mark.benchmark
+def test_perf_empty_pydantic_v2_field_render_plans(plain_pydantic_v2_fields: list[PydanticV2DataModelField]) -> None:
+    """Benchmark shared empty Field() plans for parser-created Pydantic v2 fields."""
+    rendered_fields = [str(field) for field in plain_pydantic_v2_fields]
+
+    assert len(rendered_fields) == len(plain_pydantic_v2_fields)
+    assert not rendered_fields[-1]
+
+
+@pytest.mark.perf
+@pytest.mark.benchmark
+def test_perf_pydantic_field_name_resolution(ordinary_pydantic_field_names: tuple[str, ...]) -> None:
+    """Benchmark ordinary Pydantic field-name resolution without parser work."""
+    resolver = PydanticFieldNameResolver()
+    resolved_name = ""
+    for field_name in ordinary_pydantic_field_names:
+        resolved_name = resolver.get_valid_name(field_name)
+
+    assert resolved_name == "field_4999"
 
 
 @pytest.mark.perf
@@ -386,6 +775,23 @@ def test_perf_large_models_pydantic_v2_noformat(tmp_path: Path) -> None:
         output=output_file,
         output_model_type=DataModelType.PydanticV2BaseModel,
         formatters=[],
+    )
+    content = output_file.read_text()
+    assert content.count("class Model") >= 500
+
+
+@pytest.mark.perf
+@pytest.mark.benchmark
+def test_perf_large_models_pydantic_v2_builtin_double_quotes(tmp_path: Path) -> None:
+    """Benchmark built-in string normalization when generated output has no quote candidates."""
+    output_file = tmp_path / "output.py"
+    generate(
+        input_=PERFORMANCE_DATA_PATH / "large_models.json",
+        input_file_type=InputFileType.JsonSchema,
+        output=output_file,
+        output_model_type=DataModelType.PydanticV2BaseModel,
+        formatters=[Formatter.BUILTIN],
+        use_double_quotes=True,
     )
     content = output_file.read_text()
     assert content.count("class Model") >= 500

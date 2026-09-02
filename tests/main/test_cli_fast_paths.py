@@ -203,6 +203,57 @@ def _run_generate_prompt_invalid_option_fast_path() -> dict[str, Any]:
     )
 
 
+def _run_agent_skill_install_fast_path() -> dict[str, Any]:
+    return _run_probe(
+        textwrap.dedent(
+            """
+            import contextlib
+            import io
+            import json
+            import os
+            import runpy
+            import sys
+            import tempfile
+            from pathlib import Path
+
+            previous_cwd = Path.cwd()
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                os.chdir(root)
+                os.environ["HOME"] = str(root / "home")
+                os.environ["USERPROFILE"] = str(root / "home")
+                sys.argv = ["datamodel-codegen", "--install-skill", "codex"]
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    try:
+                        runpy.run_module("datamodel_code_generator.__main__", run_name="__main__", alter_sys=True)
+                    except SystemExit as exc:
+                        code = exc.code
+                    else:
+                        code = None
+                target = root / ".agents" / "skills" / "datamodel-code-generator"
+                result = {
+                    "code": code,
+                    "files": sorted(path.relative_to(target).as_posix() for path in target.rglob("*")),
+                    "imported_config": "datamodel_code_generator.config" in sys.modules,
+                    "imported_format": "datamodel_code_generator.format" in sys.modules,
+                    "imported_model": "datamodel_code_generator.model" in sys.modules,
+                    "imported_pydantic": "pydantic" in sys.modules,
+                    "imported_reference": "datamodel_code_generator.reference" in sys.modules,
+                    "imported_types": "datamodel_code_generator.types" in sys.modules,
+                    "imported_validators": "datamodel_code_generator.validators" in sys.modules,
+                    "stderr": stderr.getvalue(),
+                    "stdout": stdout.getvalue().replace(str(target), "<target>"),
+                }
+                os.chdir(previous_cwd)
+
+            print(json.dumps(result, indent=2, sort_keys=True))
+            """
+        )
+    )
+
+
 def _run_argument_parser_json_option_parse() -> dict[str, Any]:
     return _run_probe(
         textwrap.dedent(
@@ -292,10 +343,150 @@ def _run_no_formatter_generation_probe() -> dict[str, Any]:
             print(json.dumps({
                 "generated": generated,
                 "imported_format": "datamodel_code_generator.format" in sys.modules,
+                "imported_jinja2": "jinja2" in sys.modules,
                 "imported_python_type_codec": (
                     "datamodel_code_generator._python_type_annotation_codec" in sys.modules
                 ),
                 "imported_python_type_ir": "datamodel_code_generator._python_type_annotation" in sys.modules,
+            }, indent=2, sort_keys=True))
+            """
+        )
+    )
+
+
+def _run_custom_template_include_probe() -> dict[str, Any]:
+    return _run_probe(
+        textwrap.dedent(
+            """
+            import json
+            import sys
+            import tempfile
+            from collections import defaultdict
+            from pathlib import Path
+
+            from datamodel_code_generator.model.pydantic_v2.base_model import BaseModel
+            from datamodel_code_generator.reference import Reference
+
+            reference = Reference(name="Custom", path="Custom")
+            with tempfile.TemporaryDirectory() as directory:
+                template_dir = Path(directory) / "pydantic_v2"
+                template_dir.mkdir()
+                (template_dir / "ConfigDict.jinja2").write_text("custom_config = True\\n", encoding="utf-8")
+                model = BaseModel(
+                    fields=[],
+                    reference=reference,
+                    custom_template_dir=Path(directory),
+                    extra_template_data=defaultdict(dict, {reference.path: {"config": {"extra": '\"allow\"'}}}),
+                )
+                include_only_generated = model.render()
+                root_dir = Path(directory) / "root" / "pydantic_v2"
+                root_dir.mkdir(parents=True)
+                (root_dir / "BaseModel.jinja2").write_text("root_custom = '{{ class_name }}'\\n", encoding="utf-8")
+                root_model = BaseModel(
+                    fields=[],
+                    reference=reference,
+                    custom_template_dir=root_dir.parent,
+                )
+                root_generated = root_model.render()
+
+            print(json.dumps({
+                "custom_include_rendered": "custom_config = True" in include_only_generated,
+                "custom_root_rendered": root_generated == "root_custom = 'Custom'",
+                "imported_jinja2": "jinja2" in sys.modules,
+            }, indent=2, sort_keys=True))
+            """
+        )
+    )
+
+
+def _run_schema_runtime_validation_helper_probe() -> dict[str, Any]:
+    return _run_probe(
+        textwrap.dedent(
+            """
+            import json
+            import sys
+            from collections import defaultdict
+
+            from datamodel_code_generator.model.pydantic_v2.base_model import BaseModel
+            from datamodel_code_generator.model.runtime_validation import (
+                RequiredGroupsRule,
+                _make_internal_schema_runtime_validation,
+            )
+            from datamodel_code_generator.reference import Reference
+
+            reference = Reference(name="RuntimeModel", path="RuntimeModel")
+            validation = _make_internal_schema_runtime_validation(
+                required_groups=[RequiredGroupsRule(keyword="oneOf", groups=((("value",),),))]
+            )
+            model = BaseModel(
+                fields=[],
+                reference=reference,
+                extra_template_data=defaultdict(
+                    dict,
+                    {
+                        reference.path: {
+                            "schema_runtime_validation": validation,
+                            "schema_runtime_validation_enabled": True,
+                        }
+                    },
+                ),
+            )
+            generated = BaseModel.render_module_code([model])
+            print(json.dumps({
+                "generated_helper": "_JsonSchemaRuntimeValidationBase" in generated,
+                "imported_jinja2": "jinja2" in sys.modules,
+            }, indent=2, sort_keys=True))
+            """
+        )
+    )
+
+
+def _run_playground_builtin_template_probe() -> dict[str, Any]:
+    return _run_probe(
+        textwrap.dedent(
+            """
+            import importlib.abc
+            import importlib.util
+            import json
+            import sys
+            from pathlib import Path
+
+            from scripts.build_playground_assets import build_metadata
+
+            class BlockBrowserTemplatePackages(importlib.abc.MetaPathFinder):
+                def find_spec(self, fullname, path=None, target=None):
+                    if fullname.partition(".")[0] in {"jinja2", "markupsafe"}:
+                        raise ModuleNotFoundError(f"{fullname} is not installed in the browser runtime")
+                    return None
+
+            sys.meta_path.insert(0, BlockBrowserTemplatePackages())
+            runtime_path = Path("docs/assets/playground/runtime.py")
+            spec = importlib.util.spec_from_file_location("playground_runtime", runtime_path)
+            if spec is None or spec.loader is None:
+                raise RuntimeError("Could not load playground runtime")
+            runtime = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(runtime)
+
+            metadata = build_metadata()
+            runtime.set_ui_metadata(json.dumps(metadata))
+            result = json.loads(
+                runtime.generate_in_browser(
+                    runtime.sample_schema("jsonschema"),
+                    "jsonschema",
+                    json.dumps({"custom_template_dir": "templates"}),
+                )
+            )
+            custom_template = next(option for option in metadata["options"] if option["dest"] == "custom_template_dir")
+            cli_options = runtime.build_cli_options(
+                json.dumps({"custom_template_dir": "templates"}),
+                "jsonschema",
+            )
+            print(json.dumps({
+                "custom_template_browser_supported": custom_template["browser_supported"],
+                "custom_template_ignored": "--custom-template-dir" not in cli_options,
+                "generated_person": result["ok"] and "class Pet(BaseModel):" in result["output"],
+                "imported_jinja2": "jinja2" in sys.modules,
+                "imported_markupsafe": "markupsafe" in sys.modules,
             }, indent=2, sort_keys=True))
             """
         )
@@ -619,6 +810,16 @@ def test_version_fast_path_uses_embedded_version(version_option: str) -> None:
     )
 
 
+def test_agent_skill_fast_path_skips_generation_imports() -> None:
+    """Agent Skill installation copies the bundle without loading generation dependencies."""
+    result = _run_agent_skill_install_fast_path()
+
+    assert_output(
+        f"{json.dumps(result, indent=2, sort_keys=True)}\n",
+        ROOT / "tests/data/expected/main/cli_fast_paths/agent_skill_install.txt",
+    )
+
+
 @pytest.mark.allow_direct_assert
 def test_argument_parser_json_option_loads_json_config_lazily() -> None:
     """JSON-backed argparse callbacks still load and validate only when invoked."""
@@ -652,6 +853,37 @@ def test_empty_formatters_skip_formatter_runtime() -> None:
     assert_output(
         f"{json.dumps(result, indent=2, sort_keys=True)}\n",
         ROOT / "tests/data/expected/main/cli_fast_paths/empty_formatters.txt",
+    )
+
+
+def test_custom_template_include_uses_jinja_in_a_fresh_process() -> None:
+    """A custom directory keeps the complete root/include operation on Jinja."""
+    result = _run_custom_template_include_probe()
+
+    assert_output(
+        f"{json.dumps(result, indent=2, sort_keys=True)}\n",
+        ROOT / "tests/data/expected/main/cli_fast_paths/custom_template_include.txt",
+    )
+
+
+def test_schema_runtime_validation_module_helper_skips_jinja_in_a_fresh_process() -> None:
+    """Module-level built-in rendering also uses a generated standalone renderer."""
+    result = _run_schema_runtime_validation_helper_probe()
+
+    assert_output(
+        f"{json.dumps(result, indent=2, sort_keys=True)}\n",
+        ROOT / "tests/data/expected/main/cli_fast_paths/schema_runtime_validation_helper.txt",
+    )
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="The Playground runtime targets Pyodide Python 3.14")
+def test_playground_builtin_generation_skips_jinja_and_custom_templates() -> None:
+    """The browser runtime uses compiled templates and filters custom template input."""
+    result = _run_playground_builtin_template_probe()
+
+    assert_output(
+        f"{json.dumps(result, indent=2, sort_keys=True)}\n",
+        ROOT / "tests/data/expected/main/cli_fast_paths/playground_builtin_templates.txt",
     )
 
 

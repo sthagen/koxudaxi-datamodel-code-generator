@@ -45,18 +45,31 @@ from datamodel_code_generator import (
     AllOfClassHierarchy,
     AllOfMergeMode,
     CollapseRootModelsNameStrategy,
+    DefaultValueTypeWarning,
     Error,
     FieldTypeCollisionStrategy,
     ModuleSplitMode,
     ReadOnlyWriteOnlyModelType,
     ReuseScope,
+)
+from datamodel_code_generator._format_types import Formatter, PythonVersion
+from datamodel_code_generator._graph import stable_toposort
+from datamodel_code_generator._internal_utils import (
+    HashableComparable,
+    get_most_of_parent,
+)
+from datamodel_code_generator._parser_context import ParserSourceContext
+from datamodel_code_generator._shared_types import (
+    DefaultPutDict,
+    LiteralType,
+    _CollapseRootModelsRecursionError,
+)
+from datamodel_code_generator._source import (
     YamlValue,
-    _internal_utils,
     _is_parsed_source_cache_enabled,
     _read_parser_source_data_from_path,
 )
-from datamodel_code_generator._format_types import Formatter, PythonVersion
-from datamodel_code_generator.enums import StrictTypes
+from datamodel_code_generator.enums import DefaultValueType, StrictTypes
 from datamodel_code_generator.imports import (
     IMPORT_ANNOTATIONS,
     IMPORT_LITERAL,
@@ -77,34 +90,41 @@ from datamodel_code_generator.model.base import (
     _refresh_custom_template_paths,
     _set_nested_model_default_factory_order,
     get_inherited_fields,
+    get_resolve_reference_action_capabilities,
     linearize_data_models,
     sort_data_models_for_mro,
 )
 from datamodel_code_generator.model.enum import Enum, Member, get_raw_enum_member_value
 from datamodel_code_generator.model.enum import escape_characters as _enum_escape_characters
-from datamodel_code_generator.model.imports import IMPORT_TYPED_DICT, IMPORT_TYPED_DICT_BACKPORT
 from datamodel_code_generator.model.type_alias import TypeAliasBase, TypeStatement
-from datamodel_code_generator.parser import DefaultPutDict, LiteralType
-from datamodel_code_generator.parser._graph import stable_toposort
 from datamodel_code_generator.parser._scc import find_circular_sccs, strongly_connected_components
 from datamodel_code_generator.parser.generation import GenerationIndex, GenerationStore, set_model_base_classes
 from datamodel_code_generator.parser.schema_version import SchemaFeaturesT
+from datamodel_code_generator.python_literal import (
+    PythonCode,
+    PythonRuntimeExpression,
+    _semantic_value_text,
+    rewrite_runtime_expressions,
+    rewrite_runtime_imports,
+)
 from datamodel_code_generator.reference import ModelResolver, ModelType, Reference, split_module_name
-from datamodel_code_generator.types import ANY, NONE, DataType, DataTypeManager
+from datamodel_code_generator.types import (
+    ANY,
+    NONE,
+    DataType,
+    DataTypeManager,
+    DefaultValueDescriptor,
+    DefaultValueRecipe,
+)
 from datamodel_code_generator.util import camel_to_snake, record_watch_dependency
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 
-    from typing_extensions import Protocol
-
     from datamodel_code_generator._types import ParserConfigDict
     from datamodel_code_generator.config import ParserConfig
     from datamodel_code_generator.format import CodeFormatter
     from datamodel_code_generator.http import _HTTPFetchSession
-    from datamodel_code_generator.model.pydantic_v2.base_model import (
-        _ParserSimpleFieldData,
-    )
     from datamodel_code_generator.model_metadata import GeneratedModelMetadata, ModelFieldMetadata, ModelMetadata
 
 
@@ -115,13 +135,9 @@ ParserConfigT = TypeVar("ParserConfigT", bound="ParserConfig")
 _ConstructorFieldAdjustment: TypeAlias = Literal["assignment", "keyword_only"]
 
 
-HashableComparable = _internal_utils.HashableComparable
-to_hashable = _internal_utils.to_hashable
-
 # Keep these as module-name checks so non-pydantic-v2 outputs do not import the
 # pydantic_v2 generator package and its runtime feature gates.
 _PYDANTIC_V2_BASE_MODEL_MODULE: Final = "datamodel_code_generator.model.pydantic_v2.base_model"
-_PYDANTIC_V2_MODULE: Final = "datamodel_code_generator.model.pydantic_v2"
 _MODEL_MODULE_PREFIX: Final = "datamodel_code_generator.model."
 _CLASS_NAME_SEPARATOR_PATTERN: Final = re.compile(r"[^A-Za-z0-9]+")
 _TOP_LEVEL_FUTURE_IMPORT_PATTERN: Final = re.compile(r"(?m)^from __future__ import ")
@@ -132,6 +148,7 @@ _DEFERRED_INHERITED_TYPE_KEY: Final = "_deferred_inherited_type"
 _RAW_SCHEMA_DEFAULT_KEY: Final = "_raw_schema_default"
 _RAW_SCHEMA_DEFAULT_UNDEFINED: Final = object()
 _SOURCE_REFERENCE_PATH_KEY: Final = "_source_reference_path"
+_DECIMAL_WARNING_EXAMPLE_LIMIT: Final = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,25 +182,43 @@ def _is_pydantic_v2_data_model_field(value: object) -> bool:
     return _type_mro_contains_type(_model_type(value), module=_PYDANTIC_V2_BASE_MODEL_MODULE, name="DataModelField")
 
 
-if TYPE_CHECKING:
+def _get_model_field_constructor(
+    field_type: type[DataModelFieldBase],
+) -> Callable[..., DataModelFieldBase]:
+    """Resolve an exact output field's parser construction capability."""
+    if constructor := field_type.__dict__.get("PARSER_CONSTRUCTOR"):
+        return cast("Callable[..., DataModelFieldBase]", constructor)
+    return field_type
 
-    class _DataModelFieldConstructor(Protocol):
-        def __call__(self, **data: Unpack[_ParserSimpleFieldData]) -> DataModelFieldBase:
-            raise NotImplementedError
+
+def _source_context_from_config(config: ParserConfig) -> ParserSourceContext:
+    """Adapt a public parser config to the neutral source policy."""
+    remote_lock = getattr(config, "remote_lock", None)
+    response_observer = remote_lock.record_response if remote_lock is not None else None
+    return ParserSourceContext(
+        base_path=config.base_path,
+        encoding=config.encoding,
+        remote_text_cache=config.remote_text_cache,
+        allow_remote_refs=config.allow_remote_refs,
+        strict_refs=config.strict_refs,
+        allow_private_network=config.allow_private_network,
+        http_backend=config.http_backend,
+        http_headers=config.http_headers,
+        http_local_ref_path=config.http_local_ref_path,
+        http_ignore_tls=config.http_ignore_tls,
+        http_query_parameters=config.http_query_parameters,
+        http_timeout=config.http_timeout,
+        external_ref_mapping=config.external_ref_mapping,
+        remote_response_observer=response_observer,
+    )
 
 
 def _get_builtin_pydantic_v2_field_constructor(
     field_type: type[DataModelFieldBase],
-) -> _DataModelFieldConstructor | None:
-    """Return the internal constructor only for the exact built-in v2 field."""
-    if field_type.__module__ != _PYDANTIC_V2_BASE_MODEL_MODULE or field_type.__name__ != "DataModelField":
-        return None
-    from datamodel_code_generator.model.pydantic_v2.base_model import (  # noqa: PLC0415
-        DataModelField,
-        _construct_parser_simple_field,
-    )
-
-    return _construct_parser_simple_field if field_type is DataModelField else None
+) -> Callable[..., DataModelFieldBase] | None:
+    """Return a declared exact-class constructor through the legacy helper."""
+    constructor = _get_model_field_constructor(field_type)
+    return None if constructor is field_type else constructor
 
 
 def _get_field_dependency_ordering_model_type(model_type: type[DataModel]) -> type[DataModel] | None:
@@ -201,10 +236,9 @@ def _is_pydantic_v2_root_model(model: DataModel, root_model_type: type[DataModel
 
 
 def _is_pydantic_v2_dump_resolve_reference_action(value: object) -> bool:
-    return (
-        getattr(value, "__module__", None) == _PYDANTIC_V2_MODULE
-        and getattr(value, "__name__", None) == "dump_resolve_reference_action"
-    )
+    """Query the output-owned action capability through the legacy helper."""
+    capabilities = get_resolve_reference_action_capabilities(value)
+    return capabilities.filter_forward_references and capabilities.generated_formatter_safe
 
 
 def __getattr__(name: str) -> Any:
@@ -218,12 +252,17 @@ def __getattr__(name: str) -> Any:
             from datamodel_code_generator.model import msgspec as msgspec_model  # noqa: PLC0415
 
             return msgspec_model
+        case "Child" | "T" | "to_hashable":
+            from datamodel_code_generator._internal_utils import Child, T, to_hashable  # noqa: PLC0415
+
+            match name:
+                case "Child":
+                    return Child
+                case "T":
+                    return T
+                case _:
+                    return to_hashable
     raise AttributeError(name)
-
-
-Child = _internal_utils.Child
-T = _internal_utils.T
-get_most_of_parent = _internal_utils.get_most_of_parent
 
 
 ModelName: TypeAlias = str
@@ -419,6 +458,19 @@ class _ConstructorFieldPolicy(NamedTuple):
     has_assignment: Callable[[DataModelFieldBase], bool]
     classify_default: Callable[[DataModelFieldBase], tuple[bool, bool]]
     participates: Callable[[DataModelFieldBase], bool]
+
+
+@dataclass(frozen=True, slots=True)
+class ParserRunContext:
+    """Immutable parser settings scoped to one facade-managed run."""
+
+    diagnostic_source_path: Path | None = None
+    formatter_cwd: Path | None = None
+    preserve_circular_root_models: bool = False
+    suppress_parse_warnings: bool = False
+
+
+_DEFAULT_PARSER_RUN_CONTEXT = ParserRunContext()
 
 
 @dataclass(frozen=True, slots=True)
@@ -665,66 +717,110 @@ _PythonTypeImportKey: TypeAlias = tuple[str | None, str]
 def _ordinary_field_shadow_aliases(
     models: list[DataModel],
     all_model_field_names: set[str],
-) -> tuple[dict[_PythonTypeImportKey, Import], bool]:
-    """Run the original narrow scan and report whether structured work exists."""
+) -> tuple[dict[_PythonTypeImportKey, Import], bool, bool]:
+    """Run the narrow fast path and report whether structured imports exist."""
     aliases: dict[_PythonTypeImportKey, Import] = {}
     has_python_type = False
-    for _, _model_field, data_type in iter_models_field_data_types(models):
-        if data_type.python_type:
-            has_python_type = True
-        if data_type.import_ and data_type.type in all_model_field_names:
-            key = (data_type.import_.from_, data_type.import_.import_)
-            aliases.setdefault(
-                key,
-                Import(
-                    from_=data_type.import_.from_,
-                    import_=data_type.import_.import_,
-                    alias=f"{data_type.type}_aliased",
-                    reference_path=data_type.import_.reference_path,
-                ),
-            )
-    return aliases, has_python_type
+    has_runtime_expressions = False
+    for model in models:
+        for field in model.fields:
+            if not has_runtime_expressions and field.runtime_expression_imports:
+                has_runtime_expressions = True
+            for data_type in field.data_type.all_data_types:
+                if data_type.python_type:
+                    has_python_type = True
+                if not has_runtime_expressions and data_type.runtime_expression_imports:
+                    has_runtime_expressions = True
+                if data_type.import_ and data_type.type in all_model_field_names:
+                    key = (data_type.import_.from_, data_type.import_.import_)
+                    aliases.setdefault(
+                        key,
+                        Import(
+                            from_=data_type.import_.from_,
+                            import_=data_type.import_.import_,
+                            alias=f"{data_type.type}_aliased",
+                            reference_path=data_type.import_.reference_path,
+                        ),
+                    )
+    return aliases, has_python_type, has_runtime_expressions
 
 
-def _apply_python_type_import_aliases(
+def _apply_structured_import_aliases(
     models: list[DataModel],
     aliased_imports: dict[_PythonTypeImportKey, Import],
     *,
     can_retain_cache: bool,
 ) -> None:
-    """Rewrite every identity-carrying consumer of the selected imports."""
-    alias_bound_python_type = render_python_type_expr = None
-    for model, _model_field, data_type in iter_models_field_data_types(models):
-        if (
-            data_type.import_
-            and (aliased_import := aliased_imports.get((data_type.import_.from_, data_type.import_.import_)))
-            is not None
-        ):
-            data_type.type = aliased_import.alias
-            data_type.import_ = aliased_import
+    """Rewrite every identity-carrying structured consumer of selected imports."""
+    for model in models:
+        changed = False
+        for field in model.fields:
+            changed = _alias_field_runtime_expressions(field, aliased_imports) or changed
+            for data_type in field.data_type.all_data_types:
+                changed = _alias_data_type_structured_imports(data_type, aliased_imports) or changed
+        if _alias_additional_imports(model, aliased_imports):
+            changed = True
+        if changed:
             _clear_model_imports_cache_if_retained(model, can_retain_cache=can_retain_cache)
-        if data_type.python_type:
-            if alias_bound_python_type is None:
-                # Structured annotation support is opt-in. Keep both the IR and
-                # its renderer out of the ordinary generation import fast path.
-                from datamodel_code_generator._python_type_annotation import (  # noqa: PLC0415
-                    render_python_type_expr,
-                )
-                from datamodel_code_generator._python_type_binding import (  # noqa: PLC0415
-                    alias_bound_python_type,
-                )
-
-            bound_type = alias_bound_python_type(data_type.python_type, aliased_imports)
-            if bound_type is not data_type.python_type:
-                data_type.python_type = bound_type
-                data_type.type = render_python_type_expr(bound_type.expression)
-                _clear_model_imports_cache_if_retained(model, can_retain_cache=can_retain_cache)
 
     for model in models:
         if _alias_base_class_imports(model, aliased_imports):
             _clear_model_imports_cache_if_retained(model, can_retain_cache=can_retain_cache)
     if not can_retain_cache:
         _clear_model_imports_cache(models)
+
+
+def _alias_field_runtime_expressions(
+    field: DataModelFieldBase,
+    aliased_imports: dict[_PythonTypeImportKey, Import],
+) -> bool:
+    """Rewrite a field only when its producer registered a runtime expression."""
+    imports = field.runtime_expression_imports
+    if not imports or (rewritten_imports := rewrite_runtime_imports(imports, aliased_imports)) is imports:
+        return False
+    field.default = rewrite_runtime_expressions(field.default, aliased_imports)
+    field._set_runtime_expression_imports(rewritten_imports)  # noqa: SLF001
+    return True
+
+
+def _alias_data_type_structured_imports(
+    data_type: DataType,
+    aliased_imports: dict[_PythonTypeImportKey, Import],
+) -> bool:
+    """Apply aliases to type, annotation, and producer-registered kwargs expressions."""
+    changed = False
+    if (
+        data_type.import_
+        and (aliased_import := aliased_imports.get((data_type.import_.from_, data_type.import_.import_))) is not None
+        and aliased_import is not data_type.import_
+    ):
+        data_type.type = aliased_import.alias
+        data_type.import_ = aliased_import
+        changed = True
+    if data_type.python_type:
+        alias_bound_python_type, render_python_type_expr = _python_type_import_alias_helpers()
+        bound_type = alias_bound_python_type(data_type.python_type, aliased_imports)
+        if bound_type is not data_type.python_type:
+            data_type.python_type = bound_type
+            data_type.type = render_python_type_expr(bound_type.expression)
+            changed = True
+    imports = data_type.runtime_expression_imports
+    if not imports:
+        return changed
+    if (rewritten_imports := rewrite_runtime_imports(imports, aliased_imports)) is imports:
+        return changed
+    data_type.kwargs = cast("dict[str, Any]", rewrite_runtime_expressions(data_type.kwargs, aliased_imports))
+    data_type._set_runtime_expression_imports(rewritten_imports)  # noqa: SLF001
+    return True
+
+
+@cache
+def _python_type_import_alias_helpers() -> tuple[Any, Any]:
+    """Load annotation alias helpers only for the structured annotation path."""
+    from datamodel_code_generator._python_type_annotation import render_python_type_expr  # noqa: PLC0415
+    from datamodel_code_generator._python_type_binding import alias_bound_python_type  # noqa: PLC0415
+
+    return alias_bound_python_type, render_python_type_expr
 
 
 def _unwrap_type_alias(data_type: DataType) -> DataType:
@@ -769,11 +865,59 @@ def _needs_validate_default(data_type: DataType) -> bool:
     return _contains_model_reference(resolved)
 
 
+def _is_default_value_container(data_type: DataType) -> bool:
+    """Return whether a data type wraps a collection default rather than one scalar."""
+    return any((
+        data_type.is_dict,
+        data_type.is_list,
+        data_type.is_set,
+        data_type.is_frozen_set,
+        data_type.is_mapping,
+        data_type.is_sequence,
+        data_type.is_tuple,
+    ))
+
+
+def _unwrap_default_scalar_data_type(data_type: DataType) -> DataType:
+    """Unwrap aliases and nullable scalar wrappers without traversing unions or containers."""
+    if data_type.reference and isinstance(data_type.reference.source, TypeAliasBase):
+        data_type = _unwrap_type_alias(data_type)
+    while (
+        data_type.type is None
+        and data_type.reference is None
+        and len(data_type.data_types) == 1
+        and not _is_default_value_container(data_type)
+        and not data_type.literals
+        and not data_type.enum_member_literals
+    ):
+        data_type = data_type.data_types[0]
+        if data_type.reference and isinstance(data_type.reference.source, TypeAliasBase):
+            data_type = _unwrap_type_alias(data_type)
+    return data_type
+
+
+def _resolve_default_scalar_data_type(data_type: DataType) -> DataType | None:
+    """Resolve one backend-neutral scalar leaf without traversing unions or containers."""
+    if _is_default_value_container(data_type):
+        return None
+    if data_type.reference or data_type.data_types:
+        data_type = _unwrap_default_scalar_data_type(data_type)
+    if (
+        data_type.reference
+        or data_type.data_types
+        or _is_default_value_container(data_type)
+        or data_type.literals
+        or data_type.enum_member_literals
+    ):
+        return None
+    return data_type
+
+
 def _alias_base_class_imports(
     model: DataModel,
     aliased_imports: dict[tuple[str | None, str], Import],
 ) -> bool:
-    """Apply aliased imports to a model's base classes and their _additional_imports."""
+    """Apply aliased imports to a model's base classes."""
     changed = False
     for base_class in model.base_classes:
         if not base_class.import_:
@@ -781,16 +925,27 @@ def _alias_base_class_imports(
         key = (base_class.import_.from_, base_class.import_.import_)
         if key not in aliased_imports:
             continue
-        old_import = base_class.import_
         aliased_import = aliased_imports[key]
+        if aliased_import is base_class.import_:
+            continue
         base_class.type = aliased_import.alias
         base_class.import_ = aliased_import
-        for i, additional_import in enumerate(model._additional_imports):  # pragma: no branch  # noqa: SLF001
-            if (
-                additional_import.from_ == old_import.from_ and additional_import.import_ == old_import.import_
-            ):  # pragma: no branch
-                model._additional_imports[i] = aliased_import  # noqa: SLF001
-                break
+        changed = True
+    return changed
+
+
+def _alias_additional_imports(
+    model: DataModel,
+    aliased_imports: dict[tuple[str | None, str], Import],
+) -> bool:
+    """Replace every additional import with the module's canonical identity binding."""
+    changed = False
+    for index, import_ in enumerate(model._additional_imports):  # noqa: SLF001
+        if (
+            aliased_import := aliased_imports.get((import_.from_, import_.import_))
+        ) is None or aliased_import is import_:
+            continue
+        model._additional_imports[index] = aliased_import  # noqa: SLF001
         changed = True
     return changed
 
@@ -1857,8 +2012,80 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
     _config_class_name: ClassVar[str] = "ParserConfig"
     _cache_local_sources_during_parse: ClassVar[bool] = False
     _cache_parsed_sources_from_path: ClassVar[bool] = False
-    _formatter_cwd: Path | None = None
     _http_fetch_session: _HTTPFetchSession | None = None
+
+    @property
+    def run_context(self) -> ParserRunContext:
+        """Return the immutable settings for the current facade-managed run."""
+        return self._run_context or _DEFAULT_PARSER_RUN_CONTEXT
+
+    def configure_run_context(
+        self,
+        *,
+        diagnostic_source_path: Path | None = None,
+        formatter_cwd: Path | None = None,
+        preserve_circular_root_models: bool = False,
+        suppress_parse_warnings: bool = False,
+    ) -> None:
+        """Configure parser run state without exposing implementation attributes."""
+        if (
+            diagnostic_source_path is None
+            and formatter_cwd is None
+            and not preserve_circular_root_models
+            and not suppress_parse_warnings
+        ):
+            self._run_context = None
+            return
+        self._run_context = ParserRunContext(
+            diagnostic_source_path=diagnostic_source_path,
+            formatter_cwd=formatter_cwd,
+            preserve_circular_root_models=preserve_circular_root_models,
+            suppress_parse_warnings=suppress_parse_warnings,
+        )
+
+    def _configure_legacy_run_context_attribute(self, attribute: str, value: object) -> None:
+        """Keep historical private state writes as a parser-local compatibility facade."""
+        context = self.run_context
+        diagnostic_source_path = context.diagnostic_source_path
+        formatter_cwd = context.formatter_cwd
+        preserve_circular_root_models = context.preserve_circular_root_models
+        match attribute:
+            case "diagnostic_source_path":
+                diagnostic_source_path = cast("Path | None", value)
+            case "formatter_cwd":
+                formatter_cwd = cast("Path | None", value)
+            case _:
+                preserve_circular_root_models = cast("bool", value)
+        self.configure_run_context(
+            diagnostic_source_path=diagnostic_source_path,
+            formatter_cwd=formatter_cwd,
+            preserve_circular_root_models=preserve_circular_root_models,
+            suppress_parse_warnings=context.suppress_parse_warnings,
+        )
+
+    @property
+    def _diagnostic_source_path(self) -> Path | None:
+        return self.run_context.diagnostic_source_path
+
+    @_diagnostic_source_path.setter
+    def _diagnostic_source_path(self, value: Path | None) -> None:
+        self._configure_legacy_run_context_attribute("diagnostic_source_path", value)
+
+    @property
+    def _formatter_cwd(self) -> Path | None:
+        return self.run_context.formatter_cwd
+
+    @_formatter_cwd.setter
+    def _formatter_cwd(self, value: Path | None) -> None:
+        self._configure_legacy_run_context_attribute("formatter_cwd", value)
+
+    @property
+    def _preserve_circular_root_models(self) -> bool:
+        return self.run_context.preserve_circular_root_models
+
+    @_preserve_circular_root_models.setter
+    def _preserve_circular_root_models(self, value: bool) -> None:
+        self._configure_legacy_run_context_attribute("preserve_circular_root_models", value)
 
     @classmethod
     def _get_config_class(cls) -> type[ParserConfig]:
@@ -1944,7 +2171,9 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             config = self._create_default_config(options)  # ty: ignore[invalid-argument-type]
 
         self.config = config
+        self._source_context = getattr(config, "_source_context", None) or _source_context_from_config(config)
         self._has_bound_python_types = False
+        self._has_runtime_expressions = False
 
         self.keyword_only = config.keyword_only
         self.target_pydantic_version = config.target_pydantic_version
@@ -1971,13 +2200,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             self.data_model_root_type
         )
         self.data_model_field_type: type[DataModelFieldBase] = config.data_model_field_type
-        self._data_model_field_constructor: type[DataModelFieldBase] | _DataModelFieldConstructor = (
-            self.data_model_field_type
-        )
-        if (
-            simple_field_constructor := _get_builtin_pydantic_v2_field_constructor(self.data_model_field_type)
-        ) is not None:
-            self._data_model_field_constructor = simple_field_constructor
+        self._data_model_field_constructor = _get_model_field_constructor(self.data_model_field_type)
         self._configured_generation_types_are_builtin = all(
             generation_type.__module__.startswith(_MODEL_MODULE_PREFIX)
             for generation_type in (
@@ -2024,11 +2247,14 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         self.use_single_line_docstring: bool = config.use_single_line_docstring
         self.use_default_kwarg: bool = config.use_default_kwarg
         self.use_missing_sentinel: bool = config.use_missing_sentinel
+        self.deserialize_default_value_types: frozenset[DefaultValueType] = frozenset(config.deserialize_default_values)
+        self._decimal_default_warning_count = 0
+        self._decimal_default_warning_examples: list[str] | None = None
         self._data_model_field_common_kwargs_cache: dict[str, Any] = {"use_missing_sentinel": self.use_missing_sentinel}
         self.reuse_model: bool = config.reuse_model
         self.reuse_scope: ReuseScope | None = config.reuse_scope
         self.shared_module_name: str = config.shared_module_name
-        self.encoding: str = config.encoding
+        self.encoding: str = self._source_context.encoding
         self.enum_field_as_literal: LiteralType | None = config.enum_field_as_literal
         self.enum_field_as_literal_map: dict[str, str] = config.enum_field_as_literal_map or {}
         self.ignore_enum_constraints: bool = config.ignore_enum_constraints
@@ -2040,9 +2266,9 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         self.use_union_operator: bool = config.use_union_operator
         self.enable_faux_immutability: bool = config.enable_faux_immutability
         self.custom_class_name_generator: Callable[[str], str] | None = config.custom_class_name_generator
-        self.repair_invalid_dotted_stdout: bool = getattr(config, "repair_invalid_dotted_stdout", False)
-        self.forced_invalid_dotted_stdout_repair_modules: tuple[ModulePath, ...] = getattr(
-            config, "forced_invalid_dotted_stdout_repair_modules", ()
+        self.repair_invalid_dotted_stdout: bool = config.repair_invalid_dotted_stdout
+        self.forced_invalid_dotted_stdout_repair_modules: tuple[ModulePath, ...] = (
+            config.forced_invalid_dotted_stdout_repair_modules
         )
         self.field_extra_keys: set[str] = config.field_extra_keys or set()
         self.field_extra_keys_without_x_prefix: set[str] = config.field_extra_keys_without_x_prefix or set()
@@ -2050,9 +2276,9 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         self.model_extra_keys_without_x_prefix: set[str] = config.model_extra_keys_without_x_prefix or set()
         self.field_include_all_keys: bool = config.field_include_all_keys
 
-        self.remote_text_cache: DefaultPutDict[str, str] = config.remote_text_cache or DefaultPutDict()
+        self.remote_text_cache: DefaultPutDict[str, str] = self._source_context.remote_text_cache or DefaultPutDict()
         self.current_source_path: Path | None = None
-        self._diagnostic_source_path: Path | None = None
+        self._run_context: ParserRunContext | None = None
         self.use_title_as_name: bool = config.use_title_as_name
         self.infer_union_variant_names: bool = config.infer_union_variant_names
         self.use_operation_id_as_name: bool = config.use_operation_id_as_name
@@ -2065,8 +2291,8 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         self.allof_class_hierarchy: AllOfClassHierarchy = config.allof_class_hierarchy
         self.dataclass_arguments = config.dataclass_arguments
 
-        if config.base_path:
-            self.base_path = config.base_path
+        if self._source_context.base_path:
+            self.base_path = self._source_context.base_path
         elif isinstance(source, Path):
             self.base_path = source.absolute() if source.is_dir() else source.absolute().parent
         else:
@@ -2183,22 +2409,26 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             class_name_affix_scope=config.class_name_affix_scope,
             skip_affix_for_root=config.class_name is not None,
             default_value_overrides=config.default_value_overrides,
-            http_backend=config.http_backend,
+            http_backend=self._source_context.http_backend,
+            field_name_resolver_classes=(
+                {self.field_name_model_type: field_name_resolver_class}
+                if (field_name_resolver_class := self.data_model_type.FIELD_NAME_RESOLVER_CLASS) is not None
+                else None
+            ),
         )
         self.class_name: str | None = config.class_name
         self.allow_leading_underscore_class_name: bool = config.allow_leading_underscore_class_name
         self.wrap_string_literal: bool | None = config.wrap_string_literal
-        self.allow_remote_refs: bool | None = config.allow_remote_refs
-        self.strict_refs: bool = config.strict_refs
-        self.allow_private_network: bool = config.allow_private_network
-        self.http_backend = config.http_backend
-        self.http_headers: Sequence[tuple[str, str]] | None = config.http_headers
-        self.http_local_ref_path: Path | None = config.http_local_ref_path
-        self.http_query_parameters: Sequence[tuple[str, str]] | None = config.http_query_parameters
-        self.http_ignore_tls: bool = config.http_ignore_tls
-        self.http_timeout: float | None = config.http_timeout
-        remote_lock = getattr(config, "remote_lock", None)
-        self._remote_response_observer = remote_lock.record_response if remote_lock is not None else None
+        self.allow_remote_refs: bool | None = self._source_context.allow_remote_refs
+        self.strict_refs: bool = self._source_context.strict_refs
+        self.allow_private_network: bool = self._source_context.allow_private_network
+        self.http_backend = self._source_context.http_backend
+        self.http_headers: Sequence[tuple[str, str]] | None = self._source_context.http_headers
+        self.http_local_ref_path: Path | None = self._source_context.http_local_ref_path
+        self.http_query_parameters: Sequence[tuple[str, str]] | None = self._source_context.http_query_parameters
+        self.http_ignore_tls: bool = self._source_context.http_ignore_tls
+        self.http_timeout: float | None = self._source_context.http_timeout
+        self._remote_response_observer = self._source_context.remote_response_observer
         self.use_annotated: bool = config.use_annotated
         if self.use_annotated and not self.field_constraints:  # pragma: no cover
             msg = "`use_annotated=True` has to be used with `field_constraints=True`"
@@ -2403,17 +2633,17 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         """Return source context without changing parser path semantics."""
         if source_path is not None and source_path.parts:
             return source_path.as_posix()
-        if self._diagnostic_source_path is not None:
-            return self._diagnostic_source_path.as_posix()
+        if (diagnostic_source_path := self.run_context.diagnostic_source_path) is not None:
+            return diagnostic_source_path.as_posix()
         return "<input>"
 
     def _append_additional_imports(self, additional_imports: list[str] | None) -> None:
-        if additional_imports is None:
-            additional_imports = []
+        if not additional_imports:
+            return
 
-        for additional_import_string in additional_imports:
-            if additional_import_string is None:  # pragma: no cover
-                continue
+        from datamodel_code_generator.base_config import _validate_additional_import_paths  # noqa: PLC0415
+
+        for additional_import_string in _validate_additional_import_paths(additional_imports) or []:
             new_import = Import.from_full_path(additional_import_string)
             self.imports.append(new_import)
 
@@ -2774,7 +3004,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                     if member and member.field.name:
                         enum_member_literals.append((enum_class_name, member.field.name))
                     else:  # pragma: no cover
-                        enum_member_literals.append((enum_class_name, str(value)))
+                        enum_member_literals.append((enum_class_name, _semantic_value_text(value)))
                 data_type = self.data_type(enum_member_literals=enum_member_literals)
                 if enum_source.module_path != discriminator_model.module_path:  # pragma: no cover
                     imports.append(Import.from_full_path(enum_source.name))
@@ -3042,8 +3272,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             if model.reference.path in set_item_references:
                 if isinstance(model, Enum):
                     continue
-                class_body_lines = model.extra_template_data.setdefault("class_body_lines", [])
-                class_body_lines.append("__hash__ = object.__hash__")
+                model._append_internal_template_data("class_body_lines", "__hash__ = object.__hash__")  # noqa: SLF001
 
     @classmethod
     def __set_reference_default_value_to_field(
@@ -3207,7 +3436,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         self.__validate_shared_module_name(module_models)
         return self.__create_shared_module_from_duplicates(module_models, duplicates, require_update_action_models)
 
-    def __collapse_root_models(  # noqa: PLR0912, PLR0914, PLR0915
+    def __collapse_root_models(
         self,
         models: list[DataModel],
         unused_models: list[DataModel],
@@ -3218,8 +3447,26 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         if not self.collapse_root_models:
             return
 
+        with self.generation_store._collapse_root_reference_scope():  # noqa: SLF001
+            self.__collapse_root_models_in_scope(
+                models,
+                unused_models,
+                imports,
+                scoped_model_resolver,
+                model_path_to_module_name,
+            )
+
+    def __collapse_root_models_in_scope(  # noqa: PLR0912, PLR0914, PLR0915
+        self,
+        models: list[DataModel],
+        unused_models: list[DataModel],
+        imports: Imports,
+        scoped_model_resolver: ModelResolver,
+        model_path_to_module_name: dict[str, str] | None = None,
+    ) -> None:
         generation_store = self.generation_store
         generation_index = generation_store.index
+        circular_root_model_paths = getattr(self, "_circular_root_model_paths", ())
 
         for model in models:  # noqa: PLR1702
             for model_field in model.fields:
@@ -3234,13 +3481,35 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                     root_type_model = reference.source
                     root_type_field = root_type_model.fields[0]
 
-                    if (
-                        self.field_constraints
-                        and isinstance(root_type_field.constraints, ConstraintsBase)
-                        and root_type_field.constraints.has_constraints
-                        and any(d for d in model_field.data_type.all_data_types if d.is_dict or d.is_union or d.is_list)
+                    if root_type_model.path in circular_root_model_paths:
+                        # A circular root model cannot be fully inlined; keep it named.
+                        continue
+
+                    # These runtime rules are owned by the referenced root model;
+                    # replacing it with the raw type would discard its validator.
+                    runtime_validation = (
+                        root_type_model._internal_template_data.get("schema_runtime_validation")  # noqa: SLF001
+                        or root_type_model.extra_template_data.get("schema_runtime_validation")
+                    )
+                    if runtime_validation and any(
+                        getattr(runtime_validation, rule_name, None)
+                        for rule_name in (
+                            "pattern_properties",
+                            "required_groups",
+                            "conditional_required",
+                        )
                     ):
-                        continue  # pragma: no cover
+                        continue
+
+                    root_constraints = root_type_field.constraints
+                    if isinstance(root_constraints, ConstraintsBase) and root_constraints.has_constraints:
+                        if root_type_field.data_type.is_dict or root_type_field.data_type.is_mapping:
+                            continue
+                        if self.field_constraints and any(
+                            data_type.is_dict or data_type.is_union or data_type.is_list
+                            for data_type in model_field.data_type.all_data_types
+                        ):
+                            continue
 
                     if root_type_field.data_type.reference:
                         if self.collapse_root_models_name_strategy is None:
@@ -3280,12 +3549,16 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                                 new_path=root_type_model.reference.path,
                             )
 
-                        assert isinstance(root_type_model, DataModel)
-
-                        has_remaining_root_references = generation_index.has_data_type_references_other_than(
-                            root_type_model.reference,
-                            data_type,
-                        )
+                        if (
+                            has_remaining_root_references := generation_store._root_collapse_has_data_type_references(  # noqa: SLF001
+                                root_type_model.reference,
+                                excluded_data_type=data_type,
+                            )
+                        ) is None:
+                            has_remaining_root_references = generation_index.has_data_type_references_other_than(
+                                root_type_model.reference,
+                                data_type,
+                            )
                         generation_store.collapse_root_data_type(data_type, inner_reference)
 
                         imports.remove_referenced_imports(root_type_model.path)
@@ -3296,7 +3569,19 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
 
                     # set copied data_type
                     copied_data_type = root_type_field.data_type.model_copy()
-                    if isinstance(data_type.parent, self.data_model_field_type):
+                    if (
+                        has_remaining_root_references := generation_store._root_collapse_has_data_type_references(  # noqa: SLF001
+                            root_type_model.reference,
+                            excluded_data_type=data_type,
+                        )
+                    ) is None:
+                        has_remaining_root_references = generation_index.has_data_type_references_other_than(
+                            root_type_model.reference,
+                            data_type,
+                        )
+
+                    replacement_context = None
+                    if isinstance(field_ := data_type.parent, self.data_model_field_type):
                         # for field
                         # override empty field by root-type field
                         model_field.extras = {
@@ -3310,9 +3595,14 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                                 root_type_field.constraints, model_field.constraints
                             )
 
-                        self.generation_store.replace_field_type(data_type.parent, copied_data_type)
+                        replacement_context = generation_store._replace_data_type_and_detach_data_type_ref(  # noqa: SLF001
+                            data_type,
+                            copied_data_type,
+                            owner=field_,
+                            replacement_kind="field",
+                        )
 
-                    elif isinstance(data_type.parent, DataType) and data_type.parent.is_list:
+                    elif isinstance(parent_data_type := data_type.parent, DataType) and parent_data_type.is_list:
                         if self.field_constraints:
                             model_field.constraints = ConstraintsBase.merge_constraints(
                                 root_type_field.constraints, model_field.constraints
@@ -3337,39 +3627,67 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                                     mapping,
                                 ):
                                     copied_data_type.discriminator = field_name
-                        assert isinstance(data_type.parent, DataType)
-                        self.generation_store.replace_nested_data_type(data_type.parent, data_type, copied_data_type)
+                        replacement_context = generation_store._replace_data_type_and_detach_data_type_ref(  # noqa: SLF001
+                            data_type,
+                            copied_data_type,
+                            owner=parent_data_type,
+                            replacement_kind="nested",
+                        )
 
-                    elif isinstance(data_type.parent, DataType):
+                    elif isinstance(parent_data_type := data_type.parent, DataType):
                         # for data_type
-                        self.generation_store.replace_nested_data_type(data_type.parent, data_type, copied_data_type)
+                        replacement_context = generation_store._replace_data_type_and_detach_data_type_ref(  # noqa: SLF001
+                            data_type,
+                            copied_data_type,
+                            owner=parent_data_type,
+                            replacement_kind="nested",
+                        )
                     else:  # pragma: no cover
                         continue
 
-                    for d in copied_data_type.all_data_types:
-                        _register_data_type_import(
-                            d,
-                            model,
-                            imports,
-                            scoped_model_resolver,
-                            model_path_to_module_name,
-                        )
+                    if replacement_context is None:  # pragma: no cover
+                        continue
+                    with replacement_context:
+                        for d in copied_data_type.all_data_types:
+                            _register_data_type_import(
+                                d,
+                                model,
+                                imports,
+                                scoped_model_resolver,
+                                model_path_to_module_name,
+                            )
 
-                    original_field = get_most_of_parent(data_type, DataModelFieldBase)
-                    if original_field:  # pragma: no cover
-                        # TODO: Improve detection of reference type
-                        # Use list instead of set because Import is not hashable
-                        excluded_imports = [IMPORT_OPTIONAL, IMPORT_UNION]
-                        field_imports = [i for i in original_field.imports if i not in excluded_imports]
-                        imports.append(field_imports)
-
-                    generation_store.detach_data_type_ref(data_type)
-
-                    assert isinstance(root_type_model, DataModel)
+                        original_field = get_most_of_parent(data_type, DataModelFieldBase)
+                        if original_field:  # pragma: no cover
+                            # TODO: Improve detection of reference type
+                            # Use list instead of set because Import is not hashable
+                            excluded_imports = [IMPORT_OPTIONAL, IMPORT_UNION]
+                            field_imports = [i for i in original_field.imports if i not in excluded_imports]
+                            imports.append(field_imports)
 
                     imports.remove_referenced_imports(root_type_model.path)
-                    if not generation_index.has_data_type_references(root_type_model.reference):
+                    if not has_remaining_root_references:
                         unused_models.append(root_type_model)
+
+    def __set_circular_root_model_paths(self, module_models: ModuleModels) -> None:
+        """Cache live root-model paths in a circular component for the retry path."""
+        root_models = {
+            model.path: model
+            for _, models in module_models
+            for model in models
+            if isinstance(model, self.data_model_root_type)
+        }
+        graph = {
+            (path,): {
+                (reference_path,)
+                for reference_path in self.generation_store.index.reference_classes_for_model_including_dict_keys(model)
+                if reference_path in root_models
+            }
+            for path, model in root_models.items()
+        }
+        self._circular_root_model_paths = frozenset(
+            path for component in find_circular_sccs(graph) for (path,) in component
+        )
 
     def __set_default_enum_member(
         self,
@@ -3377,7 +3695,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         *,
         can_retain_cache: bool,
     ) -> None:
-        if not self.set_default_enum_member:
+        if not self.set_default_enum_member and DefaultValueType.Enum not in self.deserialize_default_value_types:
             return
         for model, model_field, data_type in iter_models_field_data_types(models):
             if model_field.default is None:
@@ -3400,13 +3718,14 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                     else:
                         enum_member.alias = data_type.alias
 
-    def __set_validate_default_on_fields(  # noqa: PLR6301
+    def __set_validate_default_on_fields(
         self,
         models: list[DataModel],
         *,
         can_retain_cache: bool,
     ) -> None:
         """Set validate_default=True on fields with structured defaults needing validation."""
+        deserialized_default = False
         for model in models:
             if isinstance(model, Enum):
                 continue
@@ -3417,10 +3736,170 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                     continue
                 if isinstance(model_field.default, Member):
                     continue
-                if not _needs_validate_default(model_field.data_type):
-                    continue
-                if model_field.enable_structured_default_validation():
+                deserialized_default = (
+                    self.__deserialize_default_value(
+                        model,
+                        model_field,
+                        can_retain_cache=can_retain_cache,
+                    )
+                    or deserialized_default
+                )
+                if (
+                    _needs_validate_default(model_field.data_type)
+                    and model_field.enable_structured_default_validation()
+                ):
                     _clear_model_imports_cache_if_retained(model, can_retain_cache=can_retain_cache)
+        if deserialized_default:
+            self.__normalize_default_value_constraints(models)
+
+    def __normalize_default_value_constraints(self, models: list[DataModel]) -> None:
+        """Keep backend-declared runtime constraint values structured until alias resolution."""
+        from decimal import Decimal  # noqa: PLC0415
+
+        for model, _, data_type in iter_models_field_data_types(models):
+            if (
+                not model.SUPPORTS_DESERIALIZED_DEFAULT_VALUES
+                or not data_type.kwargs
+                or (resolved := self.__resolve_default_value_descriptor(data_type)) is None
+            ):
+                continue
+            annotation_import, descriptor = resolved
+            if not descriptor.normalize_constraints or self.__has_import_override(
+                annotation_import, descriptor.constructor_import
+            ):
+                continue
+            if descriptor.recipe is not DefaultValueRecipe.Decimal:  # pragma: no cover - future backend recipe
+                continue
+            kwargs = data_type.kwargs
+            for key, value in kwargs.items():
+                if not isinstance(value, Decimal):
+                    continue
+                if kwargs is data_type.kwargs:
+                    kwargs = kwargs.copy()
+                kwargs[key] = PythonRuntimeExpression.from_import_call(
+                    descriptor.constructor_import,
+                    repr(str(value)),
+                    value=str(value),
+                )
+            if kwargs is data_type.kwargs:
+                continue
+            data_type.kwargs = kwargs
+            runtime_imports = data_type.runtime_expression_imports
+            data_type._set_runtime_expression_imports((*runtime_imports, descriptor.constructor_import))  # noqa: SLF001
+            self._register_runtime_expression()
+
+    def __resolve_default_value_descriptor(self, data_type: DataType) -> tuple[Import, DefaultValueDescriptor] | None:
+        """Return a backend-declared scalar descriptor and its emitted annotation import."""
+        if (scalar_data_type := _resolve_default_scalar_data_type(data_type)) is None:
+            return None
+        if (annotation_import := scalar_data_type.import_) is None:
+            return None
+        if (descriptor := self.data_type_manager.get_default_value_descriptor(scalar_data_type)) is None:
+            return None
+        return annotation_import, descriptor
+
+    def __deserialize_default_value(
+        self,
+        model: DataModel,
+        field: DataModelFieldBase,
+        *,
+        can_retain_cache: bool,
+    ) -> bool:
+        """Deserialize one backend-declared scalar default or record its warning."""
+        if (
+            not model.SUPPORTS_DESERIALIZED_DEFAULT_VALUES
+            or field.has_default_factory
+            or isinstance(field.default, (PythonCode, PythonRuntimeExpression))
+        ):
+            return False
+        if (resolved := self.__resolve_default_value_descriptor(field.data_type)) is None:
+            return False
+        annotation_import, descriptor = resolved
+        if self.__has_import_override(annotation_import, descriptor.constructor_import):
+            return False
+        match descriptor.recipe:
+            case DefaultValueRecipe.Decimal:
+                return self.__deserialize_decimal_default(
+                    model,
+                    field,
+                    descriptor,
+                    can_retain_cache=can_retain_cache,
+                )
+        return False  # pragma: no cover - future backend recipe
+
+    def __deserialize_decimal_default(
+        self,
+        model: DataModel,
+        field: DataModelFieldBase,
+        descriptor: DefaultValueDescriptor,
+        *,
+        can_retain_cache: bool,
+    ) -> bool:
+        """Deserialize one Decimal recipe after backend classification."""
+        default_type = type(field.default)
+        if default_type.__module__ == "decimal" and default_type.__name__ == "Decimal":
+            # Retain the constructor identity for alias resolution.
+            value = str(field.default)
+        elif descriptor.option_kind not in self.deserialize_default_value_types:
+            self.__record_decimal_default_warning(model, field)
+            return False
+        else:
+            from decimal import Decimal, InvalidOperation  # noqa: PLC0415
+
+            try:
+                value = str(Decimal(str(field.default)))
+            except (InvalidOperation, TypeError, ValueError):
+                self.__record_decimal_default_warning(model, field)
+                return False
+        field.default = PythonRuntimeExpression.from_import_call(
+            descriptor.constructor_import, repr(value), value=value
+        )
+        field._set_runtime_expression_imports((descriptor.constructor_import,))  # noqa: SLF001
+        self._register_runtime_expression()
+        _clear_model_imports_cache_if_retained(model, can_retain_cache=can_retain_cache)
+        return True
+
+    def __has_import_override(self, *imports: Import) -> bool:
+        """Avoid changing generated defaults when an import policy redirects their bindings."""
+        if not self._import_overrides:
+            return False
+        return any(self._import_overrides.get(import_.import_, import_.from_) != import_.from_ for import_ in imports)
+
+    def __record_decimal_default_warning(self, model: DataModel, field: DataModelFieldBase) -> None:
+        """Record a bounded example set without retaining every affected field."""
+        self._decimal_default_warning_count += 1
+        examples = self._decimal_default_warning_examples
+        if examples is None:
+            self._decimal_default_warning_examples = [f"{model.class_name}.{field.name or '<root>'}"]
+        elif len(examples) < _DECIMAL_WARNING_EXAMPLE_LIMIT:
+            examples.append(f"{model.class_name}.{field.name or '<root>'}")
+
+    def __warn_about_decimal_defaults(self) -> None:
+        """Emit one actionable warning for all Decimal defaults in this generation."""
+        if not (count := self._decimal_default_warning_count):
+            return
+        examples = ", ".join(self._decimal_default_warning_examples or ())
+        remainder = (
+            f" and {count - len(self._decimal_default_warning_examples or ())} more"
+            if count > _DECIMAL_WARNING_EXAMPLE_LIMIT
+            else ""
+        )
+        plural = "s" if count != 1 else ""
+        verb = "were" if count != 1 else "was"
+        if DefaultValueType.Decimal in self.deserialize_default_value_types:
+            message = (
+                f"{count} Decimal default value{plural} could not be deserialized and {verb} kept serialized "
+                f"to keep generated modules importable: {examples}{remainder}."
+            )
+        else:
+            message = (
+                f"{count} Decimal default value{plural} {verb} emitted as serialized data instead of Decimal: "
+                f"{examples}{remainder}. Generated output is unchanged. "
+                "Use --deserialize-default-values decimal to enable Decimal deserialization."
+            )
+        self._decimal_default_warning_count = 0
+        self._decimal_default_warning_examples = None
+        warn(message, DefaultValueTypeWarning, stacklevel=2)
 
     def _apply_inherited_field_default(
         self,
@@ -3911,7 +4390,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             # while constructing the class, so their forward references must stay quoted.
             process_all_fields = is_type_alias_or_root or not use_deferred_annotations
             if not process_all_fields and not any(
-                getattr(field, "is_pydantic_extra_field", False) for field in model.fields
+                field.requires_immediate_forward_reference_resolution for field in model.fields
             ):
                 continue
             if isinstance(model, TypeStatement):
@@ -3919,7 +4398,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
 
             has_aliased_forward_ref = False
             for field in model.fields:
-                if not process_all_fields and not getattr(field, "is_pydantic_extra_field", False):
+                if not process_all_fields and not field.requires_immediate_forward_reference_resolution:
                     continue
                 for data_type in field.data_type.all_data_types:
                     if not data_type.reference:
@@ -3974,12 +4453,14 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         models: list[DataModel],
         imports: Imports,
         scoped_model_resolver: ModelResolver,
-    ) -> None:
+    ) -> bool:
+        """Rename local models shadowing imports and report whether a rename occurred."""
         imported_names = {
             imports.alias[from_][i] if i in imports.alias[from_] and i != imports.alias[from_][i] else i
             for from_, import_ in imports.items()
             for i in import_
         }
+        renamed = False
         for model in models:
             if model.class_name not in imported_names:  # pragma: no cover
                 continue
@@ -3993,6 +4474,8 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                     class_name=True,
                 ).name,
             )
+            renamed = True
+        return renamed
 
     def __alias_shadowed_imports(
         self,
@@ -4002,20 +4485,25 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         can_retain_cache: bool,
         module_imports: Imports | None = None,
     ) -> None:
-        ordinary_aliases, has_python_type = _ordinary_field_shadow_aliases(models, all_model_field_names)
-        if not has_python_type:
+        ordinary_aliases, has_python_type, has_runtime_expressions = _ordinary_field_shadow_aliases(
+            models,
+            all_model_field_names,
+        )
+        if not (has_python_type or has_runtime_expressions):
             if ordinary_aliases:
-                _apply_python_type_import_aliases(models, ordinary_aliases, can_retain_cache=can_retain_cache)
+                _apply_structured_import_aliases(models, ordinary_aliases, can_retain_cache=can_retain_cache)
             return
-        self._has_bound_python_types = True
-        # Keep structured annotation machinery lazy: ordinary schemas must not
+        self._has_bound_python_types = self._has_bound_python_types or has_python_type
+        if has_runtime_expressions:
+            self._register_runtime_expression()
+        # Keep structured import machinery lazy: ordinary schemas must not
         # pay its import, allocation, or module-scan cost.
         from datamodel_code_generator.parser._python_type_imports import (  # noqa: PLC0415
-            resolve_python_type_import_aliases,
+            resolve_structured_import_aliases,
         )
 
         data_types = (data_type for _, _, data_type in iter_models_field_data_types(models))
-        aliased_imports = resolve_python_type_import_aliases(
+        aliased_imports = resolve_structured_import_aliases(
             data_types,
             models,
             all_model_field_names,
@@ -4023,10 +4511,14 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         )
         if not aliased_imports:
             return
-        _apply_python_type_import_aliases(models, aliased_imports, can_retain_cache=can_retain_cache)
+        _apply_structured_import_aliases(models, aliased_imports, can_retain_cache=can_retain_cache)
         if module_imports is not None:
             for aliased_import in aliased_imports.values():
                 module_imports.apply_alias(aliased_import)
+
+    def _register_runtime_expression(self) -> None:
+        """Mark a parser-owned expression created after the initial import scan."""
+        self._has_runtime_expressions = True
 
     def __apply_generic_base_class(  # noqa: PLR0912, PLR0914, PLR0915
         self,
@@ -4536,7 +5028,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         if (
             use_deferred_annotations
             and required_paths_in_module
-            and _is_pydantic_v2_dump_resolve_reference_action(self.dump_resolve_reference_action)
+            and get_resolve_reference_action_capabilities(self.dump_resolve_reference_action).filter_forward_references
         ):
             module_positions = {m.reference.short_name: i for i, m in enumerate(models) if m.reference}
             module_model_names = set(module_positions)
@@ -4703,7 +5195,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             builtin_format_line_length=self.builtin_format_line_length,
             use_type_checking_imports=effective_use_type_checking_imports,
             defer_formatting=self.defer_formatting,
-            formatter_cwd=self._formatter_cwd,
+            formatter_cwd=self.run_context.formatter_cwd,
         )
 
     def _find_invalid_inferred_modules(  # noqa: PLR6301
@@ -5073,6 +5565,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             model_path_to_module_name=model_path_to_module_name,
             can_retain_cache=can_retain_cache,
         )
+        unused_models_start = len(unused_models)
         models = self.__process_module_models(
             models,
             unused_models=unused_models,
@@ -5083,8 +5576,12 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             use_deferred_annotations=config.use_deferred_annotations,
             can_retain_cache=can_retain_cache,
         )
+        current_unused_models: Sequence[DataModel] = ()
+        if unused_models_start != len(unused_models):
+            current_unused_models = unused_models[unused_models_start:]
         self.__finalize_module_models(
             models,
+            unused_models=current_unused_models,
             use_deferred_annotations=config.use_deferred_annotations,
             can_retain_cache=can_retain_cache,
         )
@@ -5136,7 +5633,16 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         """Apply defaults and model transforms before final type adjustments."""
         self.__set_reference_default_value_to_field(models, can_retain_cache=can_retain_cache)
         self.__reuse_model(models, require_update_action_models)
-        self.__collapse_root_models(models, unused_models, imports, scoped_model_resolver, model_path_to_module_name)
+        try:
+            self.__collapse_root_models(
+                models,
+                unused_models,
+                imports,
+                scoped_model_resolver,
+                model_path_to_module_name,
+            )
+        except RecursionError as exc:
+            raise _CollapseRootModelsRecursionError from exc
         self.__set_default_enum_member(models, can_retain_cache=can_retain_cache)
         self.__sort_models(models, imports, use_deferred_annotations=use_deferred_annotations)
         self.__change_field_name(models, can_retain_cache=can_retain_cache)
@@ -5150,6 +5656,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         self,
         models: list[DataModel],
         *,
+        unused_models: Sequence[DataModel],
         use_deferred_annotations: bool,
         can_retain_cache: bool,
     ) -> None:
@@ -5161,13 +5668,18 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             use_deferred_annotations=use_deferred_annotations,
             can_retain_cache=can_retain_cache,
         )
-        self.__set_validate_default_on_fields(models, can_retain_cache=can_retain_cache)
+        if not unused_models:
+            live_models = models
+        else:
+            unused_model_ids = {id(model) for model in unused_models}
+            live_models = [model for model in models if id(model) not in unused_model_ids]
+        self.__set_validate_default_on_fields(live_models, can_retain_cache=can_retain_cache)
         if not can_retain_cache:
             _clear_model_imports_cache(models)
 
-    def _finalize_bound_python_type_imports(self, contexts: list[ModuleContext]) -> None:
+    def _finalize_structured_imports(self, contexts: list[ModuleContext]) -> None:
         """Resolve aliases introduced after generic base classes are applied."""
-        if not self._has_bound_python_types:
+        if not (self._has_bound_python_types or self._has_runtime_expressions):
             return
         for ctx in contexts:
             all_module_fields = {field.name for model in ctx.models for field in model.fields if field.name is not None}
@@ -5181,7 +5693,45 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                 module_imports=ctx.imports,
             )
 
-    def _finalize_modules(
+    def _merge_runtime_expression_imports(  # noqa: PLR6301
+        self,
+        contexts: list[ModuleContext],
+        model_imports: dict[DataModel, tuple[Import, ...]],
+    ) -> None:
+        """Merge producer-registered imports only on the runtime-expression path."""
+        for ctx in contexts:
+            for model in ctx.models:
+                runtime_imports: list[Import] = []
+                for field in model.fields:
+                    runtime_imports.extend(field.runtime_expression_imports)
+                    for data_type in field.data_type.all_data_types:
+                        runtime_imports.extend(data_type.runtime_expression_imports)
+                if runtime_imports:
+                    model_imports[model] = (*model_imports[model], *runtime_imports)
+                    ctx.imports.append(runtime_imports)
+
+    def _prepare_schema_runtime_validation_module_code(self, contexts: list[ModuleContext]) -> None:
+        """Plan opt-in module helpers before their imports are collected."""
+        for ctx in contexts:
+            self.data_model_type.prepare_module_code(ctx.models)
+
+    def _sync_schema_runtime_validation_module_imports(  # noqa: PLR6301
+        self,
+        contexts: list[ModuleContext],
+        model_imports: dict[DataModel, tuple[Import, ...]],
+    ) -> None:
+        """Merge imports added by module planning into finalized module imports.
+
+        This remains an instance method because ``snooper_to_methods`` does not
+        preserve inherited static methods on parser subclasses.
+        """
+        for ctx in contexts:
+            for model in ctx.models:
+                prepared_imports = model.imports
+                ctx.imports.append(import_ for import_ in prepared_imports if import_ not in model_imports[model])
+                model_imports[model] = prepared_imports
+
+    def _finalize_modules(  # noqa: PLR0912
         self,
         contexts: list[ModuleContext],
         unused_models: list[DataModel],
@@ -5192,7 +5742,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         all_models = [model for ctx in contexts for model in ctx.models]
         self.__mark_set_item_models_hashable(all_models)
         self.__apply_generic_base_class(contexts)
-        self._finalize_bound_python_type_imports(contexts)
+        self._finalize_structured_imports(contexts)
         model_imports = {model: model.imports for ctx in contexts for model in ctx.models}
 
         for ctx in contexts:
@@ -5206,30 +5756,34 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                 imports.remove(model_imports.get(unused_model, unused_model.imports))
                 models.remove(unused_model)
 
+        if self.generate_schema_validators:
+            self._prepare_schema_runtime_validation_module_code(contexts)
+            self._sync_schema_runtime_validation_module_imports(contexts, model_imports)
+
+        if self._has_runtime_expressions:
+            self._merge_runtime_expression_imports(contexts, model_imports)
+
         for ctx in contexts:
             used_names = self._collect_used_names_from_models(ctx.models, model_imports)
             ctx.imports.remove_unused(used_names)
 
         for ctx in contexts:
-            # If any model in this module needs typing_extensions.TypedDict (e.g. for PEP 728
-            # closed/extra_items backport), remove typing.TypedDict to avoid duplicate imports.
-            if (
-                any(IMPORT_TYPED_DICT_BACKPORT in model_imports[model] for model in ctx.models)
-                and IMPORT_TYPED_DICT_BACKPORT.import_ in ctx.imports.get(IMPORT_TYPED_DICT_BACKPORT.from_, set())
-                and IMPORT_TYPED_DICT.import_ in ctx.imports.get(IMPORT_TYPED_DICT.from_, set())
-            ):
-                while ctx.imports.counter.get((IMPORT_TYPED_DICT.from_, IMPORT_TYPED_DICT.import_), 0) > 0:
-                    ctx.imports.remove(IMPORT_TYPED_DICT)
+            self.data_model_type.resolve_module_import_conflicts(ctx.models, model_imports, ctx.imports)
 
+        renamed_models = False
         for ctx in contexts:
-            self.__change_imported_model_name(ctx.models, ctx.imports, ctx.scoped_model_resolver)
-            self.__set_validate_default_on_fields(
-                ctx.models,
-                can_retain_cache=_can_retain_model_imports_cache(
-                    ctx.models,
-                    configured_types_are_builtin=self._configured_generation_types_are_builtin,
-                ),
+            renamed_models = (
+                self.__change_imported_model_name(ctx.models, ctx.imports, ctx.scoped_model_resolver) or renamed_models
             )
+        if self.generate_schema_validators and renamed_models:
+            # Helper-name reservations include referenced models from other modules,
+            # so a rare import collision must invalidate every module plan.
+            for ctx in contexts:
+                self.data_model_type.invalidate_module_code_cache(ctx.models)
+            self._prepare_schema_runtime_validation_module_code(contexts)
+            # Renaming only changes synthetic helper names; capabilities and their
+            # import set stay invariant. Keep snapshots synchronized defensively.
+            self._sync_schema_runtime_validation_module_imports(contexts, model_imports)
 
         match self._import_overrides:
             case None:
@@ -5265,7 +5819,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         for module_index, ctx in enumerate(contexts):
             _set_nested_model_default_factory_order(ctx.models, module_index, recursive_paths_by_model)
 
-    def _generate_module_output(  # noqa: PLR0913, PLR0917
+    def _generate_module_output(  # noqa: PLR0912, PLR0913, PLR0917
         self,
         ctx: ModuleContext,
         config: ParseConfig,
@@ -5306,10 +5860,20 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
 
             module_code = self.data_model_type.render_module_code(ctx.models)
             if module_code:
-                result += [module_code, ""]
-
-            code = dump_templates(ctx.models)
-            result += [code]
+                module_code_insertion_index = self.data_model_type.get_module_code_insertion_index(ctx.models)
+                if module_code_insertion_index:
+                    result += [
+                        dump_templates(ctx.models[:module_code_insertion_index]),
+                        "",
+                        "",
+                        module_code,
+                        "",
+                        dump_templates(ctx.models[module_code_insertion_index:]),
+                    ]
+                else:
+                    result += [module_code, "", dump_templates(ctx.models)]
+            else:
+                result += [dump_templates(ctx.models)]
 
             result += self.__get_resolve_reference_action_parts(
                 ctx.models,
@@ -5448,12 +6012,24 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         self.model_resolver.references.clear()
         self._reset_local_source_cache()
 
+    def dispose(self) -> None:
+        """Release parser-owned resources after a facade-managed run."""
+        self._dispose()
+
     def _reset_local_source_cache(self) -> None:
         self._cache_local_sources = False
         self._local_source_cache = None
 
     def _report_parse_diagnostics(self) -> None:
         """Report diagnostics collected while parsing the input schema."""
+
+    def _run_with_suppressed_warnings(self, callback: Callable[[], None]) -> None:  # noqa: PLR6301
+        """Invoke one retry hook without repeating user-visible warnings."""
+        import warnings  # noqa: PLC0415
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            callback()
 
     def parse(  # noqa: PLR0913, PLR0917
         self,
@@ -5496,11 +6072,19 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         self._set_typed_extra_annotation_mode(
             use_deferred_annotations=self._uses_deferred_annotations(with_import, disable_future_imports)
         )
+        run_context = self._run_context
+        suppress_parse_warnings = run_context is not None and run_context.suppress_parse_warnings
         try:
-            self.parse_raw()
+            if suppress_parse_warnings:
+                self._run_with_suppressed_warnings(self.parse_raw)
+            else:
+                self.parse_raw()
         finally:
             self._close_http_fetch_session()
-        self._report_parse_diagnostics()
+        if suppress_parse_warnings:
+            self._run_with_suppressed_warnings(self._report_parse_diagnostics)
+        else:
+            self._report_parse_diagnostics()
 
         config = self._prepare_parse_config(
             with_import,
@@ -5566,7 +6150,9 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                 parser_config.alias_generator,
                 parser_config.custom_class_name_generator,
                 parser_config.dump_resolve_reference_action is not None
-                and not _is_pydantic_v2_dump_resolve_reference_action(parser_config.dump_resolve_reference_action),
+                and not get_resolve_reference_action_capabilities(
+                    parser_config.dump_resolve_reference_action
+                ).generated_formatter_safe,
                 parser_config.type_mappings,
                 parser_config.type_overrides,
                 parser_config.import_overrides,
@@ -5604,6 +6190,9 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         module_to_import: dict[ModulePath, Imports] = {}
         contexts: list[ModuleContext] = []
 
+        if self.collapse_root_models and self.run_context.preserve_circular_root_models:
+            self.__set_circular_root_model_paths(module_models)
+
         for module_, models in module_models:
             ctx = self._process_single_module(
                 module_,
@@ -5619,6 +6208,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             contexts.append(ctx)
 
         self._finalize_modules(contexts, unused_models, model_to_module_models, module_to_import)
+        self.__warn_about_decimal_defaults()
         if self.use_default_factory_for_optional_nested_models:
             self._set_nested_model_default_factory_metadata(contexts, require_update_action_models)
 

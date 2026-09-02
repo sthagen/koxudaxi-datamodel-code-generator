@@ -55,6 +55,12 @@ match schema_output_name:
         sys.stdout.write(f"{structured_output_json_schema()}\n")
         sys.exit(0)
 
+# Fast path for Agent Skill installation (avoid importing generation dependencies)
+if any(arg == "--install-skill" or arg.startswith("--install-skill=") for arg in sys.argv[1:]):  # pragma: no cover
+    from datamodel_code_generator._agent_skill_cli import run_agent_skill_installer
+
+    sys.exit(run_agent_skill_installer(sys.argv[1:]))
+
 # Fast path for prompt helper outputs
 if any(
     arg.startswith(("--generate-prompt", "--output-format-json-schema=")) or arg == "--output-format-json-schema"
@@ -183,6 +189,9 @@ EXCLUDED_CONFIG_OPTIONS: frozenset[str] = frozenset({
     "generate_cli_command",
     "generate_prompt",
     "ignore_pyproject",
+    "install_skill",
+    "skill_scope",
+    "overwrite_skill",
     "profile",
     "job",
     "all_jobs",
@@ -453,11 +462,13 @@ def _get_config_class() -> type[Config]:
 
         @model_validator(mode="before")
         @classmethod
-        def validate_additional_imports(cls, values: dict[str, Any]) -> dict[str, Any]:
+        def split_additional_imports(cls, values: dict[str, Any]) -> dict[str, Any]:
             """Validate and split additional imports."""
-            additional_imports = values.get("additional_imports")
-            if additional_imports is not None:
-                values["additional_imports"] = additional_imports.split(",")
+            match values.get("additional_imports"):
+                case str() as additional_imports:
+                    values["additional_imports"] = [
+                        import_path for item in additional_imports.split(",") if (import_path := item.strip())
+                    ]
             return values
 
         @model_validator(mode="before")
@@ -787,7 +798,12 @@ def _extract_additional_imports(extra_template_data: defaultdict[str, dict[str, 
                     additional_imports.append(imports.strip())
             elif isinstance(imports, list):  # pragma: no branch
                 additional_imports.extend(item.strip() for item in imports if isinstance(item, str) and item.strip())
-    return additional_imports
+    if not additional_imports:
+        return additional_imports
+
+    from datamodel_code_generator.base_config import _validate_additional_import_paths  # noqa: PLC0415
+
+    return _validate_additional_import_paths(additional_imports) or []
 
 
 def _resolve_profile_extends(
@@ -2671,6 +2687,20 @@ def _main(  # noqa: PLR0911, PLR0912, PLR0914, PLR0915
 
     arg_parser.parse_args(args, namespace=namespace)
 
+    if (agent := namespace.install_skill) is not None:
+        from datamodel_code_generator._agent_skill_cli import install_agent_skill_command  # noqa: PLC0415
+
+        return Exit(
+            install_agent_skill_command(
+                agent,
+                namespace.skill_scope or "project",
+                overwrite=namespace.overwrite_skill,
+            )
+        )
+    if namespace.skill_scope is not None or namespace.overwrite_skill:
+        print("Error: --skill-scope and --overwrite-skill require --install-skill", file=sys.stderr)  # noqa: T201
+        return Exit.ERROR
+
     if namespace.version:
         from datamodel_code_generator import get_version  # noqa: PLC0415
 
@@ -3066,7 +3096,11 @@ def _main(  # noqa: PLR0911, PLR0912, PLR0914, PLR0915
     else:
         extra_template_data = cast("defaultdict[str, dict[str, Any]]", config.extra_template_data)
         # Extract additional_imports from extra_template_data entries and merge with config
-        additional_imports_from_template_data = _extract_additional_imports(extra_template_data)
+        try:
+            additional_imports_from_template_data = _extract_additional_imports(extra_template_data)
+        except Error as e:
+            print(str(e), file=sys.stderr)  # noqa: T201
+            return finish_watch_remote_lock_intent(Exit.ERROR)
         if additional_imports_from_template_data:
             if config.additional_imports is None:
                 config.additional_imports = additional_imports_from_template_data

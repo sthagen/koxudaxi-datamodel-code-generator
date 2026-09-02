@@ -127,11 +127,11 @@ datamodel-codegen \
   --input schema.json \
   --input-file-type jsonschema \
   --output-model-type pydantic_v2.BaseModel \
-  --preset standard-py312-20260619 \
+  --preset standard-py312-20260826 \
   --output model.py
 ```
 
-This quick start uses `standard-py312-20260619` as the modern Python 3.12 baseline.
+This quick start uses `standard-py312-20260826` as the modern Python 3.12 baseline.
 Preset names include the target Python version: `py312` means Python 3.12.
 
 See [CLI Reference](https://datamodel-code-generator.koxudaxi.dev/cli-reference/) for all options. See [Presets](https://datamodel-code-generator.koxudaxi.dev/presets/),
@@ -139,7 +139,7 @@ See [CLI Reference](https://datamodel-code-generator.koxudaxi.dev/cli-reference/
 [`--output-model-type`](https://datamodel-code-generator.koxudaxi.dev/cli-reference/model-customization/#output-model-type) for this command.
 
 For more schema-aware output that preserves schema-authored names, reuses models, and embeds generated
-documentation, use [`practical-py312-20260619`](https://datamodel-code-generator.koxudaxi.dev/presets/#practical-py312-20260619).
+documentation, use [`practical-py312-20260826`](https://datamodel-code-generator.koxudaxi.dev/presets/#practical-py312-20260826).
 
 <details>
 <summary>Input (<code>schema.json</code>)</summary>
@@ -356,19 +356,18 @@ This repository includes an experimental Agent Skill that teaches compatible cod
 
 See [Coding Agent Skill](docs/coding-agent-skill.md) for detailed guidance and troubleshooting.
 
-Install the directory for your agent:
+Install the bundled skill directly from the CLI:
 
 ```bash
 # Codex, project-local
-mkdir -p .agents/skills
-cp -R skills/datamodel-code-generator .agents/skills/datamodel-code-generator
+datamodel-codegen --install-skill codex
 
 # Claude Code, project-local
-mkdir -p .claude/skills
-cp -R skills/datamodel-code-generator .claude/skills/datamodel-code-generator
+datamodel-codegen --install-skill claude-code
 ```
 
-For a personal install, copy the same directory to `$HOME/.agents/skills/datamodel-code-generator/` for Codex or `~/.claude/skills/datamodel-code-generator/` for Claude Code.
+For a personal install, add `--skill-scope user`. Existing skills are preserved
+unless you explicitly add `--overwrite-skill`.
 
 Check your agent's current documentation for exact search paths.
 

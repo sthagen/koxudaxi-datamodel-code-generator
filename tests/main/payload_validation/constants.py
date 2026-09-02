@@ -69,14 +69,34 @@ PAYLOAD_FORMAT_ENUMS = {
     "ipv6": ["::1"],
     "uuid": ["00000000-0000-4000-8000-000000000000"],
 }
+SERIALIZED_DECIMAL_DEFAULT_PAYLOAD_EXCLUSION_REASON = (
+    "focused Decimal-default e2e fixture intentionally emits a compatibility warning in default generation"
+)
 EXCLUDED_FILES: dict[str, str] = {
     "jsonschema/allof_class_hierarchy.json": "intentionally invalid JSON fixture",
+    "jsonschema/collapse_root_models_decimal_defaults.json": SERIALIZED_DECIMAL_DEFAULT_PAYLOAD_EXCLUSION_REASON,
     "jsonschema/non_dict_files/list_only.json": "input is JSON data, not a JSON Schema document",
     "jsonschema/non_dict_files/list_only.yaml": "input is YAML data, not a JSON Schema document",
     "jsonschema/non_dict_files/whitespace_only.yaml": "empty YAML fixture",
     "jsonschema/non_json_object.json": "input is JSON data, not a JSON Schema document",
     "jsonschema/null.json": "intentionally invalid JSON fixture",
     "jsonschema/ref_to_json_list/list.json": "referenced JSON data list, not a schema document",
+    "jsonschema/schema_validators_multiple_aliases_property_count.json": (
+        "opt-in schema-validator e2e fixture; payload validation intentionally uses default generation"
+    ),
+    "jsonschema/serialized_decimal_default_alias.json": SERIALIZED_DECIMAL_DEFAULT_PAYLOAD_EXCLUSION_REASON,
+    "jsonschema/serialized_decimal_default_alias_from_import.json": SERIALIZED_DECIMAL_DEFAULT_PAYLOAD_EXCLUSION_REASON,
+    "jsonschema/serialized_decimal_default_alias_from_type.json": SERIALIZED_DECIMAL_DEFAULT_PAYLOAD_EXCLUSION_REASON,
+    "jsonschema/serialized_decimal_default_collision.json": SERIALIZED_DECIMAL_DEFAULT_PAYLOAD_EXCLUSION_REASON,
+    "jsonschema/serialized_decimal_default_condecimal_collision.json": (
+        SERIALIZED_DECIMAL_DEFAULT_PAYLOAD_EXCLUSION_REASON
+    ),
+    "jsonschema/serialized_decimal_default_scope.json": SERIALIZED_DECIMAL_DEFAULT_PAYLOAD_EXCLUSION_REASON,
+    "jsonschema/serialized_decimal_defaults.json": SERIALIZED_DECIMAL_DEFAULT_PAYLOAD_EXCLUSION_REASON,
+    "jsonschema/unique_items_prefix_items_draft7.json": (
+        "opt-in schema-validator dialect e2e fixture; Draft 7 ignores prefixItems, "
+        "which hypothesis-jsonschema cannot satisfy for generic payload validation"
+    ),
     "jsonschema/unknown_format.json": "unknown format fixture intentionally emits a generator warning",
     "openapi/complex_reference.json": "intentionally invalid JSON fixture",
     "openapi/list.json": "input is JSON data, not an OpenAPI document",
@@ -178,6 +198,9 @@ ROUND_TRIP_EXCLUDED_CASES: dict[str, str] = {
     "jsonschema/strict_types_matrix.json": (
         "pydantic serializes Decimal JSON values as strings while the source schema requires number"
     ),
+    "jsonschema/unique_items_schema_validators.json": (
+        "pydantic drops extra nested object properties while dumping, which can collapse distinct uniqueItems values"
+    ),
     "openapi/allof_array_ref_override.yaml::components.schemas.DataType": (
         "schema requires a property absent from properties, so the generated model has no field to dump"
     ),
@@ -188,6 +211,15 @@ ROUND_TRIP_EXCLUDED_CASES: dict[str, str] = {
 PYDANTIC_V2_FULL_PAYLOAD_RUNTIME_MIN_VERSION = "2.5.0"
 PYDANTIC_V2_0_RUNTIME_MAX_VERSION = "2.1.0"
 PYDANTIC_V2_MISSING_SENTINEL_RUNTIME_MIN_VERSION = "2.12.0"
+PYDANTIC_V2_TYPE_ALIAS_RUNTIME_MIN_VERSION = "2.10.0"
+PYDANTIC_V2_FLOAT_MULTIPLE_OF_RUNTIME_MIN_VERSION = "2.5.2"
+PYDANTIC_V2_FLOAT_MULTIPLE_OF_CASE_IDS = (
+    "jsonschema/native_decimal_default_constrained.json",
+    "jsonschema/serialized_decimal_default_multiple_of.json",
+)
+PYDANTIC_V2_FLOAT_MULTIPLE_OF_EXCLUSION_REASON = (
+    "Pydantic before 2.5.2 can reject schema-valid float multipleOf values near float boundaries"
+)
 PYDANTIC_V2_LEGACY_LOOKAROUND_EXCLUDED_CASES: dict[str, str] = {
     "jsonschema/lookaround_anyof_nullable.json": (
         "Pydantic before 2.5.0 cannot apply regex_engine='python-re' to lookaround pattern validators"
@@ -204,6 +236,9 @@ PYDANTIC_V2_LEGACY_LOOKAROUND_EXCLUDED_CASES: dict[str, str] = {
     "jsonschema/nested_lookaround_array.json": (
         "Pydantic before 2.5.0 cannot apply regex_engine='python-re' to nested lookaround pattern validators"
     ),
+    "jsonschema/schema_validators_runtime_root_cross_module/a.json": (
+        "Pydantic before 2.5.0 cannot apply regex_engine='python-re' to lookaround pattern validators"
+    ),
     "openapi/pattern_lookaround.yaml::components.schemas.info": (
         "Pydantic before 2.5.0 cannot apply regex_engine='python-re' to OpenAPI lookaround pattern validators"
     ),
@@ -213,6 +248,7 @@ PYDANTIC_V2_DATACLASS_LEGACY_LOOKAROUND_CASE_IDS = (
     "jsonschema/lookaround_dict.json",
     "jsonschema/lookaround_union_types.json",
     "jsonschema/nested_lookaround_array.json",
+    "jsonschema/schema_validators_runtime_root_cross_module/a.json",
 )
 
 
@@ -244,6 +280,20 @@ PYDANTIC_V2_LEGACY_RUNTIME_EXCLUDED_CASES: dict[PayloadBackend, dict[str, str]] 
         **_pydantic_v2_legacy_lookaround_excluded_cases(PayloadBackend.PYDANTIC_V2_DATACLASS),
         "jsonschema/use_decimal_for_multiple_of.json": (
             "Pydantic before 2.5.0 can reject schema-valid dataclass float multipleOf values near float boundaries"
+        ),
+    },
+}
+PYDANTIC_V2_FLOAT_MULTIPLE_OF_RUNTIME_EXCLUDED_CASES: dict[PayloadBackend, dict[str, str]] = {
+    backend: dict.fromkeys(
+        PYDANTIC_V2_FLOAT_MULTIPLE_OF_CASE_IDS,
+        PYDANTIC_V2_FLOAT_MULTIPLE_OF_EXCLUSION_REASON,
+    )
+    for backend in (PayloadBackend.PYDANTIC_V2, PayloadBackend.PYDANTIC_V2_DATACLASS)
+}
+PYDANTIC_V2_TYPE_ALIAS_RUNTIME_EXCLUDED_CASES: dict[PayloadBackend, dict[str, str]] = {
+    PayloadBackend.PYDANTIC_V2_DATACLASS: {
+        "jsonschema/false_reference_fast_path.json": (
+            "Pydantic before 2.10.0 cannot fill nested TypeAliasType aliases while building dataclass schemas"
         ),
     },
 }
