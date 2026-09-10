@@ -121,7 +121,7 @@ jobs:
       - name: Run Claude Code Analysis
         id: claude
         timeout-minutes: 10
-        uses: anthropics/claude-code-action/base-action@e5ad3c7725bc2459721893f88879fef9dbcf97b0 # v1.0.202
+        uses: anthropics/claude-code-action/base-action@9c5ddab2e6d17b83ea679153b31f1d5f023cf636 # v1.0.217
         env:
           CLAUDE_WORKING_DIR: ${{ steps.pr-diff.outputs.claude_working_dir }}
         with:
