@@ -2,7 +2,18 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any
+
+
+def copy_extra_template_data(data: defaultdict[str, dict[str, Any]]) -> defaultdict[str, dict[str, Any]]:
+    """Detach model template dictionaries with one memo for the parser lifetime."""
+    memo: dict[int, Any] = {}
+    factory = data.default_factory if isinstance(data, defaultdict) else dict
+    detached: defaultdict[str, dict[str, Any]] = defaultdict(factory)
+    memo[id(data)] = detached
+    detached.update((key, copy_template_data(value, memo)) for key, value in data.items())
+    return detached
 
 
 def copy_template_data(value: Any, memo: dict[int, Any]) -> Any:
