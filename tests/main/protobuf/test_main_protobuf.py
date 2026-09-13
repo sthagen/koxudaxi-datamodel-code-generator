@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from copy import deepcopy
 from enum import Enum
 from typing import TYPE_CHECKING, Any, cast
@@ -14,7 +15,7 @@ import yaml
 from google.protobuf import descriptor_pool, json_format, message_factory
 from pydantic import ValidationError
 
-from datamodel_code_generator import DataModelType, Error, InputFileType, generate, infer_input_type
+from datamodel_code_generator import DataModelType, Error, InputFileType, SchemaParseError, generate, infer_input_type
 from datamodel_code_generator.__main__ import Exit
 from datamodel_code_generator.parser.protobuf import WELL_KNOWN_SCHEMAS, ProtobufParser, convert_protobuf_schema_data
 from tests.conftest import assert_mutable_copy_is_isolated, assert_output
@@ -342,6 +343,27 @@ def test_main_protobuf_parse_error(capsys: pytest.CaptureFixture[str], tmp_path:
         expected_stderr_contains="Invalid Protocol Buffers schema",
         output_should_not_exist=True,
     )
+
+
+@pytest.mark.allow_direct_assert
+@pytest.mark.parametrize("absolute", [False, True])
+def test_protobuf_weak_import_cannot_escape_temporary_directory(
+    absolute: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Reject weak imports that would write outside their temporary sandbox."""
+    temp_root = tmp_path / "temporary"
+    temp_root.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(temp_root))
+    victim = tmp_path / "victim.txt"
+    victim.write_text("preserve me", encoding="utf-8")
+    import_path = str(victim) if absolute else "../../victim.txt"
+    input_path = tmp_path / "malicious.proto"
+    input_path.write_text(f'syntax = "proto3";\nimport weak "{import_path}";\nmessage Example {{}}\n', encoding="utf-8")
+
+    with pytest.raises(SchemaParseError, match="Invalid Protocol Buffers weak import path"):
+        ProtobufParser(input_path)._compile_descriptor_set()
+
+    assert victim.read_text(encoding="utf-8") == "preserve me"
 
 
 def test_main_protobuf_invalid_schema_version(capsys: pytest.CaptureFixture[str], output_file: Path) -> None:

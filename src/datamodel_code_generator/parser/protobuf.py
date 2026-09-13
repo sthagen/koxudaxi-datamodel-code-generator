@@ -324,16 +324,21 @@ class _ProtoInputPreparer:
 
     def __enter__(self) -> tuple[list[Path], list[Path], frozenset[str]]:
         self.temp_dir = tempfile.TemporaryDirectory()
-        temp_path = Path(self.temp_dir.name)
-        include_paths = [temp_path, self.parser.base_path]
-        input_files = self._input_files(temp_path)
-        input_file_names = frozenset(path.relative_to(temp_path).as_posix() for path in input_files)
-        include_paths.extend(self._additional_include_paths(input_files))
-        self.weak_import_dir = temp_path / "__weak_imports__"
-        self._write_missing_weak_imports(input_files, include_paths)
-        if self.weak_import_dir.exists():
-            include_paths.append(self.weak_import_dir)
-        return input_files, include_paths, input_file_names
+        try:
+            temp_path = Path(self.temp_dir.name)
+            include_paths = [temp_path, self.parser.base_path]
+            input_files = self._input_files(temp_path)
+            input_file_names = frozenset(path.relative_to(temp_path).as_posix() for path in input_files)
+            include_paths.extend(self._additional_include_paths(input_files))
+            self.weak_import_dir = temp_path / "__weak_imports__"
+            self._write_missing_weak_imports(input_files, include_paths)
+            if self.weak_import_dir.exists():
+                include_paths.append(self.weak_import_dir)
+        except Exception:
+            self.temp_dir.cleanup()
+            raise
+        else:
+            return input_files, include_paths, input_file_names
 
     def _additional_include_paths(self, input_files: Sequence[Path]) -> list[Path]:
         paths = {path.parent for path in input_files}
@@ -382,13 +387,17 @@ class _ProtoInputPreparer:
 
     def _write_missing_weak_imports(self, input_files: Iterable[Path], include_paths: Sequence[Path]) -> None:
         assert self.weak_import_dir is not None
+        weak_import_dir = self.weak_import_dir.resolve()
         for input_file in input_files:
             text = input_file.read_text(encoding=self.parser.encoding)
             syntax = 'syntax = "proto3";\n' if 'syntax = "proto3"' in text else 'syntax = "proto2";\n'
             for import_path in WEAK_IMPORT_PATTERN.findall(text):
+                stub = (weak_import_dir / import_path).resolve()
+                if not stub.is_relative_to(weak_import_dir):
+                    msg = f"Invalid Protocol Buffers weak import path: {import_path!r}"
+                    raise SchemaParseError(msg)
                 if any((include_path / import_path).exists() for include_path in include_paths):
                     continue
-                stub = self.weak_import_dir / import_path
                 stub.parent.mkdir(parents=True, exist_ok=True)
                 stub.write_text(syntax, encoding=self.parser.encoding)
 
