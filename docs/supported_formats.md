@@ -185,7 +185,7 @@ The tables below are generated from the input type enum, parser routing code, sc
 | Draft 6 | [json-schema.org/draft-06](https://json-schema.org/draft-06/json-schema-release-notes) | `$id`, const, boolean schemas |
 | Draft 7 | [json-schema.org/draft-07](https://json-schema.org/draft-07/json-schema-release-notes) | if/then/else, readOnly/writeOnly |
 | 2019-09 | [json-schema.org/draft/2019-09](https://json-schema.org/draft/2019-09/release-notes) | `$defs`, `$anchor`, `$recursiveRef`/`$recursiveAnchor` |
-| 2020-12 | [json-schema.org/draft/2020-12](https://json-schema.org/draft/2020-12/release-notes) | `prefixItems`, null in type arrays, `$dynamicRef`/`$dynamicAnchor` |
+| 2020-12 | [json-schema.org/draft/2020-12](https://json-schema.org/draft/2020-12/release-notes) | `prefixItems`, `$dynamicRef`/`$dynamicAnchor` |
 
 ### Feature Compatibility Matrix
 
@@ -196,7 +196,7 @@ The tables below are generated from the input type enum, parser routing code, sc
 | Definitions key | `definitions` | `definitions` | `definitions` | `$defs`* | `$defs` |
 | **Type Features** |
 | Boolean schemas | - | Yes | Yes | Yes | Yes |
-| Null in type array | - | - | - | - | Yes |
+| Null in type array | Yes | Yes | Yes | Yes | Yes |
 | const | - | Yes | Yes | Yes | Yes |
 | **Numeric Constraints** |
 | exclusiveMinimum (number) | - (boolean) | Yes | Yes | Yes | Yes |
@@ -223,6 +223,10 @@ datamodel-code-generator automatically detects the JSON Schema version:
 1. **Explicit `$schema` field**: If present, the version is detected from the URL pattern
 2. **Heuristics**: If no `$schema`, presence of `$defs` suggests 2020-12, `definitions` suggests Draft 7
 3. **Fallback**: Draft 7 (backward-compatible default)
+
+### Embedded Schema Resources
+
+Nested `$id` declarations identify embedded schema resources. References to these resources resolve within the containing document before any file or HTTP lookup. Relative references inside each resource use its own URI as their base, and JSON pointers and anchors are scoped to that resource.
 
 ## OpenAPI Version Support
 
@@ -388,7 +392,7 @@ The following features are tracked in the codebase with their implementation sta
 
 | Feature | Introduced | Status | Description |
 |---------|------------|--------|-------------|
-| `Null in type array` | 2020-12 | ✅ Supported | Allows `type: ['string', 'null']` syntax for nullable types |
+| `Null in type array` | Draft 4 or earlier | ✅ Supported | Allows `type: ['string', 'null']` syntax for nullable types |
 | `$defs` | 2019-09 | ✅ Supported | Uses `$defs` instead of `definitions` for schema definitions |
 | `prefixItems` | 2020-12 | ✅ Supported | Tuple validation using `prefixItems` keyword |
 | `Boolean schemas` | Draft 6 | ✅ Supported | Allows `true` and `false` as valid schemas |

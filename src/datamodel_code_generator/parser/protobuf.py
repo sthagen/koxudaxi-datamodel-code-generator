@@ -24,13 +24,16 @@ from datamodel_code_generator.python_literal import _safe_non_finite_float
 from datamodel_code_generator.util import record_watch_dependency
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Iterable, Iterator, Sequence
     from urllib.parse import ParseResult
 
     from datamodel_code_generator._types import ProtobufParserConfigDict
     from datamodel_code_generator.config import ProtobufParserConfig
 
-CUSTOM_OPTION_STATEMENT_PATTERN = re.compile(r"(?ms)^[ \t]*option\s+\([^)]+\)\s*=\s*.*?;")
+PROTO_TOKEN_PATTERN = re.compile(
+    r"(?P<comment>//[^\n]*|/\*[\s\S]*?(?:\*/|\Z))"
+    r"|\"(?:\\[\s\S]|[^\"\\])*\"|'(?:\\[\s\S]|[^'\\])*'|[a-zA-Z_][a-zA-Z_0-9]*|[^\s]"
+)
 WEAK_IMPORT_PATTERN = re.compile(r'^\s*import\s+weak\s+"([^"]+)"\s*;', re.MULTILINE)
 IMPORT_PATTERN = re.compile(r'^\s*import\s+(?:public\s+|weak\s+)?"([^"]+)"\s*;', re.MULTILINE)
 
@@ -191,58 +194,75 @@ def _clean_comment(comment: str) -> str:
 
 
 def _sanitize_proto_source(text: str) -> str:
-    """Drop custom option uses that do not affect model generation."""
-    text = CUSTOM_OPTION_STATEMENT_PATTERN.sub("", text)
-    return _replace_field_options(text)
-
-
-def _replace_field_options(text: str) -> str:
+    """Drop custom options while preserving comments and both string delimiters."""
+    if "(" not in text:
+        return text
+    tokens = (token for token in PROTO_TOKEN_PATTERN.finditer(text) if token.lastgroup != "comment")
     result: list[str] = []
-    index = 0
-    while index < len(text):
-        char = text[index]
-        if char != "[":
-            result.append(char)
-            index += 1
-            continue
-
-        end = _find_option_end(text, index + 1)
-        if end is None:  # pragma: no cover
-            result.append(char)
-            index += 1
-            continue
-
-        options = text[index + 1 : end]
-        if "(" not in options:
-            result.append(text[index : end + 1])
-        else:
-            default_value = _extract_default_option(options)
-            if default_value is not None:
-                result.append(f"[default = {default_value}]")
-        index = end + 1
-
+    copied = 0
+    previous = None
+    before_previous = ""
+    for token in tokens:
+        match token[0]:
+            case "[":
+                end, replacement = _replace_field_options(text, tokens, token.end())
+                if replacement is not None:
+                    result.extend((text[copied : token.start()], replacement))
+                    copied = end
+            case "(" if previous is not None and previous[0] == "option" and before_previous != "rpc":
+                depth = 0
+                for end_token in tokens:
+                    match end_token[0]:
+                        case "{" | "[":
+                            depth += 1
+                        case "}" | "]":
+                            depth -= 1
+                        case ";" if depth == 0:
+                            result.append(text[copied : previous.start()])
+                            copied = end_token.end()
+                            break
+        before_previous = previous[0] if previous is not None else ""
+        previous = token
+    if not result:
+        return text
+    result.append(text[copied:])
     return "".join(result)
 
 
-def _find_option_end(text: str, start: int) -> int | None:
-    in_quote = False
-    escaped = False
-
-    for index in range(start, len(text)):
-        char = text[index]
-        if escaped:
-            escaped = False
-            continue
-        if char == "\\" and in_quote:
-            escaped = True
-            continue
-        if char == '"':
-            in_quote = not in_quote
-            continue
-        if char == "]" and not in_quote:
-            return index
-
-    return None  # pragma: no cover
+def _replace_field_options(text: str, tokens: Iterator[re.Match[str]], start: int) -> tuple[int, str | None]:
+    """Consume a field option list, retaining its default when custom options occur."""
+    depth = 0
+    custom = False
+    name = ""
+    value_start = value_end = start
+    default = None
+    for token in tokens:
+        value = token[0]
+        if depth == 0 and value in {",", "]"}:
+            if name == "default":
+                default = (value_start, value_end)
+            if value == "]":
+                if not custom:
+                    return token.end(), None
+                replacement = f"[default = {text[default[0] : default[1]]}]" if default is not None else ""
+                return token.end(), replacement
+            name = ""
+        else:
+            if not name:
+                name = value
+                custom |= value == "("
+            elif name == "default" and value == "=":
+                value_start = value_end = token.end()
+            elif name == "default":
+                if value_start == value_end:
+                    value_start = token.start()
+                value_end = token.end()
+            match value:
+                case "(" | "{" | "[":
+                    depth += 1
+                case ")" | "}" | "]":
+                    depth -= 1
+    return start, None
 
 
 def convert_protobuf_schema_data(
@@ -285,39 +305,6 @@ def _convert_protobuf_schema_data(  # noqa: PLR0913
         encoding=encoding,
     )
     return parser._convert_to_json_schema_data(source_safe_non_finite=source_safe_non_finite)  # noqa: SLF001
-
-
-def _extract_default_option(options: str) -> str | None:
-    current: list[str] = []
-    parts: list[str] = []
-    in_quote = False
-    escaped = False
-
-    for char in options:
-        if escaped:
-            current.append(char)
-            escaped = False
-            continue
-        if char == "\\":
-            current.append(char)
-            escaped = in_quote
-            continue
-        if char == '"':
-            current.append(char)
-            in_quote = not in_quote
-            continue
-        if char == "," and not in_quote:
-            parts.append("".join(current))
-            current.clear()
-            continue
-        current.append(char)
-    parts.append("".join(current))
-
-    for part in parts:
-        name, separator, value = part.partition("=")
-        if separator and name.strip() == "default":
-            return value.strip()
-    return None
 
 
 def _comment_map(file_descriptor: Any) -> dict[tuple[int, ...], str]:
@@ -425,6 +412,7 @@ class _ProtobufDescriptorConverter:
         self.map_entries: dict[str, Any] = {}
         self.definition_keys: dict[str, str] = {}
         self.used_definition_keys: dict[str, str] = {}
+        self._referenced_standard_types: dict[str, None] | None = None
 
     def convert(self, file_descriptor_set: Any) -> dict[str, Any]:
         for file_descriptor in file_descriptor_set.file:
@@ -458,11 +446,65 @@ class _ProtobufDescriptorConverter:
                     effective_version,
                 )
 
+        if referenced := self._referenced_standard_types:
+            omitted_files = [
+                file
+                for file in file_descriptor_set.file
+                if file.name in WELL_KNOWN_PROTO_PATHS and file.name not in self.input_file_names
+            ]
+            self._convert_referenced_standard_types(omitted_files, referenced)
+
         return {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "title": "Model",
             "definitions": self.definitions,
         }
+
+    def _convert_referenced_standard_types(self, omitted_files: list[Any], referenced: dict[str, None]) -> None:
+        locations: dict[str, tuple[Any, tuple[str, ...], tuple[int, ...]]] = {}
+        for file_descriptor in omitted_files:
+            pending: list[tuple[Any, tuple[str, ...], tuple[int, ...]]] = [(file_descriptor, (), ())]
+            while pending:
+                container, parents, path = pending.pop()
+                for index, enum_descriptor in enumerate(container.enum_type):
+                    full_name = _full_name(file_descriptor.package, parents, enum_descriptor.name)
+                    locations[full_name] = (file_descriptor, parents, (*path, 4 if parents else 5, index))
+                messages = container.nested_type if parents else container.message_type
+                for index, message in enumerate(messages):
+                    full_name = _full_name(file_descriptor.package, parents, message.name)
+                    message_path = (*path, 3 if parents else 4, index)
+                    locations[full_name] = (file_descriptor, parents, message_path)
+                    pending.append((message, (*parents, message.name), message_path))
+        comments_by_file: dict[str, dict[tuple[int, ...], str]] = {}
+        while referenced:
+            pending_names = tuple(referenced)
+            referenced.clear()
+            for full_name in pending_names:
+                if self._definition_key(full_name) in self.definitions:
+                    continue
+                file_descriptor, parents, path = locations[full_name]
+                if file_descriptor.name not in comments_by_file:
+                    comments_by_file[file_descriptor.name] = _comment_map(file_descriptor)
+                comments = comments_by_file[file_descriptor.name]
+                if full_name in self.enums:
+                    self._convert_enum(self.enums[full_name], full_name, comments, path)
+                else:
+                    self._convert_message(
+                        self.messages[full_name],
+                        file_descriptor.package,
+                        parents,
+                        comments,
+                        path,
+                        self._effective_version(file_descriptor),
+                        include_nested=False,
+                    )
+
+    def _reference_schema(self, full_name: str) -> dict[str, Any]:
+        if full_name.startswith("google.protobuf."):
+            if self._referenced_standard_types is None:
+                self._referenced_standard_types = {}
+            self._referenced_standard_types.setdefault(full_name, None)
+        return {"$ref": f"#/definitions/{self._definition_key(full_name)}"}
 
     def _collect_symbols(self, messages: Iterable[Any], package: str, parents: tuple[str, ...]) -> None:
         for message_descriptor in messages:
@@ -538,28 +580,31 @@ class _ProtobufDescriptorConverter:
         comments: dict[tuple[int, ...], str],
         path: tuple[int, ...],
         syntax: ProtobufVersion,
+        *,
+        include_nested: bool = True,
     ) -> None:
         full_name = _full_name(package, parents, message_descriptor.name)
         if message_descriptor.options.map_entry:
             return
 
-        for index, enum_descriptor in enumerate(message_descriptor.enum_type):
-            enum_path = (*path, 4, index)
-            self._convert_enum(
-                enum_descriptor,
-                _full_name(package, (*parents, message_descriptor.name), enum_descriptor.name),
-                comments,
-                enum_path,
-            )
-        for index, nested_descriptor in enumerate(message_descriptor.nested_type):
-            self._convert_message(
-                nested_descriptor,
-                package,
-                (*parents, message_descriptor.name),
-                comments,
-                (*path, 3, index),
-                syntax,
-            )
+        if include_nested:
+            for index, enum_descriptor in enumerate(message_descriptor.enum_type):
+                enum_path = (*path, 4, index)
+                self._convert_enum(
+                    enum_descriptor,
+                    _full_name(package, (*parents, message_descriptor.name), enum_descriptor.name),
+                    comments,
+                    enum_path,
+                )
+            for index, nested_descriptor in enumerate(message_descriptor.nested_type):
+                self._convert_message(
+                    nested_descriptor,
+                    package,
+                    (*parents, message_descriptor.name),
+                    comments,
+                    (*path, 3, index),
+                    syntax,
+                )
 
         properties: dict[str, Any] = {}
         required: list[str] = []
@@ -619,12 +664,12 @@ class _ProtobufDescriptorConverter:
         if field.type in SCALAR_SCHEMAS:
             return dict(SCALAR_SCHEMAS[field.type])
         if field.type == TYPE_ENUM:
-            return {"$ref": f"#/definitions/{self._definition_key(_type_name(field.type_name))}"}
+            return self._reference_schema(_type_name(field.type_name))
         if field.type in {TYPE_MESSAGE, TYPE_GROUP}:
             type_name = _type_name(field.type_name)
             if type_name in WELL_KNOWN_SCHEMAS:
                 return deepcopy(WELL_KNOWN_SCHEMAS[type_name])
-            return {"$ref": f"#/definitions/{self._definition_key(type_name)}"}
+            return self._reference_schema(type_name)
         return {}  # pragma: no cover
 
     def _map_field_schema(self, field: Any) -> dict[str, Any] | None:

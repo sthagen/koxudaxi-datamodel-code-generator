@@ -38,6 +38,7 @@ from datamodel_code_generator.model.pydantic_v2.version import (
     PYDANTIC_V2_DATACLASS_ALIAS_NEEDS_FALLBACK,
     _get_dict_key_reference_classes_capability,
 )
+from datamodel_code_generator.python_literal import represent_python_value
 
 has_field_assignment = _dataclass_module.has_field_assignment
 _SAFE_CONFIG_ITEMS_TEMPLATE_DATA_KEY = "_safe_config_items"
@@ -214,6 +215,18 @@ class _PydanticDataclassField(DataModelFieldV2):
         "repr",
     })
 
+    def _get_field_data_and_default_factory(self) -> tuple[dict[str, Any], Any]:
+        """Use dataclass-safe factories for mutable schema defaults."""
+        data, default_factory = super()._get_field_data_and_default_factory()
+        if default_factory is not None or (self.required and not self.use_default_with_required):
+            return data, default_factory
+        match self.default:
+            case list() | dict() | set() as default:
+                default_factory = f"lambda: {represent_python_value(default)}" if default else type(default).__name__
+            case _:
+                pass
+        return data, default_factory
+
     def _get_constructor_default_info(self) -> tuple[bool, bool]:
         """Return constructor-default semantics from structured field state."""
         if self.is_class_var:
@@ -261,10 +274,16 @@ class _PydanticDataclassField(DataModelFieldV2):
         return self._render_field_call((default_argument, *plan.arguments))
 
     def _has_field_statement(self) -> bool:
-        """Include a required assignment forced by dataclass inheritance."""
+        """Include Field imports for forced assignments and dictionary factories."""
+        if self.is_class_var:
+            return False
         if self._has_forced_field_assignment:
             return True
-        return super()._has_field_statement()
+        if super()._has_field_statement():
+            return True
+        if self.required and not self.use_default_with_required:
+            return False
+        return isinstance(self.default, dict)
 
     def _get_field_render_plan(self) -> _PydanticFieldRenderPlan:
         """Include a forced required assignment in every rendered Field() view."""

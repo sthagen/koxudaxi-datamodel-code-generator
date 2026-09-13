@@ -23,7 +23,7 @@ from datamodel_code_generator.model import ConstraintsBase as _ConstraintsBase
 from datamodel_code_generator.model._constraints import Constraints
 from datamodel_code_generator.model._constraints import PatternConstraints as _PatternConstraints
 from datamodel_code_generator.model._pydantic_imports import IMPORT_ANYURL, IMPORT_FIELD
-from datamodel_code_generator.model.base import _nested_model_default_factory
+from datamodel_code_generator.model.base import _nested_model_default_factory, _remember_custom_template_dependency
 from datamodel_code_generator.python_literal import represent_python_value
 from datamodel_code_generator.types import UnionIntFloat as _UnionIntFloat
 from datamodel_code_generator.types import (
@@ -167,6 +167,12 @@ class DataModelField(DataModelFieldBase):
         """Build constraint data with integer-safe values, merging colliding bounds."""
         assert self.constraints is not None
         dumped = self.constraints._exclude_unset_dump  # noqa: SLF001
+        if (
+            self.data_type.type == "None"
+            and not self.data_type.is_custom_type
+            and not ((parent := self.parent) and (parent.IS_ALIAS or parent._uses_custom_root_template))  # noqa: SLF001
+        ):
+            dumped = {key: value for key, value in dumped.items() if key not in self._INTEGER_CONSTRAINTS}
         has_integer_constraints = bool(self._INTEGER_CONSTRAINTS & dumped.keys())
         is_float_type = has_integer_constraints and self._has_numeric_data_type("float", "Float")
         is_int_type = has_integer_constraints and not is_float_type and self._has_numeric_data_type("int", "Int")
@@ -206,6 +212,12 @@ class DataModelField(DataModelFieldBase):
         otherwise returns None.
         """
         return _nested_model_default_factory(self, BaseModelBase)
+
+    def _has_default_for_nested_model_factory(self) -> bool:
+        """Preserve optional None defaults retained by Pydantic model templates."""
+        if self.default is None and self.data_type.is_optional:
+            return True
+        return super()._has_default_for_nested_model_factory()
 
     def enable_structured_default_validation(self) -> bool:
         """Enable Pydantic validation for a structured default exactly once."""
@@ -455,6 +467,7 @@ class BaseModelBase(DataModel, ABC):
         # But, Future version will support only '{custom_template_dir}/pydantic/BaseModel.jinja'
         if self._custom_template_dir is not None:
             custom_template_file_path = self._custom_template_dir / Path(self.TEMPLATE_FILE_PATH).name
+            _remember_custom_template_dependency(self._custom_template_dir, custom_template_file_path)
             if cached_path_exists(custom_template_file_path):
                 return custom_template_file_path.resolve()
         return super().template_file_path

@@ -10,6 +10,7 @@ from functools import wraps
 from math import isfinite
 from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Optional, TypeVar
 
+from datamodel_code_generator import Error
 from datamodel_code_generator.imports import IMPORT_OPTIONAL, IMPORT_UNION, Import
 from datamodel_code_generator.model import DataModel, DataModelFieldBase, _rebuild_model_with_datamodel_namespace
 from datamodel_code_generator.model._constraints import PatternConstraints as _Constraints
@@ -129,6 +130,7 @@ class Struct(DataModel):
     REQUIRES_MODEL_LEVEL_KW_ONLY: ClassVar[bool] = True
     SUPPORTS_BOOLEAN_LITERAL: ClassVar[bool] = False
     REQUIRES_TAGGED_UNION_DISCRIMINATOR: ClassVar[bool] = True
+    REQUIRES_UNIQUE_FIELD_ALIASES: ClassVar[bool] = True
     SUPPORTS_ANNOTATED_CONSTRAINTS: ClassVar[bool] = True
     ANNOTATED_CONSTRAINTS_CONTEXT: ClassVar[object | None] = _ANNOTATED_CONSTRAINTS_CONTEXT
     REQUIRES_EXPLICIT_DEFERRED_ANNOTATIONS_FOR_FORWARD_REFS: ClassVar[bool] = True
@@ -182,9 +184,135 @@ class Struct(DataModel):
         if self.keyword_only:
             self.add_base_class_kwarg("kw_only", "True")
 
+    @classmethod
+    def render_module_code(cls, models: list[DataModel]) -> str:
+        """Reject incompatible generated Struct layouts before rendering a module."""
+        for model in models:
+            if isinstance(model, cls) and len(model.base_classes) > 1:
+                cls._validate_base_layouts(model)
+        return ""
+
+    @staticmethod
+    def _has_opaque_layout_base(model: DataModel) -> bool:
+        """Identify effective configured bases whose inherited slots are unknown."""
+        return (
+            (custom_base_class := model.custom_base_class) is not None
+            and custom_base_class not in (Struct.BASE_CLASS, [Struct.BASE_CLASS])
+            and any(not base.reference for base in model.base_classes)
+        )
+
+    @staticmethod
+    def _find_layout_conflict(bases: list[DataModel]) -> tuple[DataModel, DataModel] | None:
+        """Find independent slot owners with linear storage for compatible graphs.
+
+        Field introduction depths distinguish inherited slots from extensions.
+        Encounter ranks retain the original diagnostic order independently of
+        the parent-first traversal needed to establish each model's layout.
+        """
+        pending = [(base, False) for base in bases]
+        visited: dict[str, int] = {}
+        owner_depths: dict[str, int] = {}
+        field_depths: dict[str | None, int] = {}
+        owners: list[DataModel] = []
+        while pending:
+            base, complete = pending.pop()
+            if not complete and base.path in visited:
+                continue
+            parents = [
+                parent.reference.source
+                for parent in base.base_classes
+                if parent.reference and isinstance(parent.reference.source, Struct)
+            ]
+            if not complete:
+                visited[base.path] = len(visited)
+                if Struct._has_opaque_layout_base(base):
+                    return None
+                pending.append((base, True))
+                pending.extend((parent, False) for parent in reversed(parents))
+                continue
+            parent_depth = max((owner_depths.get(parent.path, 0) for parent in parents), default=0)
+            if new_names := [
+                field.name
+                for field in base.fields
+                if not field.is_class_var and field_depths.get(field.name, len(owners) + 1) > parent_depth
+            ]:
+                if parent_depth != len(owners):
+                    other = min(owners[parent_depth:], key=lambda owner: visited[owner.path])
+                    return Struct._select_layout_conflict((other, base), pending, owners, owner_depths, visited)
+                owners.append(base)
+                for name in new_names:
+                    field_depths[name] = len(owners)
+                parent_depth = len(owners)
+            owner_depths[base.path] = parent_depth
+        return None
+
+    @staticmethod
+    def _select_layout_conflict(
+        conflict: tuple[DataModel, DataModel],
+        pending: list[tuple[DataModel, bool]],
+        owners: list[DataModel],
+        owner_depths: dict[str, int],
+        encounter_ranks: dict[str, int],
+    ) -> tuple[DataModel, DataModel] | None:
+        """Prefer an earlier active slot owner without repeating the layout proof.
+
+        The compact witness establishes incompatibility. An active descendant
+        may occur earlier in the emitted bases' preorder, or inherit an opaque
+        layout that prevents diagnosing the generated class at all.
+        """
+        for base, complete in reversed(pending):
+            if not complete:
+                continue
+            parents = [
+                parent.reference.source
+                for parent in base.base_classes
+                if parent.reference and isinstance(parent.reference.source, Struct)
+            ]
+            ancestor_paths: set[str] = set()
+            inherited_names: set[str | None] = set()
+            parent_depth = 0
+            while parents:
+                parent = parents.pop()
+                if parent.path in ancestor_paths:
+                    continue
+                if Struct._has_opaque_layout_base(parent):
+                    return None
+                ancestor_paths.add(parent.path)
+                parent_depth = max(parent_depth, owner_depths.get(parent.path, 0))
+                inherited_names.update(field.name for field in parent.fields if not field.is_class_var)
+                parents.extend(
+                    ancestor.reference.source
+                    for ancestor in parent.base_classes
+                    if ancestor.reference and isinstance(ancestor.reference.source, Struct)
+                )
+            if parent_depth < len(owners) and any(
+                field.name not in inherited_names and not field.is_class_var for field in base.fields
+            ):
+                other = min(owners[parent_depth:], key=lambda owner: encounter_ranks[owner.path])
+                conflict = other, base
+        return conflict
+
+    def _validate_base_layouts(self) -> None:
+        """Allow empty mixins and shared layouts, but reject independent slot extensions."""
+        if self._uses_custom_root_template:
+            return
+        bases: list[DataModel] = [
+            base.reference.source
+            for base in reversed(self.base_classes)
+            if base.reference and isinstance(base.reference.source, Struct)
+        ]
+        if conflict := self._find_layout_conflict(bases):
+            other, base = conflict
+            msg = (
+                f"msgspec.Struct model {self.class_name!r} has incompatible layouts from generated bases "
+                f"{other.class_name!r} and {base.class_name!r}."
+            )
+            raise Error(msg)
+
     def add_base_class_kwarg(self, name: str, value: str) -> None:
         """Add keyword argument to base class constructor."""
-        self.extra_template_data["base_class_kwargs"][name] = value
+        if isinstance((base_class_kwargs := self.extra_template_data.get("base_class_kwargs")), dict):
+            base_class_kwargs[name] = value
         self._internal_template_data["base_class_kwargs"][name] = value
 
     def _builtin_template_data(self) -> dict[str, Any]:
@@ -223,7 +351,10 @@ class Struct(DataModel):
 
     def has_keyword_only_definition(self) -> bool:
         """Return whether msgspec's class declaration already enables keyword-only fields."""
-        return self.extra_template_data["base_class_kwargs"].get("kw_only") in {True, "True"}
+        if self._internal_template_data["base_class_kwargs"].get("kw_only") == "True":
+            return True
+        base_class_kwargs = self.extra_template_data.get("base_class_kwargs")
+        return isinstance(base_class_kwargs, dict) and base_class_kwargs.get("kw_only") in {True, "True"}
 
     def enable_model_keyword_only(self) -> None:
         """Enable msgspec's class-level keyword-only option."""
@@ -378,7 +509,7 @@ class DataModelField(DataModelFieldBase):
     def _unset_union_data_type(self) -> DataType:
         unset_type = self._unset_type_data_type()
         if self._data_type_renders_none(self.data_type):
-            return unset_type
+            return self._ordered_union_data_type([self.data_type.__class__(type=NONE), unset_type])
 
         data_types = []
         has_none = self._field_has_top_level_none()
@@ -580,6 +711,10 @@ class DataModelField(DataModelFieldBase):
         """Return structured field() arguments before rendering."""
         return self._get_field_data_and_import_requirements()[0]
 
+    def _has_default_for_nested_model_factory(self) -> bool:
+        """Preserve the UNSET default emitted for optional Struct fields."""
+        return not self.required or super()._has_default_for_nested_model_factory()
+
     def _get_constructor_default_info(self) -> tuple[bool, bool]:
         """Return constructor-default semantics from structured field data."""
         if not has_field_assignment(self) or (self.required and not self.use_default_with_required):
@@ -682,6 +817,11 @@ class DataModelField(DataModelFieldBase):
                     merge_normalized_constraint(constraint_data, normalized[0], normalized[1])
             data = {**data, **constraint_data}
 
+        if (gt := data.get("gt")) is not None and (ge := data.get("ge")) is not None:
+            data.pop("ge" if gt >= ge else "gt")
+        if (lt := data.get("lt")) is not None and (le := data.get("le")) is not None:
+            data.pop("le" if lt <= le else "lt")
+
         if (min_items := data.pop("min_items", None)) is not None:
             data["min_length"] = min_items
         if (max_items := data.pop("max_items", None)) is not None:
@@ -736,7 +876,14 @@ class DataModelField(DataModelFieldBase):
         if self._uses_empty_builtin_container_factory():
             return None
 
-        for data_type in self.data_type.data_types or (self.data_type,):
+        data_types = self.data_type.data_types or (self.data_type,)
+        if self.data_type.is_list and (item_type := data_types[0]).is_list:
+            while item_type.is_list and len(item_type.data_types) == 1:
+                item_type = item_type.data_types[0]
+            if item_type.reference and isinstance(item_type.reference.source, Struct):
+                data_types = (item_type,)
+
+        for data_type in data_types:
             # TODO: Check nested data_types
             if data_type.is_dict:
                 # TODO: Parse dict model for default
@@ -752,17 +899,57 @@ class DataModelField(DataModelFieldBase):
                         f"lambda: {self._PARSE_METHOD}({represent_python_value(self.default)},  "
                         f"type=list[{data_type_child.alias or data_type_child.reference.source.class_name}])"
                     )
-            elif data_type.reference and isinstance(data_type.reference.source, Struct):
+            elif data_type.reference and (
+                isinstance(data_type.reference.source, Struct)
+                or (
+                    isinstance(data_type.reference.source, TypeAliasBase)
+                    and self._type_alias_needs_struct_conversion(data_type.reference.source)
+                )
+            ):
                 if self.data_type.is_union:
                     if not isinstance(self.default, (dict, list)):
                         continue
                     if isinstance(self.default, dict) and any(dt.is_dict for dt in self.data_type.data_types):
                         continue
-                return (
-                    f"lambda: {self._PARSE_METHOD}({represent_python_value(self.default)},  "
-                    f"type={data_type.alias or data_type.reference.source.class_name})"
+                model_type = (
+                    self.data_type.type_hint
+                    if self.data_type.is_list
+                    else data_type.alias or data_type.reference.source.class_name
                 )
+                return f"lambda: {self._PARSE_METHOD}({represent_python_value(self.default)},  type={model_type})"
         return None
+
+    def _type_alias_needs_struct_conversion(self, source: TypeAliasBase) -> bool:
+        """Follow alias targets without changing direct defaults or empty factories."""
+        if (
+            not source.fields
+            or not isinstance(self.default, (dict, list))
+            or (isinstance(self.default, list) and not self.default)
+        ):
+            return False
+
+        pending = [source.fields[0].data_type]
+        visited = {id(source)}
+        has_struct = False
+        while pending:
+            data_type = pending.pop()
+            if data_type.is_dict:
+                # Mapping defaults remain outside the existing Struct conversion support.
+                return False
+            if data_type.reference:
+                referenced_model = data_type.reference.source
+                if isinstance(referenced_model, Struct):
+                    has_struct = True
+                elif (
+                    isinstance(referenced_model, TypeAliasBase)
+                    and referenced_model.fields
+                    and id(referenced_model) not in visited
+                ):
+                    visited.add(id(referenced_model))
+                    pending.append(referenced_model.fields[0].data_type)
+            else:
+                pending.extend(data_type.data_types)
+        return has_struct
 
     def _uses_empty_builtin_container_factory(self) -> bool:
         """Return whether an empty collection can use its zero-cost builtin factory."""
@@ -799,4 +986,5 @@ class DataTypeManager(_DataTypeManager):
     ANNOTATED_CONSTRAINTS_CONTEXT: ClassVar[object | None] = _ANNOTATED_CONSTRAINTS_CONTEXT
 
 
+_rebuild_model_with_datamodel_namespace(Constraints)
 _rebuild_model_with_datamodel_namespace(DataModelField)

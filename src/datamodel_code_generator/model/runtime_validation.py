@@ -55,6 +55,14 @@ class PatternPropertiesRule:
         return (*data_types, self.additional_property_type)
 
 
+class IndependentDeclaredPatternPropertiesRule(PatternPropertiesRule):
+    """Pattern validation must preserve the input for a declared field."""
+
+
+class IndependentModelPatternPropertiesRule(PatternPropertiesRule):
+    """Distinct pattern models must validate the same original input."""
+
+
 @dataclass(frozen=True)
 class RequiredGroupsRule:
     """Runtime rule for required-property oneOf/anyOf groups."""
@@ -70,6 +78,20 @@ class ConditionalRequiredRule:
     condition: Condition
     then_groups: RequiredGroups
     else_groups: RequiredGroups
+
+
+def conditional_value_uses_json_equality(value: object) -> bool:
+    """Identify condition literals for which Python conflates booleans and numbers."""
+    match value:
+        case bool():
+            return True
+        case int() | float():
+            return value in {0, 1}
+        case list() as array:
+            return any(conditional_value_uses_json_equality(item) for item in array)
+        case dict() as object_:
+            return any(conditional_value_uses_json_equality(item) for item in object_.values())
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +129,7 @@ class SchemaRuntimeValidation:
     conditional_required: list[ConditionalRequiredRule] = field(default_factory=list)
     property_count: PropertyCountRule | None = None
     unique_items: list[UniqueItemsRule] = field(default_factory=list)
+    replace_unique_items: bool = False
 
     def __bool__(self) -> bool:
         """Return whether any runtime validation rule is registered."""
@@ -116,6 +139,7 @@ class SchemaRuntimeValidation:
             or self.conditional_required
             or self.property_count
             or self.unique_items
+            or self.replace_unique_items
         )
 
     @property

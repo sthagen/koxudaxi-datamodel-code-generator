@@ -10,10 +10,11 @@ import ast
 import re
 import sys
 from abc import ABC, abstractmethod
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from functools import cached_property, lru_cache
+from itertools import accumulate
 from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, TypeVar
@@ -53,6 +54,7 @@ if TYPE_CHECKING:
 
     from datamodel_code_generator import DataclassArguments
     from datamodel_code_generator.imports import Imports
+    from datamodel_code_generator.python_literal import PythonRuntimeExpression
 
 TEMPLATE_DIR: Path = Path(__file__).parents[0] / "template"
 _TYPING_IMPORT_NAMES: frozenset[str] = frozenset({
@@ -67,8 +69,12 @@ _USE_TYPED_DICT_BACKPORT_TEMPLATE_DATA_KEY = "use_typeddict_backport"
 _MODULE_NAME_INVALID_CHAR_PATTERN = re.compile(r"[^0-9a-zA-Z_]")
 _MODULE_NAME_INVALID_CHAR_WITH_DOTS_PATTERN = re.compile(r"[^0-9a-zA-Z_.]")
 _MAX_MISSING_CUSTOM_TEMPLATE_SUBDIRS = 128
+_MAX_CUSTOM_TEMPLATE_SIGNATURES = 128
+_MAX_CUSTOM_TEMPLATE_DEPENDENCIES = 128
+_ORIGINAL_TEMPLATE_LOADER_MARKER = "__datamodel_code_generator_original_template_loader__"
 _NESTED_MODEL_DEFAULT_FACTORY_ORDER_KEY = "_nested_model_default_factory_order"
 _NESTED_MODEL_DEFAULT_FACTORY_RECURSIVE_PATHS_KEY = "_nested_model_default_factory_recursive_paths"
+_NESTED_MODEL_REQUIRED_CONSTRUCTOR_FIELDS_KEY = "_nested_model_required_constructor_fields"
 _REQUIRED_INHERITED_DEFAULT_FACTORY_KEY = "_required_inherited_default_factory"
 _RUNTIME_EXPRESSION_IMPORTS_FIELD_KEY = "_runtime_expression_imports"
 _EXTRA_TEMPLATE_DATA_MAPPING_ERROR = "extra template data must be a dictionary"
@@ -102,6 +108,7 @@ _BUILTIN_TEMPLATE_INTERNAL_DATA_KEYS: frozenset[str] = frozenset({
 })
 _RESOLVE_REFERENCE_ACTION_CAPABILITIES_MARKER = "__datamodel_code_generator_resolve_reference_action_capabilities__"
 MroT = TypeVar("MroT")
+_CustomTemplateSignature = bytes
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,13 +146,40 @@ def get_resolve_reference_action_capabilities(action: object) -> ResolveReferenc
     )
 
 
+class _CustomTemplateDependencies:
+    """Bounded file metadata observed by one custom-template loader tree."""
+
+    __slots__ = ("directories", "incomplete", "overflow", "paths")
+
+    def __init__(self) -> None:
+        self.paths: dict[Path, tuple[int, ...] | None] = {}
+        self.directories: dict[Path, _CustomTemplateSignature | None] = {}
+        self.overflow = False
+        self.incomplete = False
+
+    def require_full_scan(self) -> None:
+        """Capture external baselines before the first unobserved dependency is read."""
+        if self.overflow:
+            return
+        self.overflow = True
+        for directory in self.directories:
+            self.directories[directory] = _get_custom_template_signature(directory)
+
+    @property
+    def needs_full_scan(self) -> bool:
+        """Check the complete root when no bounded file inventory is available."""
+        return self.overflow or not self.paths
+
+
 class _MissingCustomTemplateState:
     """Bounded bookkeeping for mutable custom-template directories."""
 
-    __slots__ = ("count", "lock", "overflow", "paths")
+    __slots__ = ("count", "dependencies", "lock", "overflow", "paths", "signatures")
 
     def __init__(self) -> None:
         self.paths: dict[Path, tuple[Path, ...]] = {}
+        self.signatures: OrderedDict[Path, _CustomTemplateSignature] = OrderedDict()
+        self.dependencies: dict[Path, _CustomTemplateDependencies] = {}
         self.count = 0
         self.overflow = False
         self.lock = RLock()
@@ -502,6 +536,9 @@ class DataModelFieldBase(_BaseModel):  # noqa: PLR0904
     """Base class for model field representation and rendering."""
 
     PARSER_CONSTRUCTOR: ClassVar[Callable[..., DataModelFieldBase] | None] = None
+    PREPARE_PYTHON_PATTERNS: ClassVar[
+        Callable[[DataModelFieldBase, str, dict[str, PythonRuntimeExpression]], None] | None
+    ] = None
     _FIELD_IMPORTS_CACHE_MAX_SIZE: ClassVar[int] = 4096
     _field_imports_cache: ClassVar[dict[tuple[Any, ...], tuple[Import, ...]]] = {}
     _SEMANTIC_CACHE_KEYS: ClassVar[tuple[str, ...]] = (
@@ -998,6 +1035,7 @@ class DataModelFieldBase(_BaseModel):  # noqa: PLR0904
             data_type.is_mapping,
             data_type.is_sequence,
             data_type.is_tuple,
+            data_type.tuple_item_count,
             data_type.use_standard_collections,
             data_type.use_generic_container,
             data_type.use_union_operator,
@@ -1171,6 +1209,10 @@ class DataModelFieldBase(_BaseModel):  # noqa: PLR0904
         """Return neutral constructor-default semantics for this field."""
         return _get_field_default_info(self)
 
+    def _has_default_for_nested_model_factory(self) -> bool:
+        """Return whether the emitted constructor supplies this field's default."""
+        return self._get_constructor_default_info()[0]
+
     @property
     def _has_forced_field_assignment(self) -> bool:
         """Return whether an explicit required-field assignment must be rendered."""
@@ -1249,6 +1291,37 @@ class DataModelFieldBase(_BaseModel):  # noqa: PLR0904
         self.invalidate_semantic_caches()
 
 
+def _nested_model_has_required_constructor_fields(source: DataModel) -> bool:
+    """Identify required constructor fields without executing opaque custom model code."""
+    inherited = any(base.reference for base in source.base_classes)
+    models = linearize_data_models([source]) if inherited else (source,)
+    for model in models:
+        if (
+            model.decorators or (model._custom_template_dir is not None and model._uses_custom_root_template)  # noqa: SLF001
+        ):
+            return False
+        if (
+            (custom_base_class := model.custom_base_class) is not None
+            and custom_base_class not in (model.BASE_CLASS, [model.BASE_CLASS])
+            and any(not base.reference for base in model.base_classes)
+        ):
+            return False
+    fields = get_effective_fields(source) if inherited else source.fields
+    return any(
+        (field.required or field.should_strip_default_none())
+        and (source.USES_DATACLASS_ARGUMENTS or not field.is_class_var)
+        and source.FIELD_PARTICIPATES_IN_CONSTRUCTOR(field)
+        and (
+            (field.required and not field.use_default_with_required)
+            or (
+                (field.default is UNDEFINED or field.default is None)
+                and not field._has_default_for_nested_model_factory()  # noqa: SLF001  # output-owned default policy
+            )
+        )
+        for field in fields
+    )
+
+
 def _nested_model_default_factory(field: DataModelFieldBase, model_cls: type[DataModel]) -> str | None:
     """Return the nested model name usable as a default_factory for optional fields."""
     for data_type in field.data_type.data_types or (field.data_type,):
@@ -1258,6 +1331,11 @@ def _nested_model_default_factory(field: DataModelFieldBase, model_cls: type[Dat
             if field.parent is not None and source.path in field.parent.__dict__.get(
                 _NESTED_MODEL_DEFAULT_FACTORY_RECURSIVE_PATHS_KEY, ()
             ):
+                return None
+            if (required_fields := source.__dict__.get(_NESTED_MODEL_REQUIRED_CONSTRUCTOR_FIELDS_KEY)) is None:
+                required_fields = _nested_model_has_required_constructor_fields(source)
+                source.__dict__[_NESTED_MODEL_REQUIRED_CONSTRUCTOR_FIELDS_KEY] = required_fields
+            if required_fields:
                 return None
             factory_name = data_type.alias or source.class_name
             parent_order = (
@@ -1312,7 +1390,7 @@ def _get_environment(template_subdir: Path, custom_template_dir: Path | None) ->
     if custom_template_dir is not None:
         custom_dir = custom_template_dir / template_subdir
         if cached_path_exists(custom_dir):
-            loaders.append(FileSystemLoader(str(custom_dir)))
+            loaders.append(_custom_template_loader(custom_template_dir, custom_dir))
             has_custom_loader = True
         else:
             _remember_missing_custom_template_subdir(custom_template_dir, custom_dir)
@@ -1341,24 +1419,53 @@ def _get_template_with_custom_dir(
     template_subdir = template_file_path.parent
     environment = _get_environment(template_subdir, custom_template_dir)
     template = environment.get_template(template_file_path.name)
-    return template_adapter(template) if template_adapter is not None else template
+    return (
+        _apply_custom_template_adapter(template, template_adapter, custom_template_dir)
+        if template_adapter is not None
+        else template
+    )
+
+
+def _uses_original_template_loader(adapter: Callable[[Template], Template]) -> Callable[[Template], Template]:
+    """Declare that an internal adapter preserves the observed Jinja loader."""
+    adapter.__dict__[_ORIGINAL_TEMPLATE_LOADER_MARKER] = True
+    return adapter
+
+
+def _apply_custom_template_adapter(
+    template: Template, adapter: Callable[[Template], Template], custom_template_dir: Path | None
+) -> Template:
+    """Use the full-root fallback for adapters with unobserved dependencies."""
+    if custom_template_dir is not None and not getattr(adapter, _ORIGINAL_TEMPLATE_LOADER_MARKER, False):
+        with _missing_custom_template_state.lock:
+            if dependencies := _missing_custom_template_state.dependencies.get(custom_template_dir):
+                dependencies.require_full_scan()
+    return adapter(template)
+
+
+def _clear_custom_template_render_caches() -> None:
+    """Clear cached loaders, environments, and templates after a source change."""
+    cached_path_exists.cache_clear()
+    _get_environment.cache_clear()
+    _get_template_with_custom_dir.cache_clear()
+    _get_environment_with_absolute_path.cache_clear()
+    _get_template_with_absolute_path.cache_clear()
 
 
 def _clear_custom_template_caches() -> None:
     """Clear mutable custom-template path, environment, and template caches."""
     with _missing_custom_template_state.lock:
-        cached_path_exists.cache_clear()
-        _get_environment.cache_clear()
-        _get_template_with_custom_dir.cache_clear()
-        _get_environment_with_absolute_path.cache_clear()
-        _get_template_with_absolute_path.cache_clear()
+        _clear_custom_template_render_caches()
         _missing_custom_template_state.paths.clear()
+        _missing_custom_template_state.signatures.clear()
+        _missing_custom_template_state.dependencies.clear()
         _missing_custom_template_state.count = 0
         _missing_custom_template_state.overflow = False
 
 
 def _remember_missing_custom_template_subdir(custom_template_dir: Path, custom_subdir: Path) -> None:
     """Track a missing custom subdirectory while keeping retained state bounded."""
+    _remember_custom_template_dependency(custom_template_dir, custom_subdir)
     with _missing_custom_template_state.lock:
         if _missing_custom_template_state.overflow:
             return
@@ -1372,33 +1479,192 @@ def _remember_missing_custom_template_subdir(custom_template_dir: Path, custom_s
         _missing_custom_template_state.count += 1
 
 
-def _refresh_custom_template_paths(custom_template_dir: Path) -> None:
-    """Refresh cached lookups when a tracked custom subdirectory appears."""
-    with _missing_custom_template_state.lock:
-        overflow = _missing_custom_template_state.overflow
-        match _missing_custom_template_state.paths.get(custom_template_dir):
-            case None:
-                if not overflow:
-                    return
-                missing_subdirs = ()
-            case tracked_subdirs:
-                missing_subdirs = tracked_subdirs
-    if overflow:
-        _clear_custom_template_caches()
+def _visit_custom_template_directory(
+    directory_path: Path,
+    relative_directory: str,
+    entries: list[tuple[str, ...]],
+    visited_directories: set[tuple[int, int]],
+) -> bool:
+    try:
+        if directory_path.is_symlink():
+            link_target = directory_path.readlink()
+            entries.append(("directory-link", relative_directory or ".", link_target.as_posix()))
+        directory_stat = directory_path.stat()
+    except OSError:
+        return False
+    directory_identity = (directory_stat.st_dev, directory_stat.st_ino)
+    if directory_identity in visited_directories:
+        return False
+    visited_directories.add(directory_identity)
+    return True
+
+
+def _scan_custom_template_directory(
+    directory_path: Path,
+    relative_directory: str,
+    entries: list[tuple[str, ...]],
+    pending_directories: list[tuple[Path, str]],
+) -> None:
+    from os import scandir  # noqa: PLC0415
+    from stat import S_ISDIR, S_ISREG  # noqa: PLC0415
+
+    mode_checks = (S_ISDIR, S_ISREG)
+    try:
+        with scandir(directory_path) as directory_entries:
+            for entry in directory_entries:
+                relative_path = f"{relative_directory}/{entry.name}" if relative_directory else entry.name
+                _scan_custom_template_entry(entry, relative_path, entries, pending_directories, mode_checks)
+    except OSError:
         return
-    for path in missing_subdirs:
-        if path.exists():
-            _clear_custom_template_caches()
+
+
+def _scan_custom_template_entry(
+    entry: Any,
+    relative_path: str,
+    entries: list[tuple[str, ...]],
+    pending_directories: list[tuple[Path, str]],
+    mode_checks: tuple[Callable[[int], bool], Callable[[int], bool]],
+) -> None:
+    is_directory, is_regular = mode_checks
+    if entry.is_symlink():
+        try:
+            link_target = Path(entry.path).readlink()
+            if entry.is_dir():
+                pending_directories.append((Path(entry.path), relative_path))
+                return
+        except OSError:
             return
+        entries.append(("file-link", relative_path, link_target.as_posix()))
+    try:
+        stat_result = entry.stat()
+    except OSError:
+        return
+    if is_directory(stat_result.st_mode):
+        pending_directories.append((Path(entry.path), relative_path))
+    elif is_regular(stat_result.st_mode):
+        entries.append((
+            relative_path,
+            str(stat_result.st_mtime_ns),
+            str(stat_result.st_ctime_ns),
+            str(stat_result.st_size),
+        ))
+
+
+def _get_custom_template_signature(custom_template_dir: Path) -> _CustomTemplateSignature:
+    """Return a stable metadata signature for all files a custom template can include."""
+    from hashlib import sha256  # noqa: PLC0415
+
+    entries: list[tuple[str, ...]] = []
+    visited_directories: set[tuple[int, int]] = set()
+    pending_directories = [(custom_template_dir, "")]
+    while pending_directories:
+        directory_path, relative_directory = pending_directories.pop()
+        if _visit_custom_template_directory(directory_path, relative_directory, entries, visited_directories):
+            _scan_custom_template_directory(directory_path, relative_directory, entries, pending_directories)
+    digest = sha256()
+    for entry in sorted(entries):
+        for value in entry:
+            digest.update(value.encode("utf-8", "surrogateescape"))
+            digest.update(b"\0")
+    return digest.digest()
+
+
+def _custom_template_path_signature(path: Path) -> tuple[int, ...] | None:
+    """Check file identity as well as timestamps, including resolved symlink targets."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size
+
+
+def _remember_custom_template_dependency(custom_template_dir: Path, path: Path) -> None:
+    """Record successful and failed lookups without growing with unused files."""
+    with _missing_custom_template_state.lock:
+        dependencies = _missing_custom_template_state.dependencies.get(custom_template_dir)
+        if dependencies is None or dependencies.overflow or path in dependencies.paths:
+            return
+        if len(dependencies.paths) >= _MAX_CUSTOM_TEMPLATE_DEPENDENCIES:
+            dependencies.require_full_scan()
+            return
+        dependencies.paths[path] = _custom_template_path_signature(path)
+
+
+def _remember_custom_template_directory(custom_template_dir: Path, directory: Path) -> None:
+    """Include resolved legacy loader roots in the bounded full-scan fallback."""
+    with _missing_custom_template_state.lock:
+        dependencies = _missing_custom_template_state.dependencies.get(custom_template_dir)
+        if dependencies is None or dependencies.incomplete or directory in dependencies.directories:
+            return
+        if directory.resolve().is_relative_to(custom_template_dir.resolve()):
+            return
+        if len(dependencies.directories) >= _MAX_CUSTOM_TEMPLATE_DEPENDENCIES:
+            dependencies.incomplete = True
+            return
+        dependencies.directories[directory] = (
+            _get_custom_template_signature(directory) if dependencies.overflow else None
+        )
+
+
+def _custom_template_loader(custom_template_dir: Path, directory: Path) -> Any:
+    from datamodel_code_generator.model._template_dependencies import DependencyTrackingLoader  # noqa: PLC0415
+
+    _remember_custom_template_directory(custom_template_dir, directory)
+    return DependencyTrackingLoader(
+        directory, lambda path: _remember_custom_template_dependency(custom_template_dir, path)
+    )
+
+
+def _refresh_custom_template_paths(custom_template_dir: Path) -> None:
+    """Check observed dependencies, retaining the full scan when tracking is incomplete."""
+    with _missing_custom_template_state.lock:
+        if _missing_custom_template_state.overflow:
+            _clear_custom_template_caches()
+        dependencies = _missing_custom_template_state.dependencies.get(custom_template_dir)
+        if dependencies is not None and dependencies.incomplete:
+            # Re-read untracked loaders without repeatedly rebuilding an unusable inventory.
+            _clear_custom_template_render_caches()
+            _missing_custom_template_state.signatures.move_to_end(custom_template_dir)
+            return
+        if (
+            dependencies is not None
+            and not dependencies.needs_full_scan
+            and all(_custom_template_path_signature(path) == value for path, value in dependencies.paths.items())
+        ):
+            _missing_custom_template_state.signatures.move_to_end(custom_template_dir)
+            return
+        signature = _get_custom_template_signature(custom_template_dir)
+        if (
+            dependencies is not None
+            and dependencies.needs_full_scan
+            and _missing_custom_template_state.signatures.get(custom_template_dir) == signature
+            and all(_get_custom_template_signature(path) == value for path, value in dependencies.directories.items())
+        ):
+            _missing_custom_template_state.signatures.move_to_end(custom_template_dir)
+            return
+        if (
+            custom_template_dir not in _missing_custom_template_state.signatures
+            and len(_missing_custom_template_state.signatures) >= _MAX_CUSTOM_TEMPLATE_SIGNATURES
+        ):
+            evicted, _ = _missing_custom_template_state.signatures.popitem(last=False)
+            _missing_custom_template_state.dependencies.pop(evicted, None)
+        _clear_custom_template_render_caches()
+        _missing_custom_template_state.signatures[custom_template_dir] = signature
+        _missing_custom_template_state.signatures.move_to_end(custom_template_dir)
+        _missing_custom_template_state.dependencies[custom_template_dir] = _CustomTemplateDependencies()
 
 
 @lru_cache(maxsize=16)
-def _get_environment_with_absolute_path(absolute_template_dir: Path, builtin_subdir: Path) -> Environment:
+def _get_environment_with_absolute_path(
+    absolute_template_dir: Path, builtin_subdir: Path, custom_template_dir: Path | None = None
+) -> Environment:
     """Get or create a cached Jinja2 Environment for absolute path templates."""
     from jinja2 import ChoiceLoader, FileSystemLoader  # noqa: PLC0415
 
     loaders: list[FileSystemLoader] = [
-        FileSystemLoader(str(absolute_template_dir)),
+        _custom_template_loader(custom_template_dir, absolute_template_dir)
+        if custom_template_dir is not None
+        else FileSystemLoader(str(absolute_template_dir)),
         FileSystemLoader(str(TEMPLATE_DIR / builtin_subdir)),
     ]
     return _build_environment(ChoiceLoader(loaders))
@@ -1409,6 +1675,7 @@ def _get_template_with_absolute_path(
     absolute_template_path: Path,
     builtin_subdir: Path,
     template_adapter: Callable[[Template], Template] | None = None,
+    custom_template_dir: Path | None = None,
 ) -> Template:
     """Load a Jinja2 template from an absolute path with fallback to built-in directory.
 
@@ -1417,9 +1684,15 @@ def _get_template_with_absolute_path(
     1. The directory containing the absolute template path
     2. TEMPLATE_DIR/<builtin_subdir>/ (fallback for includes not in custom dir)
     """
-    environment = _get_environment_with_absolute_path(absolute_template_path.parent, builtin_subdir)
+    environment = _get_environment_with_absolute_path(
+        absolute_template_path.parent, builtin_subdir, custom_template_dir
+    )
     template = environment.get_template(absolute_template_path.name)
-    return template_adapter(template) if template_adapter is not None else template
+    return (
+        _apply_custom_template_adapter(template, template_adapter, custom_template_dir)
+        if template_adapter is not None
+        else template
+    )
 
 
 @lru_cache
@@ -1498,6 +1771,9 @@ class TemplateBase(ABC):
 class BaseClassDataType(DataType):
     """DataType subclass for base class references."""
 
+    def _apply_nullable_from_reference(self) -> None:
+        """Keep nullable model references out of class inheritance clauses."""
+
 
 UNDEFINED: Any = object()
 
@@ -1525,11 +1801,44 @@ def _field_participates_in_constructor(_: DataModelFieldBase) -> bool:
     return True
 
 
+def _bind_field_expressions(rendered: str, class_name: str, bindings: Mapping[str, str]) -> str:
+    """Bind names in field annotations and defaults without changing template objects."""
+    source = rendered.encode()
+    offsets = [0, *accumulate(map(len, source.splitlines(keepends=True)))]
+    replacements: list[tuple[int, int, str]] = []
+    for statement in ast.parse(rendered).body:
+        if not isinstance(statement, ast.ClassDef) or statement.name != class_name:
+            continue
+        for field in statement.body:
+            if not isinstance(field, ast.AnnAssign):
+                continue
+            expressions = (field.annotation,) if field.value is None else (field.annotation, field.value)
+            for expression in expressions:
+                for node in ast.walk(expression):
+                    match node:
+                        case ast.Name(
+                            id=name,
+                            ctx=ast.Load(),
+                            end_lineno=int() as end_line,
+                            end_col_offset=int() as end_column,
+                        ) if (alias := bindings.get(name)) is not None:
+                            replacements.append((
+                                offsets[node.lineno - 1] + node.col_offset,
+                                offsets[end_line - 1] + end_column,
+                                alias,
+                            ))
+    for start, end, alias in sorted(replacements, reverse=True):
+        source = source[:start] + alias.encode() + source[end:]
+    return source.decode()
+
+
 class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
     """Abstract base class for all data model types.
 
     Handles template rendering, import collection, and model relationships.
     """
+
+    _field_name_bindings: Mapping[str, str] | None = None
 
     TEMPLATE_FILE_PATH: ClassVar[str] = ""
     BASE_CLASS: ClassVar[str] = ""
@@ -1548,6 +1857,7 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
     # Kept opaque so this generic layer does not import reference-layer policy.
     FIELD_NAME_MODEL_TYPE: ClassVar[Any] = None
     FIELD_NAME_RESOLVER_CLASS: ClassVar[Any] = None
+    EXPLICIT_ALIAS_CONFLICT_CHECKER: ClassVar[Callable[[DataModelFieldBase, str], bool] | None] = None
     USES_DATACLASS_ARGUMENTS: ClassVar[bool] = False
     SUPPORTS_REQUIRED_INHERITED_FIELD_ASSIGNMENT: ClassVar[bool] = False
     REQUIRES_EXPLICIT_INHERITED_FACTORY_OVERRIDE: ClassVar[bool] = False
@@ -1560,6 +1870,7 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
     SUPPORTS_BOOLEAN_LITERAL: ClassVar[bool] = True
     REQUIRES_FIELD_DEPENDENCY_ORDERING: ClassVar[bool] = False
     REQUIRES_TAGGED_UNION_DISCRIMINATOR: ClassVar[bool] = False
+    REQUIRES_UNIQUE_FIELD_ALIASES: ClassVar[bool] = False
     REQUIRES_ADDITIONAL_PROPERTIES_REFERENCE_CLASSES: ClassVar[bool] = False
     SUPPORTS_TYPED_DICT_TOTAL_FALSE: ClassVar[bool] = False
     SUPPORTS_DESERIALIZED_DEFAULT_VALUES: ClassVar[bool] = True
@@ -1570,6 +1881,10 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
     REQUIRES_RUNTIME_IMPORTS_WITH_RUFF_CHECK: ClassVar[bool] = False
     REQUIRES_EXPLICIT_DEFERRED_ANNOTATIONS_FOR_FORWARD_REFS: ClassVar[bool] = False
     SUPPORTS_SCHEMA_RUNTIME_VALIDATION: ClassVar[bool] = False
+    ROOT_MODEL_CONSTRAINTS_FALLBACK: ClassVar[
+        Callable[[Path | None], Callable[[list[DataModelFieldBase]], type[DataModel] | None] | None] | None
+    ] = None
+    PLAIN_PATTERN_ROOT_TYPES: ClassVar[Callable[[], tuple[type, type, type, type]] | None] = None
     SCHEMA_RUNTIME_VALIDATION_ROOT_MODEL: ClassVar[Callable[[], type[DataModel]] | None] = None
     DOCSTRING_INDENT: ClassVar[int] = 4
     FIELD_DOCSTRING_INDENT: ClassVar[int] = 4
@@ -1665,16 +1980,18 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
         return _ADDITIONAL_PROPERTIES_TYPE_TEMPLATE_DATA_KEY in extra_template_data
 
     @classmethod
-    def store_additional_properties_type(
+    def store_additional_properties_type(  # noqa: PLR0913
         cls,
         extra_template_data: dict[str, Any],
         type_hint: str,
         reference_classes: set[str] | None = None,
         *,
         root_model_type: type[DataModel] | None = None,
+        imports: tuple[Import, ...] = (),
         use_backport: bool = False,
     ) -> None:
         """Store typed additional-properties metadata and its dependencies."""
+        del imports
         expression = repr(str(type_hint)) if reference_classes else type_hint
         extra_template_data[_ADDITIONAL_PROPERTIES_TYPE_TEMPLATE_DATA_KEY] = _make_internal_type_expression(
             type_hint,
@@ -1846,6 +2163,8 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
         if cached is not None:
             return cached
 
+        if self.IS_ROOT_MODEL:
+            self.finalize_sequence_interface()
         render_class_name = class_name if class_name is not None or not use_default else "M"
         result = tuple(to_hashable(v) for v in (self.render(class_name=render_class_name), self.imports))
         self._dedup_key_cache[cache_key] = result
@@ -1932,6 +2251,7 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
         template_file_path = Path(self.TEMPLATE_FILE_PATH)
         if self._custom_template_dir is not None:
             custom_template_file_path = self._custom_template_dir / template_file_path
+            _remember_custom_template_dependency(self._custom_template_dir, custom_template_file_path)
             if cached_path_exists(custom_template_file_path):
                 return custom_template_file_path
         return template_file_path
@@ -1970,11 +2290,16 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
         if self._uses_custom_root_template:
             absolute_template_path = resolved_path.absolute()
             if template_adapter is None:
-                return _get_template_with_absolute_path(absolute_template_path, Path(self.TEMPLATE_FILE_PATH).parent)
+                return _get_template_with_absolute_path(
+                    absolute_template_path,
+                    Path(self.TEMPLATE_FILE_PATH).parent,
+                    custom_template_dir=self._custom_template_dir,
+                )
             return _get_template_with_absolute_path(
                 absolute_template_path,
                 Path(self.TEMPLATE_FILE_PATH).parent,
                 template_adapter,
+                self._custom_template_dir,
             )
         if template_adapter is None:
             return _get_template_with_custom_dir(Path(self.TEMPLATE_FILE_PATH), self._custom_template_dir)
@@ -2002,6 +2327,7 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
     def clear_imports_cache(self) -> None:
         """Clear cached imports after import-affecting model, field, or data type mutations."""
         self.__dict__.pop(self._IMPORTS_CACHE_KEY, None)
+        self.__dict__.pop(_NESTED_MODEL_REQUIRED_CONSTRUCTOR_FIELDS_KEY, None)
 
     def invalidate_render_caches(self) -> None:
         """Clear cached imports and render-derived model identity."""
@@ -2104,6 +2430,14 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
         """Return the number of models emitted before shared module code."""
         return 0
 
+    def finalize_sequence_interface(self) -> None:
+        """Finalize sequence helper metadata after parser type transformations."""
+
+    @classmethod
+    def get_native_hash_model_paths(cls, models: list[DataModel]) -> set[str]:  # noqa: ARG003
+        """Return models whose backend hash can replace the legacy set-item hash."""
+        return set()
+
     @classmethod
     def prepare_module_code(cls, models: list[DataModel]) -> None:
         """Prepare shared module metadata before imports are collected."""
@@ -2162,8 +2496,9 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
         """Render the model to a string using the template."""
         use_custom_template = self._uses_custom_root_template
         extra_template_data = self._custom_template_data() if use_custom_template else self._builtin_template_data()
-        return self._render(
-            class_name=class_name or self.class_name,
+        rendered_class_name = class_name or self.class_name
+        rendered = self._render(
+            class_name=rendered_class_name,
             fields=self._template_fields(use_custom_template=use_custom_template),
             decorators=self.decorators,
             base_class=self.base_class,
@@ -2177,6 +2512,14 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
             path=self.path,
             **extra_template_data,
         )
+        if self._field_name_bindings is None:
+            return rendered
+        return _bind_field_expressions(rendered, rendered_class_name, self._field_name_bindings)
+
+    def set_field_name_bindings(self, bindings: Mapping[str, str]) -> None:
+        """Set module import names used by rendered field expressions."""
+        self._field_name_bindings = bindings
+        self.invalidate_render_caches()
 
     @property
     def _custom_template_fields(self) -> Sequence[DataModelFieldBase | _RenderedDataModelField]:
@@ -2374,3 +2717,8 @@ def _rebuild_model_with_datamodel_namespace(model: type[Any]) -> None:
 _rebuild_model_with_datamodel_namespace(DataType)
 _rebuild_model_with_datamodel_namespace(BaseClassDataType)
 _rebuild_model_with_datamodel_namespace(DataModelFieldBase)
+
+
+def _find_base_classes(model: DataModel) -> list[DataModel]:
+    """Get direct base class DataModels."""
+    return [b.reference.source for b in model.base_classes if b.reference and isinstance(b.reference.source, DataModel)]

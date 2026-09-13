@@ -24,7 +24,7 @@ from warnings import warn
 from weakref import ReferenceType, WeakKeyDictionary, ref
 
 from datamodel_code_generator import _format_types
-from datamodel_code_generator.deprecations import warn_deprecated
+from datamodel_code_generator.deprecations import warn_deprecated, warn_legacy_dependency
 from datamodel_code_generator.util import load_toml
 
 if TYPE_CHECKING:
@@ -535,14 +535,11 @@ class CodeFormatter:
         if formatters is None:
             warn_deprecated(
                 "format.default-formatters",
-                details=(
-                    "To keep the current behavior, specify formatters=[Formatter.BLACK, Formatter.ISORT]. "
-                    "To prepare for dependency-free formatting, use formatters=[Formatter.BUILTIN]. "
-                    "To suppress this warning, specify formatters explicitly."
-                ),
                 stacklevel=2,
             )
             formatters = list(DEFAULT_FORMATTERS)
+        elif Formatter.BLACK in formatters or Formatter.ISORT in formatters:
+            warn_deprecated("dependency.external-formatters-optional", stacklevel=2)
 
         if not settings_path:
             settings_path = Path.cwd()
@@ -625,6 +622,7 @@ class CodeFormatter:
                 config = {}
 
             black = _get_black()
+            warn_legacy_dependency("dependency.black-minimum", black.__version__, (24, 3, 0))
             black_mode = _get_black_mode()
 
             black_kwargs: dict[str, Any] = {}
@@ -662,6 +660,7 @@ class CodeFormatter:
 
         if use_isort:
             isort = _get_isort()
+            warn_legacy_dependency("dependency.isort-minimum", isort.__version__, (6, 0, 0))
             self.isort_config_kwargs: dict[str, Any] = {}
             if known_third_party:
                 self.isort_config_kwargs["known_third_party"] = known_third_party
@@ -681,12 +680,18 @@ class CodeFormatter:
 
     def _load_custom_formatter(self, custom_formatter_import: str) -> CustomCodeFormatter:
         """Load and instantiate a custom formatter from a module path."""
-        if (watch_dependencies := sys.modules.get("datamodel_code_generator.watch_dependencies")) is not None and (
-            watch_dependencies.collector_is_active()
-        ):
-            import_ = _load_watch_formatter_module(custom_formatter_import, watch_dependencies)
-        else:
-            import_ = import_module(custom_formatter_import)
+        try:
+            if (watch_dependencies := sys.modules.get("datamodel_code_generator.watch_dependencies")) is not None and (
+                watch_dependencies.collector_is_active()
+            ):
+                import_ = _load_watch_formatter_module(custom_formatter_import, watch_dependencies)
+            else:
+                import_ = import_module(custom_formatter_import)
+        except ImportError as e:
+            from datamodel_code_generator import Error  # noqa: PLC0415
+
+            msg = f"Unable to import custom formatter {custom_formatter_import!r}: {e}"
+            raise Error(msg) from e
 
         if not hasattr(import_, "CodeFormatter"):
             msg = f"Custom formatter module `{import_.__name__}` must contains object with name CodeFormatter"

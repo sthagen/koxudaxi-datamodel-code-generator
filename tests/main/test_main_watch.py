@@ -282,8 +282,10 @@ def _write_watch_cli_input_and_wait(
     condition: Callable[[], bool],
     description: str,
 ) -> None:
-    last_write = 0.0
-    input_file.write_text(content, encoding="utf-8")
+    pending_input = input_file.with_name(f".{input_file.name}.pending")
+    pending_input.write_text(content, encoding="utf-8")
+    pending_input.replace(input_file)
+    last_write = time.monotonic()
 
     def condition_after_write() -> bool:
         nonlocal last_write
@@ -2102,6 +2104,31 @@ def test_watch_dependencies_accepts_polling_parent_events_for_changed_inputs(tmp
     assert not dependencies._polling_dependencies_changed()
     assert not dependencies.accepts_event(project_directory, accept_directory_events=True)
 
+    dependencies.add_directory(project_directory)
+    child_file = project_directory / "child.json"
+    child_file.write_text(WATCH_SCHEMA_CHANGED, encoding="utf-8")
+    input_file.write_text((WATCH_DATA_PATH / "file_change/reference.json").read_text(), encoding="utf-8")
+    with dependencies.generation():
+        run_main_with_args([
+            "--input",
+            str(input_file),
+            "--output",
+            str(output_file),
+            "--input-file-type",
+            "jsonschema",
+            "--formatters",
+            "builtin",
+            "--disable-timestamp",
+        ])
+        assert_output(output_file.read_text(), EXPECTED_MAIN_PATH / "watch_reference_change.py")
+        replacement.write_text("generated output\n", encoding="utf-8")
+        replacement.replace(output_file)
+    assert not dependencies._polling_dependencies_changed()
+    assert not dependencies.accepts_event(output_file, accept_directory_events=True)
+    child_file.write_text(WATCH_SCHEMA_INITIAL, encoding="utf-8")
+    assert dependencies._polling_dependencies_changed()
+    assert dependencies.accepts_event(project_directory, accept_directory_events=True)
+
 
 @pytest.mark.allow_direct_assert
 def test_watch_dependencies_accept_events_with_unresolvable_paths(
@@ -2436,17 +2463,20 @@ def test_watch_with_no_collected_dependencies_stops_cleanly(tmp_path: Path) -> N
     )
 
 
-def test_watch_cli_regenerates_directory_output_on_change(tmp_path: Path) -> None:
+@pytest.mark.parametrize("layout", ["sibling", "child", "same"])
+@pytest.mark.parametrize("emit_metadata", [False, True])
+def test_watch_cli_regenerates_directory_output_on_change(tmp_path: Path, layout: str, emit_metadata: bool) -> None:
     """Watch mode regenerates package output when a schema directory changes."""
     input_dir = tmp_path / "schemas"
     input_dir.mkdir()
     input_file = input_dir / "schema.json"
-    output_dir = tmp_path / "models"
+    output_dir = {"sibling": tmp_path / "models", "child": input_dir / "models", "same": input_dir}[layout]
     output_file = output_dir / "schema.py"
     input_file.write_text(WATCH_SCHEMA_INITIAL, encoding="utf-8")
     process, stdout_lines, stderr_lines, stdout_thread, stderr_thread = _start_watch_cli_until_ready(
         input_dir,
         output_dir,
+        ["--emit-model-metadata", str(input_dir / "model_map.json")] if emit_metadata else None,
     )
 
     try:
@@ -3257,7 +3287,7 @@ input-file-type = "jsonschema"
             stderr_lines,
             project_file,
             project_content(lock_path=alternate_lockfile),
-            lambda: len(stderr_lines) > replan_error_count,
+            lambda: _lines_contain(stderr_lines[replan_error_count:], "HTTP 404 error fetching"),
             "the alternate existing lock to be verified by the failed replan",
         )
         alternate_lockfile.unlink()
@@ -3490,9 +3520,8 @@ def test_batch_watch_nested_dependency_reruns_full_batch_without_output_loop(tmp
         assert_output(
             second_metadata.read_text(encoding="utf-8"), PROJECT_ROOT / "tests/data/expected/main_kr/jobs/stale.py"
         )
-        child_file.write_text(
-            (WATCH_DATA_PATH / "nested_ref/child_changed.json").read_text(encoding="utf-8"), encoding="utf-8"
-        )
+        shutil.copyfile(WATCH_DATA_PATH / "nested_ref/child_changed.json", child_file.with_suffix(".pending"))
+        child_file.with_suffix(".pending").replace(child_file)
         # Do not open batch destinations until their atomic publication completes. On Windows,
         # a reader can temporarily prevent replacement and make the test race with the watch CLI.
         _wait_for_watch_cli(
@@ -3517,7 +3546,6 @@ def test_batch_watch_failed_cycle_preserves_outputs_and_recovers_from_new_depend
     nested_dir = tmp_path / "nested"
     nested_dir.mkdir()
     root_file = nested_dir / "root.json"
-    child_file = nested_dir / "child.json"
     missing_file = nested_dir / "missing.json"
     second_input = tmp_path / "second.json"
     first_output = tmp_path / "first.py"
@@ -3525,7 +3553,7 @@ def test_batch_watch_failed_cycle_preserves_outputs_and_recovers_from_new_depend
     first_expected = tmp_path / "first.expected.py"
     second_expected = tmp_path / "second.expected.py"
     shutil.copyfile(WATCH_DATA_PATH / "nested_ref/root.json", root_file)
-    shutil.copyfile(WATCH_DATA_PATH / "nested_ref/child.json", child_file)
+    shutil.copyfile(WATCH_DATA_PATH / "nested_ref/child.json", nested_dir / "child.json")
     second_input.write_text(WATCH_SCHEMA_INITIAL, encoding="utf-8")
     (tmp_path / "pyproject.toml").write_text(
         _batch_pyproject([
@@ -3552,13 +3580,14 @@ def test_batch_watch_failed_cycle_preserves_outputs_and_recovers_from_new_depend
         assert_output(first_output.read_text(encoding="utf-8"), first_expected)
         assert_output(second_output.read_text(encoding="utf-8"), second_expected)
 
+        completed_before_recovery = sum(line.strip() == "Done." for line in stdout_lines)
         _write_watch_cli_input_and_wait(
             process,
             stdout_lines,
             stderr_lines,
             missing_file,
             (WATCH_DATA_PATH / "nested_ref/child_changed.json").read_text(encoding="utf-8"),
-            lambda: _file_contains(first_output, "age: int | None = None"),
+            lambda: sum(line.strip() == "Done." for line in stdout_lines) > completed_before_recovery,
             "the failed batch to recover from its newly created dependency",
         )
         assert_output(first_output.read_text(encoding="utf-8"), EXPECTED_MAIN_PATH / "watch_missing_ref_recovery.py")
@@ -3765,6 +3794,22 @@ def test_watch_cli_reports_generation_error_after_change(tmp_path: Path) -> None
         output_file,
     )
 
+    first_modified_time: int | None = None
+    first_error_count = 0
+
+    def error_after_retry() -> bool:
+        nonlocal first_modified_time, first_error_count
+
+        modified_time = input_file.stat().st_mtime_ns
+        if first_modified_time is None:
+            first_modified_time = modified_time
+            return False
+        error_count = sum("Error:" in line for line in stderr_lines)
+        if not first_error_count:
+            first_error_count = error_count
+            return False
+        return modified_time != first_modified_time and error_count > first_error_count
+
     try:
         _write_watch_cli_input_and_wait(
             process,
@@ -3772,8 +3817,166 @@ def test_watch_cli_reports_generation_error_after_change(tmp_path: Path) -> None
             stderr_lines,
             input_file,
             WATCH_SCHEMA_INVALID,
-            lambda: _lines_contain(stderr_lines, "Error:"),
-            "generation error to be reported",
+            error_after_retry,
+            "the invalid input to be retried and its generation error reported",
         )
+        assert_output(output_file.read_text(encoding="utf-8"), EXPECTED_MAIN_PATH / "watch_file_initial.py")
+    finally:
+        _stop_watch_cli(process, stdout_thread, stderr_thread)
+
+
+@pytest.mark.parametrize("notice", ["default", "optional"])
+def test_watch_migration_notice_is_not_repeated(notice: str, tmp_path: Path) -> None:
+    """Real watch regeneration reports each migration once even with an always warning filter."""
+    input_file = tmp_path / "schema.json"
+    output_file = tmp_path / "output.py"
+    shutil.copyfile(JSON_SCHEMA_DATA_PATH / "migration_notice.json", input_file)
+    command = _watch_cli_command(
+        input_file,
+        output_file,
+        [
+            "--target-python-version",
+            "3.10",
+            "--output-model-type",
+            "dataclasses.dataclass",
+        ],
+    )
+    formatter_index = command.index("--formatters")
+    command[formatter_index : formatter_index + 2] = [] if notice == "default" else ["--formatters", "black", "isort"]
+    command.insert(1, "-Walways::FutureWarning")
+    process, stdout_lines, stderr_lines, stdout_thread, stderr_thread = _wait_for_watch_cli_ready(
+        *_start_watch_process(command, tmp_path),
+    )
+    try:
+        _write_watch_cli_input_and_wait(
+            process,
+            stdout_lines,
+            stderr_lines,
+            input_file,
+            (JSON_SCHEMA_DATA_PATH / "migration_notice_changed.json").read_text(encoding="utf-8"),
+            lambda: _file_contains(output_file, "age: int | None = None"),
+            "changed model output",
+        )
+        prefix = "Default formatters" if notice == "default" else "Black/isort"
+        assert_output(
+            "\n".join(
+                line.partition("FutureWarning: ")[2].strip()
+                for line in stderr_lines
+                if f"FutureWarning: {prefix}" in line
+            ),
+            EXPECTED_MAIN_PATH / "migration_warnings" / f"{notice}.txt",
+        )
+        assert_output(output_file.read_text(encoding="utf-8"), EXPECTED_MAIN_PATH / "migration_warnings" / "watched.py")
+    finally:
+        _stop_watch_cli(process, stdout_thread, stderr_thread)
+
+
+def test_watch_cli_keeps_input_changes_during_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An atomic input update during formatting survives publication of the dependency graph."""
+    project_directory = tmp_path / "project"
+    formatter_directory = project_directory
+    input_file = project_directory / "schema.json"
+    output_file = project_directory / "output.py"
+    pyproject_file = project_directory / "pyproject.toml"
+    marker_file = tmp_path / "formatter-started"
+    release_file = tmp_path / "formatter-release"
+    project_directory.mkdir()
+    input_file.write_text((WATCH_DATA_PATH / "file_change/initial.json").read_text(encoding="utf-8"), encoding="utf-8")
+    pyproject_file.write_text('[tool.datamodel-codegen]\ncustom-formatters = "blocking_formatter"\n', encoding="utf-8")
+    release_file.touch()
+    shutil.copyfile(
+        WATCH_DATA_PATH.parent / "python/custom_formatters/blocking_watch.py",
+        formatter_directory / "blocking_formatter.py",
+    )
+    monkeypatch.setenv(
+        "PYTHONPATH",
+        f"{formatter_directory}{os.pathsep}{os.environ['PYTHONPATH']}"
+        if "PYTHONPATH" in os.environ
+        else str(formatter_directory),
+    )
+    monkeypatch.setenv("DATAMODEL_CODEGEN_WATCH_MARKER", str(marker_file))
+    monkeypatch.setenv("DATAMODEL_CODEGEN_WATCH_RELEASE", str(release_file))
+    monkeypatch.setenv("DATAMODEL_CODEGEN_WATCH_BLOCK_TIMEOUT", "5")
+    process, stdout_lines, stderr_lines, stdout_thread, stderr_thread = _start_watch_cli_until_ready(
+        input_file,
+        output_file,
+        working_directory=project_directory,
+    )
+
+    try:
+        marker_file.unlink()
+        release_file.unlink()
+        assert_output(output_file.read_text(encoding="utf-8"), EXPECTED_MAIN_PATH / "watch_file_initial.py")
+        time.sleep(WATCH_CLI_CHANGE_RETRY_SECONDS)
+        pyproject_update = project_directory / "pyproject-update.toml"
+        pyproject_update.write_text(
+            '[tool.datamodel-codegen]\ncustom-formatters = "blocking_formatter"\n',
+            encoding="utf-8",
+        )
+        pyproject_update.replace(pyproject_file)
+        _wait_for_watch_cli(
+            process,
+            stdout_lines,
+            stderr_lines,
+            marker_file.is_file,
+            "the custom formatter to begin regeneration",
+        )
+        input_update = project_directory / "input-update.json"
+        input_update.write_text(
+            (WATCH_DATA_PATH / "file_change/changed.json").read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        original_status = input_file.stat()
+        os.utime(input_update, ns=(original_status.st_atime_ns, original_status.st_mtime_ns))
+        input_update.replace(input_file)
+        release_file.touch()
+        _wait_for_watch_cli(
+            process,
+            stdout_lines,
+            stderr_lines,
+            lambda: _file_contains(output_file, "age: int | None = None"),
+            "the input changed during formatting to regenerate",
+        )
+        assert_output(output_file.read_text(encoding="utf-8"), EXPECTED_MAIN_PATH / "watch_file_change.py")
+    finally:
+        _stop_watch_cli(process, stdout_thread, stderr_thread)
+
+
+def test_watch_cli_tracks_new_reference_after_generation(tmp_path: Path) -> None:
+    """Newly discovered dependencies remain observable after their first generation."""
+    input_file = tmp_path / "schema.json"
+    child_file = tmp_path / "child.json"
+    output_file = tmp_path / "output.py"
+    initial = (WATCH_DATA_PATH / "file_change/initial.json").read_text(encoding="utf-8")
+    changed = (WATCH_DATA_PATH / "file_change/changed.json").read_text(encoding="utf-8")
+    input_file.write_text(initial, encoding="utf-8")
+    child_file.write_text(changed, encoding="utf-8")
+    process, stdout_lines, stderr_lines, stdout_thread, stderr_thread = _start_watch_cli_until_ready(
+        input_file,
+        output_file,
+    )
+    try:
+        _write_watch_cli_input_and_wait(
+            process,
+            stdout_lines,
+            stderr_lines,
+            input_file,
+            (WATCH_DATA_PATH / "file_change/reference.json").read_text(encoding="utf-8"),
+            lambda: _file_contains(output_file, "age: int | None = None"),
+            "the newly referenced child to generate",
+        )
+        assert_output(output_file.read_text(encoding="utf-8"), EXPECTED_MAIN_PATH / "watch_reference_change.py")
+        _write_watch_cli_input_and_wait(
+            process,
+            stdout_lines,
+            stderr_lines,
+            child_file,
+            initial,
+            lambda: _file_contains(output_file, "name: str") and not _file_contains(output_file, "age:"),
+            "an edit to the newly referenced child to regenerate",
+        )
+        assert_output(output_file.read_text(encoding="utf-8"), EXPECTED_MAIN_PATH / "watch_reference_initial.py")
     finally:
         _stop_watch_cli(process, stdout_thread, stderr_thread)

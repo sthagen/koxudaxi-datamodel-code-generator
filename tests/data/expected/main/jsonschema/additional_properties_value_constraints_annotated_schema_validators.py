@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping as _Mapping
 from typing import Annotated, Any, ClassVar
 
 from pydantic import (
@@ -12,6 +13,7 @@ from pydantic import (
     Field,
     RootModel,
     TypeAdapter,
+    conint,
     constr,
     model_validator,
 )
@@ -29,7 +31,7 @@ class _JsonSchemaRuntimeValidationBase(BaseModel):
 
     @classmethod
     def _validate_json_schema_pattern_properties(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
+        if not (isinstance(data, dict) or isinstance(data, _Mapping)):
             return data
         values = data
         for rule in cls.__json_schema_pattern_properties__:
@@ -238,5 +240,5 @@ class Payload(_JsonSchemaRuntimeValidationBase):
     titledValueMap: dict[str, NamedValue]
     modeledIrrelevantConstraintMap: dict[str, ModeledIrrelevantConstraintMap]
     arrayIrrelevantConstraintMap: dict[str, list[int]]
-    heterogeneousValueMap: dict[str, int | str]
+    heterogeneousValueMap: dict[str, conint(ge=1) | str]
     booleanIrrelevantConstraintMap: dict[str, bool]

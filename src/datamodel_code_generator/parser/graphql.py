@@ -11,6 +11,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     ClassVar,
+    cast,
 )
 
 from typing_extensions import Unpack
@@ -22,10 +23,12 @@ from datamodel_code_generator import (
     snooper_to_methods,
 )
 from datamodel_code_generator._format_types import DatetimeClassType
+from datamodel_code_generator.model.base import _find_base_classes, get_inherited_fields
 from datamodel_code_generator.model.enum import SPECIALIZED_ENUM_TYPE_MATCH, Enum, EnumMemberValue
 from datamodel_code_generator.parser.base import (
     DataType,
     Parser,
+    _copy_data_model_field,
 )
 from datamodel_code_generator.reference import ModelType, Reference
 from datamodel_code_generator.types import Types
@@ -44,7 +47,7 @@ if TYPE_CHECKING:
 
     from datamodel_code_generator._types import GraphQLParserConfigDict
     from datamodel_code_generator.config import GraphQLParserConfig
-    from datamodel_code_generator.model import DataModelFieldBase
+    from datamodel_code_generator.model import DataModel, DataModelFieldBase
     from datamodel_code_generator.parser.schema_version import JsonSchemaFeatures
 
 # graphql-core >=3.2.7 removed TypeResolvers in favor of TypeFields.kind.
@@ -90,6 +93,7 @@ class GraphQLParser(Parser["GraphQLParserConfig", "JsonSchemaFeatures"]):
     # `graphql.GraphQLNamedType` -- base type for each graphql object
     # see `graphql-core` for more details
     support_graphql_types: dict[graphql.type.introspection.TypeKind, list[graphql.GraphQLNamedType]]
+    _typename_collisions: list[graphql.GraphQLObjectType | graphql.GraphQLInterfaceType] | None
     # graphql types order for render
     # may be as a parameter in the future
     parse_order: list[graphql.type.introspection.TypeKind] = [  # noqa: RUF012
@@ -123,11 +127,15 @@ class GraphQLParser(Parser["GraphQLParserConfig", "JsonSchemaFeatures"]):
         self.use_union_operator = self.config.use_union_operator
 
     def _resolve_types(self, paths: list[str], schema: graphql.GraphQLSchema) -> None:
+        root_types = {schema.query_type, schema.mutation_type, schema.subscription_type}
+        for type_ in schema.type_map.values():
+            if isinstance(type_, graphql.GraphQLUnionType):
+                root_types.difference_update(type_.types)
         for type_name, type_ in schema.type_map.items():
             if type_name.startswith("__"):
                 continue
 
-            if type_name in {"Query", "Mutation"}:
+            if type_ in root_types:
                 continue
 
             resolved_type = graphql_resolver_kind(type_, None)
@@ -144,9 +152,14 @@ class GraphQLParser(Parser["GraphQLParserConfig", "JsonSchemaFeatures"]):
 
                 self.support_graphql_types[resolved_type].append(type_)
 
-    def _typename_field(self, name: str) -> DataModelFieldBase:
+    def _typename_field(self, name: str, excludes: set[str]) -> DataModelFieldBase:
+        field_name = "typename__"
+        if field_name in excludes:
+            field_name = self.model_resolver.get_valid_field_name(
+                field_name, excludes=excludes, model_type=self.field_name_model_type
+            )
         return self.data_model_field_type(
-            name="typename__",
+            name=field_name,
             data_type=DataType(
                 literals=[name],
                 use_union_operator=self.use_union_operator,
@@ -156,7 +169,7 @@ class GraphQLParser(Parser["GraphQLParserConfig", "JsonSchemaFeatures"]):
             use_annotated=self.use_annotated,
             required=False,
             alias="__typename",
-            serialization_alias=self.get_serialization_alias("__typename", "typename__", name),
+            serialization_alias=self.get_serialization_alias("__typename", field_name, name),
             use_one_literal_as_default=True,
             use_default_kwarg=self.use_default_kwarg,
             has_default=True,
@@ -340,9 +353,11 @@ class GraphQLParser(Parser["GraphQLParserConfig", "JsonSchemaFeatures"]):
         obj = graphql.assert_named_type(obj)
         if obj.name in self.references:
             self.generation_store.replace_data_type_ref(data_type, self.references[obj.name])
-        else:  # pragma: no cover
-            # Only happens for Query and Mutation root types
-            data_type.type = obj.name
+        else:
+            # Operation roots are intentionally not emitted as models.
+            any_data_type = self.data_type_manager.get_data_type(Types.any)
+            data_type.type = any_data_type.type
+            data_type.import_ = any_data_type.import_
 
         has_schema_default = self._has_schema_default(field)
         required = (
@@ -353,12 +368,10 @@ class GraphQLParser(Parser["GraphQLParserConfig", "JsonSchemaFeatures"]):
         nullable = False if has_schema_default and not final_data_type.is_optional else None
 
         default = self._get_default(field, final_data_type, required=required)
-        has_default = has_schema_default
-
         effective_default, effective_has_default, use_default_with_required = self._effective_default_state(
             original_field_name,
             default,
-            has_default=has_default,
+            has_default=has_schema_default,
             required=required,
             class_name=class_name,
         )
@@ -416,11 +429,20 @@ class GraphQLParser(Parser["GraphQLParserConfig", "JsonSchemaFeatures"]):
             fields.append(data_model_field_type)
 
         if not self.config.graphql_no_typename:
-            fields.append(self._typename_field(obj.name))
+            fields.append(self._typename_field(obj.name, exclude_field_names))
 
         base_classes = []
         if hasattr(obj, "interfaces"):
             base_classes = [self.references[i.name] for i in obj.interfaces]  # ty: ignore[not-iterable]
+
+        if (
+            not self.config.graphql_no_typename
+            and fields[-1].name != "typename__"
+            and isinstance(obj, graphql.GraphQLObjectType | graphql.GraphQLInterfaceType)
+        ):
+            if self._typename_collisions is None:
+                self._typename_collisions = []
+            self._typename_collisions.append(obj)
 
         data_model_type = self._create_data_model(
             reference=self.references[obj.name],
@@ -474,6 +496,7 @@ class GraphQLParser(Parser["GraphQLParserConfig", "JsonSchemaFeatures"]):
         """Parse the raw GraphQL schema and generate all data models."""
         self.all_graphql_objects = {}
         self.references: dict[str, Reference] = {}
+        self._typename_collisions = None
 
         self.support_graphql_types = {
             graphql.type.introspection.TypeKind.SCALAR: [],
@@ -515,3 +538,118 @@ class GraphQLParser(Parser["GraphQLParserConfig", "JsonSchemaFeatures"]):
             for obj in self.support_graphql_types[next_type]:
                 parser_ = mapper_from_graphql_type_to_parser_method[next_type]
                 parser_(obj)  # ty: ignore[invalid-argument-type]
+
+        if not (collisions := self._typename_collisions):
+            return
+        self._typename_collisions = None
+        self._resolve_typename_collisions(schema, collisions)
+
+    def _resolve_typename_collisions(
+        self,
+        schema: graphql.GraphQLSchema,
+        collisions: list[graphql.GraphQLObjectType | graphql.GraphQLInterfaceType],
+    ) -> None:
+        """Override inherited synthetic slots without renaming unrelated models."""
+        resolved: set[graphql.GraphQLObjectType | graphql.GraphQLInterfaceType] = set()
+
+        def resolve(obj: graphql.GraphQLObjectType | graphql.GraphQLInterfaceType) -> None:
+            if obj in resolved or obj.name not in self.references:
+                return
+            resolved.add(obj)
+            for interface in obj.interfaces:
+                resolve(interface)
+            source = cast("DataModel", self.references[obj.name].source)
+            bases = _find_base_classes(source)
+            inherited_typename_names = {
+                field.name for base in bases for field in base.fields if field.alias == "__typename"
+            }
+            fields = {field.name: field for field in source.fields}
+            inherited_fields = None
+            if self.data_model_type.REQUIRES_UNIQUE_FIELD_ALIASES and (
+                conflicts := [
+                    field
+                    for field in source.fields
+                    if field.name in inherited_typename_names and (field.alias is None or field.alias == field.name)
+                ]
+            ):
+                inherited_fields = get_inherited_fields(bases)
+                excludes = {
+                    cast("str", field.name)
+                    for field in (*source.fields, *inherited_fields.values())
+                    if field.alias != "__typename"
+                }
+                for field in conflicts:
+                    wire_name = cast("str", field.name)
+                    fields.pop(wire_name)
+                    inherited = next(
+                        (
+                            candidate
+                            for candidate in inherited_fields.values()
+                            if (candidate.alias or candidate.name) == wire_name
+                        ),
+                        None,
+                    )
+                    field.name = (
+                        inherited.name
+                        if inherited
+                        else self.model_resolver.get_valid_field_name(
+                            wire_name, excludes=excludes, model_type=self.field_name_model_type
+                        )
+                    )
+                    field.alias = wire_name
+                    field.serialization_alias = self.get_serialization_alias(
+                        wire_name, cast("str", field.name), obj.name
+                    )
+                    excludes.add(cast("str", field.name))
+                    fields[field.name] = field
+            if not inherited_typename_names.difference(fields):
+                return
+            if inherited_fields is None:
+                inherited_fields = get_inherited_fields(bases)
+            for inherited in inherited_fields.values():
+                if (
+                    inherited.alias != "__typename"
+                    and inherited.name in inherited_typename_names
+                    and (inherited.name not in fields or fields[inherited.name].alias == "__typename")
+                ):
+                    field = _copy_data_model_field(inherited)
+                    self.generation_store.insert_field(source, -1, field)
+                    fields[field.name] = field
+            inherited_typename = next(
+                (
+                    field
+                    for field in inherited_fields.values()
+                    if field.alias == "__typename" and field.name not in fields
+                ),
+                None,
+            )
+            typename_field = source.fields[-1]
+            typename_field.name = (
+                inherited_typename.name
+                if inherited_typename
+                else self.model_resolver.get_valid_field_name(
+                    "typename__",
+                    excludes={
+                        cast("str", field.name)
+                        for field in (*source.fields, *inherited_fields.values())
+                        if field.alias != "__typename"
+                    },
+                    model_type=self.field_name_model_type,
+                )
+            )
+            typename_field.serialization_alias = self.get_serialization_alias(
+                "__typename", cast("str", typename_field.name), obj.name
+            )
+
+        visited: set[graphql.GraphQLObjectType | graphql.GraphQLInterfaceType] = set()
+        pending = list(collisions)
+        while pending:
+            obj = pending.pop()
+            if obj in visited:
+                continue
+            visited.add(obj)
+            if isinstance(obj, graphql.GraphQLInterfaceType):
+                implementations = schema.get_implementations(obj)
+                pending.extend(implementations.objects)
+                pending.extend(implementations.interfaces)
+            resolve(obj)

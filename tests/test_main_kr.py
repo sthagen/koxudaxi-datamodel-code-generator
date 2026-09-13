@@ -17,6 +17,11 @@ import pydantic
 import pytest
 from packaging import version
 
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
+
 from datamodel_code_generator import MIN_VERSION, Error, chdir, inferred_message
 from datamodel_code_generator import __main__ as main_module
 from datamodel_code_generator import _publication as publication_module
@@ -43,6 +48,7 @@ from tests.conftest import (
     assert_output,
     create_assert_file_content,
     freeze_time,
+    validate_generated_code,
 )
 
 if TYPE_CHECKING:
@@ -64,6 +70,7 @@ EXPECTED_MAIN_KR_PATH = DATA_PATH / "expected" / "main_kr"
 EXPECTED_OUTPUT_FORMAT_JSON_PATH = EXPECTED_MAIN_KR_PATH / "output_format_json"
 EXPECTED_EMPTY_OUTPUT_PATH = DATA_PATH / "expected" / "__init__.py"
 JOBS_PYPROJECT_TEMPLATE = DATA_PATH / "config" / "pyproject_jobs.toml"
+FALSE_BOOLEAN_OPTIONAL_ACTIONS_PYPROJECT = DATA_PATH / "config" / "false_boolean_optional_actions.toml"
 GENERATE_PROMPT_JSON_ARGS = [
     "--input",
     "tests/data/jsonschema/person.json",
@@ -920,6 +927,44 @@ def test_generate_pyproject_config_with_list_options(capsys: pytest.CaptureFixtu
     )
 
 
+def test_generate_pyproject_config_with_float_option(capsys: pytest.CaptureFixture[str]) -> None:
+    """Serialize finite floating-point CLI options as TOML values."""
+    run_main_with_args(
+        ["--generate-pyproject-config", "--http-timeout", "1.5"],
+        capsys=capsys,
+        expected_stdout_path=EXPECTED_GENERATE_PYPROJECT_CONFIG_PATH / "float_option.txt",
+        assert_no_stderr=True,
+    )
+
+
+def test_generate_pyproject_config_float_round_trip(tmp_path: Path, output_file: Path) -> None:
+    """Preserve normal output when generated floating-point config is used."""
+    config_output = generate_pyproject_config(Namespace(http_timeout=1.5))
+    assert_output(config_output, EXPECTED_GENERATE_PYPROJECT_CONFIG_PATH / "float_option_helper.txt")
+    tomllib.loads(config_output)
+    expected_output_path = DATA_PATH / "expected" / "main" / "person.py"
+
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=["--disable-timestamp", "--http-timeout", "1.5"],
+    )
+    assert_output(output_file.read_text(encoding="utf-8"), expected_output_path)
+
+    config_output_file = tmp_path / "from_config.py"
+    (tmp_path / "pyproject.toml").write_text(config_output, encoding="utf-8")
+    with chdir(tmp_path):
+        run_main_and_assert(
+            input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+            output_path=config_output_file,
+            input_file_type="jsonschema",
+            extra_args=["--disable-timestamp"],
+        )
+
+    assert_output(config_output_file.read_text(encoding="utf-8"), expected_output_path)
+
+
 def test_generate_pyproject_config_with_multiple_options(capsys: pytest.CaptureFixture[str]) -> None:
     """Test --generate-pyproject-config with various option types."""
     run_main_with_args(
@@ -1128,7 +1173,7 @@ http-headers = ["Authorization: Bearer token", "X-Custom: value"]
 
 
 def test_generate_cli_command_with_false_boolean(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """Test --generate-cli-command with regular boolean set to false (should be skipped)."""
+    """Test --generate-cli-command preserves the existing negative snake-case flag."""
     pyproject_toml = """
 [tool.datamodel-codegen]
 input = "schema.yaml"
@@ -1142,6 +1187,77 @@ snake-case-field = false
             capsys=capsys,
             expected_stdout_path=EXPECTED_GENERATE_CLI_COMMAND_PATH / "false_boolean.txt",
         )
+
+
+def test_generate_cli_command_with_false_boolean_optional_actions(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Test --generate-cli-command preserves false BooleanOptionalAction values."""
+    shutil.copy(FALSE_BOOLEAN_OPTIONAL_ACTIONS_PYPROJECT, tmp_path / "pyproject.toml")
+
+    with chdir(tmp_path):
+        run_main_with_args(
+            ["--generate-cli-command"],
+            capsys=capsys,
+            expected_stdout_path=EXPECTED_GENERATE_CLI_COMMAND_PATH / "false_boolean_optional_actions.txt",
+        )
+
+
+def test_generate_cli_command_json_with_false_boolean_optional_actions(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Test JSON CLI command output preserves false BooleanOptionalAction values."""
+    shutil.copy(FALSE_BOOLEAN_OPTIONAL_ACTIONS_PYPROJECT, tmp_path / "pyproject.toml")
+
+    with chdir(tmp_path):
+        run_main_with_args(
+            ["--generate-cli-command", "--output-format", "json"],
+            capsys=capsys,
+            expected_stdout_path=EXPECTED_OUTPUT_FORMAT_JSON_PATH / "cli_command_false_boolean_optional_actions.txt",
+            assert_no_stderr=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("input_name", "output_model_type", "expected_file"),
+    [
+        ("person.json", "pydantic_v2.BaseModel", "generate_cli_command/no_use_union_operator.py"),
+        ("typed_dict_closed.json", "typing.TypedDict", "generate_cli_command/no_use_closed_typed_dict.py"),
+    ],
+)
+def test_generate_cli_command_reconstructs_false_boolean_optional_actions(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    input_name: str,
+    output_model_type: str,
+    expected_file: str,
+) -> None:
+    """Test reconstructed CLI commands retain false BooleanOptionalAction behavior."""
+    shutil.copy(JSON_SCHEMA_DATA_PATH / input_name, tmp_path / "schema.json")
+    (tmp_path / "pyproject.toml").write_text(
+        (DATA_PATH / "config" / "false_boolean_round_trip.toml")
+        .read_text(encoding="utf-8")
+        .format(output_model_type=output_model_type),
+        encoding="utf-8",
+    )
+    config_output = tmp_path / "from-config.py"
+    command_output = tmp_path / "from-command.py"
+
+    with chdir(tmp_path):
+        run_main_with_args(["--input", "schema.json", "--output", str(config_output)])
+        run_main_with_args(["--generate-cli-command", "--output-format", "json"], capsys=capsys)
+        generated_command = json.loads(capsys.readouterr().out)
+        run_main_with_args([
+            *generated_command["arguments"][1:],
+            "--ignore-pyproject",
+            "--output",
+            str(command_output),
+        ])
+
+    assert_file_content(config_output, expected_file)
+    assert_file_content(command_output, expected_file)
+    validate_generated_code(config_output.read_text(), str(config_output), do_exec=True)
+    validate_generated_code(command_output.read_text(), str(command_output), do_exec=True)
 
 
 def test_generate_cli_command_excludes_excluded_options(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -3920,8 +4036,12 @@ def test_encoding_option(output_file: Path) -> None:
 
 The `--formatters` flag specifies which code formatters to apply to
 the generated Python code. Available formatters are: builtin, black,
-isort, ruff-check, ruff-format. Default is [black, isort].
-Use this to customize formatting or disable formatters entirely.""",
+isort, ruff-check, ruff-format. The current default is [black, isort].
+For projects using Ruff, select --formatters ruff-check ruff-format to match project lint and formatting settings.
+Use --formatters builtin when you use no external formatter or prioritize generation speed.
+Keep --formatters black isort to preserve existing formatting. Explicit formatters override presets.
+The future builtin default reduces installation dependencies and version constraints; Black/isort remain required today.
+See the formatter guides for installation and custom-template limitations.""",
     input_schema="jsonschema/pet_simple.json",
     cli_args=["--formatters", "isort"],
     golden_output="main_kr/formatters/output.py",
@@ -4787,6 +4907,17 @@ def test_output_format_json_generate_pyproject_config(capsys: pytest.CaptureFixt
         expected_exit=Exit.OK,
         capsys=capsys,
         expected_stdout_path=EXPECTED_OUTPUT_FORMAT_JSON_PATH / "pyproject_config.txt",
+        assert_no_stderr=True,
+    )
+
+
+def test_output_format_json_generate_pyproject_config_with_float_option(capsys: pytest.CaptureFixture[str]) -> None:
+    """Emit floating-point pyproject options in structured JSON."""
+    run_main_with_args(
+        ["--generate-pyproject-config", "--http-timeout", "1.5", "--output-format", "json"],
+        expected_exit=Exit.OK,
+        capsys=capsys,
+        expected_stdout_path=EXPECTED_OUTPUT_FORMAT_JSON_PATH / "pyproject_config_float.txt",
         assert_no_stderr=True,
     )
 

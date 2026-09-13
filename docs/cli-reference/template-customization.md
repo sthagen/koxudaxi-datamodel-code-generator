@@ -2608,8 +2608,12 @@ Specify code formatters to apply to generated output.
 
 The `--formatters` flag specifies which code formatters to apply to
 the generated Python code. Available formatters are: builtin, black,
-isort, ruff-check, ruff-format. Default is [black, isort].
-Use this to customize formatting or disable formatters entirely.
+isort, ruff-check, ruff-format. The current default is [black, isort].
+For projects using Ruff, select --formatters ruff-check ruff-format to match project lint and formatting settings.
+Use --formatters builtin when you use no external formatter or prioritize generation speed.
+Keep --formatters black isort to preserve existing formatting. Explicit formatters override presets.
+The future builtin default reduces installation dependencies and version constraints; Black/isort remain required today.
+See the formatter guides for installation and custom-template limitations.
 
 **See also:** [CI/CD Integration](../ci-cd.md), [Formatter behavior](../formatter-behavior.md), [Code Formatting](../formatting.md)
 
@@ -2674,6 +2678,13 @@ minProperties/maxProperties on named object models, patternProperties on
 composed object models, required-only oneOf/anyOf groups, simple
 if/then/else required-property conditions, and uniqueItems array validation.
 This feature is experimental and may change as JSON Schema coverage is expanded.
+
+With standard models and templates, required names absent from generated fields
+are checked against the raw object input. This also preserves required names
+that are not declared in `properties` when validating overlapping open object
+patterns. `--force-optional` retains its existing behavior. Custom base classes,
+custom templates, and extra template data retain their previous handling of
+undeclared required names.
 
 When generating uniqueItems validation, do not override
 `pydantic_v2/schema_runtime_validation_helpers.jinja2`; custom helper overrides
@@ -2868,6 +2879,7 @@ are unsupported and generation fails fast.
     from __future__ import annotations
 
     import re
+    from collections.abc import Mapping as _Mapping
     from typing import Any, ClassVar
 
     from pydantic import BaseModel, ConfigDict, RootModel, TypeAdapter, model_validator
@@ -2898,7 +2910,7 @@ are unsupported and generation fails fast.
 
         @classmethod
         def _validate_json_schema_pattern_properties(cls, data: Any) -> Any:
-            if not isinstance(data, dict):
+            if not (isinstance(data, dict) or isinstance(data, _Mapping)):
                 return data
             values = data
             for rule in cls.__json_schema_pattern_properties__:
@@ -2952,7 +2964,9 @@ are unsupported and generation fails fast.
             required_group_rules: tuple[Any, ...],
             require_exactly_one: bool,
         ) -> Any:
-            if not required_group_rules or not isinstance(data, dict):
+            if not required_group_rules:
+                return data
+            if not (isinstance(data, dict) or isinstance(data, _Mapping)):
                 return data
             for required_groups in required_group_rules:
                 matches = sum(
@@ -2972,7 +2986,7 @@ are unsupported and generation fails fast.
 
         @classmethod
         def _validate_json_schema_conditional_required(cls, data: Any) -> Any:
-            if not isinstance(data, dict):
+            if not (isinstance(data, dict) or isinstance(data, _Mapping)):
                 return data
             for rule in cls.__json_schema_conditional_required__:
                 condition_matches = all(
@@ -3508,7 +3522,9 @@ require manual `model_rebuild()` calls for cross-module runtime references.
     #   filename:  _internal
 
     from __future__ import annotations
+
     from pydantic import BaseModel, RootModel
+
     from . import models
 
 
@@ -3614,6 +3630,7 @@ shared base class that owns schema-derived runtime validators. It is only used w
     from __future__ import annotations
 
     import re
+    from collections.abc import Mapping as _Mapping
     from typing import Any, ClassVar
 
     from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
@@ -3630,7 +3647,7 @@ shared base class that owns schema-derived runtime validators. It is only used w
 
         @classmethod
         def _validate_json_schema_pattern_properties(cls, data: Any) -> Any:
-            if not isinstance(data, dict):
+            if not (isinstance(data, dict) or isinstance(data, _Mapping)):
                 return data
             values = data
             for rule in cls.__json_schema_pattern_properties__:
@@ -3895,6 +3912,7 @@ additional validator backends without adding them in this release.
     from __future__ import annotations
 
     import re
+    from collections.abc import Mapping as _Mapping
     from typing import Any, ClassVar
 
     from pydantic import BaseModel, ConfigDict, RootModel, TypeAdapter, model_validator
@@ -3925,7 +3943,7 @@ additional validator backends without adding them in this release.
 
         @classmethod
         def _validate_json_schema_pattern_properties(cls, data: Any) -> Any:
-            if not isinstance(data, dict):
+            if not (isinstance(data, dict) or isinstance(data, _Mapping)):
                 return data
             values = data
             for rule in cls.__json_schema_pattern_properties__:
@@ -3979,7 +3997,9 @@ additional validator backends without adding them in this release.
             required_group_rules: tuple[Any, ...],
             require_exactly_one: bool,
         ) -> Any:
-            if not required_group_rules or not isinstance(data, dict):
+            if not required_group_rules:
+                return data
+            if not (isinstance(data, dict) or isinstance(data, _Mapping)):
                 return data
             for required_groups in required_group_rules:
                 matches = sum(
@@ -3999,7 +4019,7 @@ additional validator backends without adding them in this release.
 
         @classmethod
         def _validate_json_schema_conditional_required(cls, data: Any) -> Any:
-            if not isinstance(data, dict):
+            if not (isinstance(data, dict) or isinstance(data, _Mapping)):
                 return data
             for rule in cls.__json_schema_conditional_required__:
                 condition_matches = all(

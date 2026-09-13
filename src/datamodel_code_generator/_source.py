@@ -5,14 +5,16 @@ from __future__ import annotations
 import contextlib
 import sys
 from collections import OrderedDict
+from dataclasses import dataclass
 from functools import lru_cache
 from hashlib import sha256
+from importlib.util import source_from_cache
 from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING, TextIO, TypeAlias
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable, Iterator
 
 # Pydantic 2.5 cannot build schemas from stdlib TypeAliasType on Python 3.12.
 if sys.version_info >= (3, 14):
@@ -26,6 +28,13 @@ YamlValue = TypeAliasType(
 )
 
 _IGNORED_TEXT_PREFIX_CHARS: frozenset[str] = frozenset({"\ufeff", " ", "\t", "\r", "\n"})
+_PROTOBUF_TRIVIA = r"(?:\s|//[^\r\n]*(?=[\r\n]|$)|/\*[^*]*(?:\*(?!/)[^*]*)*\*/)*"
+_PROTOBUF_DECLARATION_PATTERN = (
+    rf"\ufeff?{_PROTOBUF_TRIVIA}(?:syntax{_PROTOBUF_TRIVIA}={_PROTOBUF_TRIVIA}"
+    rf"(?P<syntax_quote>['\"])proto[23](?P=syntax_quote)|"
+    rf"edition{_PROTOBUF_TRIVIA}={_PROTOBUF_TRIVIA}"
+    rf"(?P<edition_quote>['\"])2023(?P=edition_quote)){_PROTOBUF_TRIVIA};"
+)
 _PARSER_SOURCE_DATA_CACHE_MAX_SIZE = 128
 _ParserSourceDataCacheKey: TypeAlias = tuple[Path, str, str, str]
 _ParserSourceDataSeenKey: TypeAlias = tuple[Path, str]
@@ -35,6 +44,73 @@ _parser_source_data_seen_keys: OrderedDict[_ParserSourceDataSeenKey, None] = Ord
 _parser_source_data_cache_lock = RLock()
 _parsed_source_cache_enable_count = 0
 _enable_parsed_source_cache = False
+
+
+@dataclass(frozen=True, slots=True)
+class DirectoryInputFilter:
+    """Exclude configured artifacts without excluding schemas by their suffix."""
+
+    files: frozenset[Path]
+    output_directory: Path | None
+    headers: tuple[str, ...]
+
+    def _is_generated(self, text: str) -> bool:
+        """Require Python output after a header that a schema may also share."""
+        for header in self.headers:
+            if not text.startswith(header):
+                continue
+            start = len(header)
+            while start < len(text):
+                if text[start].isspace():
+                    start += 1
+                elif text[start] == "#":
+                    if (line_end := text.find("\n", start)) < 0:
+                        return True
+                    start = line_end + 1
+                else:
+                    break
+            if start == len(text):
+                return True
+            line_end = text.find("\n", start)
+            line = text[start : None if line_end < 0 else line_end]
+            target, assignment, _ = line.partition("=")
+            if not (
+                line.startswith(("from ", "import ", "class ", "@"))
+                or (assignment and target.removeprefix("type ").strip().isidentifier())
+            ):
+                continue
+            if ":" not in line:
+                return True
+
+            from datamodel_code_generator.util import get_yaml_parse_errors  # noqa: PLC0415
+
+            # A Python-looking statement can still be a YAML mapping key.
+            # Prefer the existing input interpretation in this ambiguous case.
+            try:
+                return not isinstance(load_yaml(text), (dict, list))
+            except get_yaml_parse_errors():
+                return True
+        return False
+
+    def iter_files(self, paths: Iterable[Path], encoding: str) -> Iterator[tuple[Path, bytes | None]]:
+        """Retain candidate bytes so recognizing an artifact never rereads a schema."""
+        for path in paths:
+            if not path.is_file() or path in self.files:
+                continue
+            data = None
+            if self.output_directory is not None and path.is_relative_to(self.output_directory):
+                source_path = path
+                if path.suffix == ".pyc" and path.parent.name == "__pycache__":
+                    with contextlib.suppress(ValueError):
+                        source_path = Path(source_from_cache(str(path)))
+                if source_path.suffix == ".py" and (source_path == path or source_path.is_file()):
+                    source_data = source_path.read_bytes()
+                    text = source_data.decode(encoding).replace("\r\n", "\n").replace("\r", "\n")
+                    if self._is_generated(text) or (source_path.name == "__init__.py" and not text.strip()):
+                        continue
+                    if source_path == path:
+                        data = source_data
+            yield path, data
 
 
 def enable_parsed_source_cache() -> Callable[[], None]:
@@ -100,7 +176,8 @@ def load_yaml_dict_from_path(path: Path, encoding: str) -> dict[str, YamlValue]:
     from datamodel_code_generator.util import record_watch_dependency  # noqa: PLC0415
 
     record_watch_dependency(path)
-    return _load_yaml_dict_from_path_cached(path, path.stat().st_mtime, encoding)
+    cache_path = path if path.is_absolute() else path.absolute()
+    return _load_yaml_dict_from_path_cached(cache_path, cache_path.stat().st_mtime, encoding)
 
 
 @lru_cache(maxsize=128)
@@ -129,6 +206,15 @@ def _is_json_text(text: str) -> bool:
 def _is_xml_text(text: str) -> bool:
     """Return whether text starts like XML after whitespace and BOM."""
     return _first_significant_text_char(text) == "<"
+
+
+def _has_protobuf_declaration(text: str) -> bool:
+    """Recognize an explicit Protobuf declaration before attempting YAML decoding."""
+    if _first_significant_text_char(text) not in {"s", "e", "/"}:
+        return False
+    import re  # noqa: PLC0415
+
+    return re.match(_PROTOBUF_DECLARATION_PATTERN, text) is not None
 
 
 def _is_protobuf_text(text: str) -> bool:
@@ -170,12 +256,15 @@ def _load_parser_source_data_from_path(path: Path, encoding: str) -> YamlValue:
     return _read_parser_source_data_from_path(path, encoding)[1]
 
 
-def _read_parser_source_data_from_path(path: Path, encoding: str) -> tuple[bytes, YamlValue]:
+def _read_parser_source_data_from_path(
+    path: Path, encoding: str, *, data: bytes | None = None
+) -> tuple[bytes, YamlValue]:
     resolved_path = path.resolve()
     from datamodel_code_generator.util import record_watch_dependency  # noqa: PLC0415
 
     record_watch_dependency(resolved_path)
-    data = resolved_path.read_bytes()
+    if data is None:
+        data = resolved_path.read_bytes()
     return data, _load_parser_source_data_from_path_bytes(resolved_path, data, encoding)
 
 

@@ -307,6 +307,7 @@ def test_schema_validator_required_only_schema_filters() -> None:
 
     assert parser._is_required_only_schema(required_only_schema)
     assert parser._get_required_groups([required_only_schema]) == (("a",),)
+    assert parser._is_required_only_schema(JsonSchemaObject.model_validate({"required": ["a"], "type": ["object"]}))
     assert not parser._is_required_only_schema(True)
     assert not parser._is_required_only_schema(JsonSchemaObject.model_validate({}))
     assert not parser._is_required_only_schema(JsonSchemaObject.model_validate({"required": []}))
@@ -333,6 +334,7 @@ def test_schema_validator_required_only_schema_filters() -> None:
     )
     assert not parser._is_required_only_schema(JsonSchemaObject.model_validate({"required": ["a"], "contains": {}}))
     assert not parser._is_required_only_schema(JsonSchemaObject.model_validate({"required": ["a"], "not": {}}))
+    assert not parser._is_required_only_schema(JsonSchemaObject.model_validate({"required": ["a"], "type": ["null"]}))
     assert (
         parser._get_required_groups([JsonSchemaObject.model_validate({"properties": {"a": {"type": "string"}}})]) == ()
     )
@@ -1500,6 +1502,33 @@ def test_parse_obj_returns_when_merged_ref_still_has_ref(mocker: MockerFixture) 
 def test_get_model_by_path(schema: dict, path: str, model: dict) -> None:
     """Test model retrieval by path."""
     assert get_model_by_path(schema, path.split("/") if path else []) == model
+
+
+@pytest.mark.parametrize("path", [["0"], [0]])
+def test_get_model_by_path_preserves_integer_keys(path: list[str] | list[int]) -> None:
+    """Keep both supported key types when decoding raw lookup paths."""
+    assert get_model_by_path([{"type": "integer"}], path) == {"type": "integer"}
+    assert get_model_by_path({"0": {"type": "string"}}, path) == {"type": "string"}
+
+
+def test_ref_raw_schema_decodes_json_pointer_segments_once() -> None:
+    """Keep decoded pointer tokens from being decoded again during lookup."""
+    once_value = {"type": "string"}
+    schema = {
+        "$defs": {
+            "a/b~1c": once_value,
+            "a/b~0c": {"type": "integer"},
+            "a/b": {"type": "number"},
+        }
+    }
+    parser = JsonSchemaParser("")
+    parser.raw_obj = schema
+
+    assert split_json_pointer(schema, "$defs/a~1b~01c") == ["$defs", "a/b~1c"]
+    assert parser._get_ref_raw_schema("#/$defs/a~1b~01c") is once_value
+    assert parser._get_ref_raw_schema("#/$defs/a~1b~00c") == {"type": "integer"}
+    assert parser._get_ref_raw_schema("#/$defs/a%7E1b") == {"type": "number"}
+    assert parser._ref_schema_exists("#/$defs/a~1b~01c")
 
 
 @pytest.mark.parametrize(
@@ -4873,8 +4902,25 @@ def test_inherited_field_schema_cycle_and_mapping_fallbacks() -> None:
         )
         is None
     )
-    assert parser._merge_all_of_mapping(JsonSchemaObject.model_validate({"allOf": [True]})) is None
-    assert parser._merge_all_of_mapping(JsonSchemaObject.model_validate({})) is None
+    assert parser._merge_all_of_root_schema(JsonSchemaObject.model_validate({"allOf": [True]})) is None
+    assert parser._merge_all_of_root_schema(JsonSchemaObject.model_validate({})) is None
+
+
+def test_merge_all_of_mapping_accepts_only_object_type_lists() -> None:
+    """Merge singleton object type lists without accepting mixed types."""
+    parser = JsonSchemaParser("")
+    object_only = JsonSchemaObject.model_validate({
+        "allOf": [{"type": ["object"], "additionalProperties": {"type": "integer"}}]
+    })
+    mixed = JsonSchemaObject.model_validate({
+        "allOf": [{"type": ["object", "string"], "additionalProperties": {"type": "integer"}}]
+    })
+
+    merged = parser._merge_all_of_root_schema(object_only)
+
+    assert merged is not None
+    assert merged.type == "object"
+    assert parser._merge_all_of_root_schema(mixed) is None
 
 
 def test_resolve_type_import_from_defs() -> None:

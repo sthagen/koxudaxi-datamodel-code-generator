@@ -3,7 +3,7 @@
 Install the package in editable mode:
 
 ```sh
-$ git clone git@github.com:koxudaxi/datamodel-code-generator.git
+$ git clone git@github.com:datamodel-code-generator/datamodel-code-generator.git
 $ pip install -e datamodel-code-generator
 ```
 
@@ -83,6 +83,28 @@ are intentionally outside the generated-output helper policy. Use
 reasonably be expressed with the shared helpers, such as external-request mock
 checks or intermediate-state checks.
 
+## Release notes
+
+Release notes should describe changes that affect users: features, fixes,
+generated output, performance, compatibility, installation requirements, and
+the official GitHub Action or Playground.
+
+Use the `skip-changelog` PR label for changes that only maintain tests, CI,
+release automation, generated documentation, or development tooling. The
+release workflow adds it automatically when every changed file is a known
+maintenance file, including CHANGELOG updates and release benchmark data.
+Other changes need a maintainer's judgment before applying the label.
+
+Check the complete diff before excluding dependency updates, refactors, or
+documentation changes. They can affect users through `action.yml`, packaged
+CLI prompt data, Playground assets, or generated code. A PR that mixes
+maintenance with user-facing changes should stay in the release notes.
+
+The label only filters GitHub's generated change list. Breaking-change
+analysis still runs independently, and the full comparison link remains
+available. Excluded PRs receive no release notification unless they are
+referenced elsewhere in the release body.
+
 ## Architecture boundaries
 
 Before adding a dependency between layers, check `docs/architecture.md` and run:
@@ -92,12 +114,14 @@ python scripts/check_architecture_boundaries.py
 ```
 
 The guard rejects concrete output-backend imports and backend-name inspection in
-parsers, private `parser._*` imports from shared code, parser/backend dependencies
+parsers, concrete backend imports or `sys.modules` lookups from shared model
+modules, private `parser._*` imports from shared code, parser/backend dependencies
 from configuration, and local output-family mappings in `input_model.py`. Move
 output behavior to a neutral capability on `DataModel` or `DataModelFieldBase`,
-and move reusable helpers to a neutral package module. Do not add an allowlist
-entry for new code. Existing entries document compatibility debt, have bounded
-occurrence counts, and fail when stale.
+keep backend lifecycle and cache management with its backend or the model
+composition root, and move reusable helpers to a neutral package module. Do not
+add an allowlist entry for new code. Existing entries document compatibility debt,
+have bounded occurrence counts, and fail when stale.
 
 Tests for the checker use source fixtures and expected reports under
 `tests/data/architecture_boundaries/` and
