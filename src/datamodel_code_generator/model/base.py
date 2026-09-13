@@ -53,7 +53,9 @@ if TYPE_CHECKING:
     from jinja2 import Environment, Template
 
     from datamodel_code_generator import DataclassArguments
+    from datamodel_code_generator import types as _types
     from datamodel_code_generator.imports import Imports
+    from datamodel_code_generator.model import runtime_validation as _runtime_validation
     from datamodel_code_generator.python_literal import PythonRuntimeExpression
 
 TEMPLATE_DIR: Path = Path(__file__).parents[0] / "template"
@@ -1884,7 +1886,24 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
     ROOT_MODEL_CONSTRAINTS_FALLBACK: ClassVar[
         Callable[[Path | None], Callable[[list[DataModelFieldBase]], type[DataModel] | None] | None] | None
     ] = None
-    PLAIN_PATTERN_ROOT_TYPES: ClassVar[Callable[[], tuple[type, type, type, type]] | None] = None
+    # Retain the original extension hook; the backend interprets its result.
+    PLAIN_PATTERN_ROOT_TYPES: ClassVar[
+        Callable[[], tuple[type[DataModel], type[DataModel], type[DataModelFieldBase], type[_types.DataTypeManager]]]
+        | None
+    ] = None
+    PLAIN_PATTERN_ROOT_CHECKER: ClassVar[
+        Callable[
+            [
+                type[DataModel],
+                type[DataModel],
+                type[DataModelFieldBase],
+                type[_types.DataTypeManager],
+                Iterable[DataType],
+            ],
+            bool,
+        ]
+        | None
+    ] = None
     SCHEMA_RUNTIME_VALIDATION_ROOT_MODEL: ClassVar[Callable[[], type[DataModel]] | None] = None
     DOCSTRING_INDENT: ClassVar[int] = 4
     FIELD_DOCSTRING_INDENT: ClassVar[int] = 4
@@ -2437,6 +2456,33 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
     def get_native_hash_model_paths(cls, models: list[DataModel]) -> set[str]:  # noqa: ARG003
         """Return models whose backend hash can replace the legacy set-item hash."""
         return set()
+
+    def enable_identity_hash(self) -> None:
+        """Retain the legacy identity hash for a set item without a usable native hash."""
+        self._append_internal_template_data("class_body_lines", "__hash__ = object.__hash__")
+
+    @property
+    def schema_runtime_validation(self) -> _runtime_validation.SchemaRuntimeValidation | None:
+        """Return executable schema rules already prepared by this output model."""
+        return self._internal_template_data.get("schema_runtime_validation")
+
+    @property
+    def has_runtime_object_validation(self) -> bool:
+        """Keep object validators when replacing a root model with its underlying type."""
+        rules = self._internal_template_data.get("schema_runtime_validation") or self.extra_template_data.get(
+            "schema_runtime_validation"
+        )
+        return bool(
+            rules
+            and any(
+                getattr(rules, name, None) for name in ("pattern_properties", "required_groups", "conditional_required")
+            )
+        )
+
+    @property
+    def has_model_config(self) -> bool:
+        """Return whether collapsing this model would discard its emitted configuration."""
+        return bool(self.extra_template_data.get("config"))
 
     @classmethod
     def prepare_module_code(cls, models: list[DataModel]) -> None:

@@ -21523,6 +21523,27 @@ def test_validator_finalized_model_import(output_dir: Path, entrypoint: str, exa
         )
 
 
+def test_custom_model_field_name_binding_policy(output_file: Path) -> None:
+    """Keep import aliases chosen by a custom model's existing naming policy."""
+    from datamodel_code_generator.model.pydantic_v2 import BaseModel
+    from datamodel_code_generator.parser.jsonschema import JsonSchemaParser
+    from datamodel_code_generator.reference import ModelType
+
+    class CustomModel(BaseModel):
+        FIELD_NAME_MODEL_TYPE = ModelType.MSGSPEC
+
+    parser = JsonSchemaParser(
+        (JSON_SCHEMA_DATA_PATH / "field_name_bindings/required.json").resolve(),
+        data_model_type=CustomModel,
+        formatters=[Formatter.BUILTIN],
+    )
+    output_file.write_text(parser.parse(), encoding="utf-8")
+    assert_output(
+        output_file.read_text(encoding="utf-8"),
+        EXPECTED_JSON_SCHEMA_PATH / "field_name_bindings/custom_naming_policy.py",
+    )
+
+
 @pytest.mark.parametrize("entrypoint", ["cli", "api"])
 @pytest.mark.parametrize(
     ("backend", "case", "union", "target"),
@@ -24372,7 +24393,8 @@ def test_unknown_pattern_root_annotations(
 
 
 @pytest.mark.parametrize(
-    "custom", ["parser", "parser_other", "schema", "model", "unproven_model", "root", "field", "manager"]
+    "custom",
+    ["parser", "parser_other", "schema", "model", "unproven_model", "unchecked_model", "root", "field", "manager"],
 )
 def test_custom_pattern_annotation_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, custom: str) -> None:
     """Keep existing custom extension code, raw metadata and accepted dumps intact."""
@@ -24384,12 +24406,14 @@ def test_custom_pattern_annotation_context(tmp_path: Path, monkeypatch: pytest.M
         CustomModel,
         CustomRoot,
         CustomSchema,
+        CustomUncheckedModel,
         CustomUnprovenModel,
     )
 
     options = {
         "model": {"data_model_type": CustomModel},
         "unproven_model": {"data_model_type": CustomUnprovenModel},
+        "unchecked_model": {"data_model_type": CustomUncheckedModel},
         "root": {"data_model_root_type": CustomRoot},
         "field": {"data_model_field_type": CustomField},
         "manager": {"data_type_manager_type": CustomManager},
@@ -24401,7 +24425,7 @@ def test_custom_pattern_annotation_context(tmp_path: Path, monkeypatch: pytest.M
     parser = parser_type(source, generate_schema_validators=True, formatters=[Formatter.BUILTIN], **options)
     output = tmp_path / "output.py"
     output.write_text(parser.parse())
-    expected_case = "model" if custom == "unproven_model" else custom
+    expected_case = "model" if custom in {"unproven_model", "unchecked_model"} else custom
     assert_output(output.read_text(), UNKNOWN_PATTERN_EXPECTED / f"custom_{expected_case}.py")
     contexts = [value["extensions"] for value in parser.extra_template_data.values() if "extensions" in value]
     records = []
