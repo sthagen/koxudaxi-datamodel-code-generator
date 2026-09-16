@@ -44,15 +44,17 @@
   },
   "invalid-version": {
     "weights": {
-      "version": 2,
+      "version": 1,
       "profiles": {
         "default": {
           "files": {},
-          "nodes": {}
+          "nodes": {},
+          "slow": {}
         },
         "legacy": {
           "files": {},
-          "nodes": {}
+          "nodes": {},
+          "slow": {}
         }
       }
     },
@@ -65,11 +67,12 @@
   },
   "missing-profile": {
     "weights": {
-      "version": 1,
+      "version": 2,
       "profiles": {
         "default": {
           "files": {},
-          "nodes": {}
+          "nodes": {},
+          "slow": {}
         }
       }
     },
@@ -82,14 +85,16 @@
   },
   "invalid-profile": {
     "weights": {
-      "version": 1,
+      "version": 2,
       "profiles": {
         "default": {
-          "files": []
+          "files": {},
+          "nodes": {}
         },
         "legacy": {
           "files": {},
-          "nodes": {}
+          "nodes": {},
+          "slow": {}
         }
       }
     },
@@ -116,11 +121,12 @@
   },
   "empty-maps": {
     "weights": {
-      "version": 1,
+      "version": 2,
       "profiles": {
         "default": {
           "files": {},
-          "nodes": {}
+          "nodes": {},
+          "slow": {}
         },
         "legacy": {
           "files": {
@@ -128,7 +134,8 @@
           },
           "nodes": {
             "tests/main/test_payload_validation.py::test_new": 1
-          }
+          },
+          "slow": {}
         }
       }
     },
