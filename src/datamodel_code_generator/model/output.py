@@ -2,14 +2,123 @@
 
 from __future__ import annotations
 
+import ast
 from typing import TYPE_CHECKING
 
+from datamodel_code_generator.model.base import ALL_MODEL
+from datamodel_code_generator.reference import ModelType
+
 if TYPE_CHECKING:
+    from collections import defaultdict
+    from collections.abc import Collection, Mapping
     from typing import Any
 
+    from datamodel_code_generator._format_types import PythonVersion
+    from datamodel_code_generator.enums import AliasGenerator, TargetPydanticVersion
     from datamodel_code_generator.imports import Import
     from datamodel_code_generator.model.base import DataModel, DataModelFieldBase
     from datamodel_code_generator.types import DataTypeManager
+    from datamodel_code_generator.validators import ModelValidators
+
+
+def prepare_output_model_config(  # noqa: PLR0913, PLR0912
+    extra_template_data: defaultdict[str, dict[str, Any]],
+    *,
+    validators: Mapping[str, ModelValidators] | None,
+    use_generic_base_class: bool,
+    allow_population_by_field_name: bool,
+    alias_generator: AliasGenerator | None,
+    no_alias: bool,
+    allow_extra_fields: bool,
+    extra_fields: str | None,
+    enable_faux_immutability: bool,
+    use_attribute_docstrings: bool,
+    use_single_line_docstring: bool,
+    target_pydantic_version: TargetPydanticVersion | None,
+    schema_validator_base_class_name: str | None,
+    generate_schema_validators: bool,
+) -> dict[str, Any]:
+    """Prepare output configuration while retaining template keys and insertion order."""
+    if validators:
+        for name, model_config in validators.items():
+            extra_template_data[name]["validators"] = [
+                value.model_dump(mode="json") for value in model_config.validators
+            ]
+
+    base_config: dict[str, Any] = {}
+    if allow_population_by_field_name:
+        (base_config if use_generic_base_class else extra_template_data[ALL_MODEL])[
+            "allow_population_by_field_name"
+        ] = True
+    if alias_generator:
+        target = base_config if use_generic_base_class else extra_template_data[ALL_MODEL]
+        target["allow_population_by_field_name"] = True
+        target["alias_generator"] = alias_generator
+        if use_generic_base_class:
+            extra_template_data[ALL_MODEL]["_alias_generator"] = alias_generator
+    if no_alias:
+        extra_template_data[ALL_MODEL]["_no_alias"] = True
+    if allow_extra_fields:
+        (base_config if use_generic_base_class else extra_template_data[ALL_MODEL])["allow_extra_fields"] = True
+    if extra_fields:
+        (base_config if use_generic_base_class else extra_template_data[ALL_MODEL])["extra_fields"] = extra_fields
+    if enable_faux_immutability:
+        (base_config if use_generic_base_class else extra_template_data[ALL_MODEL])["allow_mutation"] = False
+    if use_attribute_docstrings:
+        (base_config if use_generic_base_class else extra_template_data[ALL_MODEL])["use_attribute_docstrings"] = True
+    if use_single_line_docstring:
+        extra_template_data[ALL_MODEL]["use_single_line_docstring"] = True
+    if target_pydantic_version:
+        (base_config if use_generic_base_class else extra_template_data[ALL_MODEL])["target_pydantic_version"] = (
+            target_pydantic_version
+        )
+    if schema_validator_base_class_name:
+        extra_template_data[ALL_MODEL]["schema_validator_base_class_name"] = schema_validator_base_class_name
+    if generate_schema_validators:
+        extra_template_data[ALL_MODEL]["schema_runtime_validation_enabled"] = True
+    return base_config
+
+
+def _expression_names(expression: ast.AST) -> set[str]:
+    """Find unqualified loads without treating literal or keyword text as bindings."""
+    return {node.id for node in ast.walk(expression) if isinstance(node, ast.Name)}
+
+
+def _model_field_name_collisions(model: DataModel, import_names: Collection[str]) -> set[str]:
+    """Find imported names hidden by assignments in the emitted model body."""
+    field_names = {field.name for field in model.fields if field.name is not None}
+    candidates = field_names.intersection(import_names)
+    if not candidates:
+        return set()
+    class_body = next(
+        (
+            node.body
+            for node in ast.parse(model.render()).body
+            if isinstance(node, ast.ClassDef) and node.name == model.class_name
+        ),
+        None,
+    )
+    if class_body is None:
+        return set()
+    fields = [
+        (node.target.id, node)
+        for node in class_body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    ]
+    assigned_names = (
+        field_names
+        if model.FIELD_NAME_MODEL_TYPE is ModelType.MSGSPEC
+        else {name for name, node in fields if node.value is not None}
+    )
+    candidates.intersection_update(assigned_names)
+    collisions: set[str] = set()
+    previous_names: set[str] = set()
+    for name, node in fields:
+        collisions.update(candidates.intersection(_expression_names(node.annotation)))
+        if node.value is not None:
+            collisions.update(candidates.intersection(previous_names, _expression_names(node.value)))
+            previous_names.add(name)
+    return collisions
 
 
 class OutputModelContext:
@@ -92,8 +201,11 @@ class OutputModelContext:
         *,
         value: bool,
         use_backport: bool = False,
+        target_python_version: PythonVersion | None = None,
     ) -> None:
         """Store an additional-properties constraint through the output model."""
+        if target_python_version is not None and not value:
+            use_backport |= self._data_model_type.requires_extra_items_backport(target_python_version)
         self._data_model_type.store_additional_properties_value(
             extra_template_data,
             value=value,
@@ -104,7 +216,7 @@ class OutputModelContext:
         """Return whether output metadata contains a typed additional-properties entry."""
         return self._data_model_type.has_additional_properties_type(extra_template_data)
 
-    def store_additional_properties_type(
+    def store_additional_properties_type(  # noqa: PLR0913
         self,
         extra_template_data: dict[str, Any],
         type_hint: str,
@@ -112,8 +224,11 @@ class OutputModelContext:
         *,
         imports: tuple[Import, ...] = (),
         use_backport: bool = False,
+        target_python_version: PythonVersion | None = None,
     ) -> None:
         """Store typed additional-properties metadata through the output model."""
+        if target_python_version is not None:
+            use_backport |= self._data_model_type.requires_extra_items_backport(target_python_version)
         self._data_model_type.store_additional_properties_type(
             extra_template_data,
             type_hint,

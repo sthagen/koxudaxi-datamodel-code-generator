@@ -53,7 +53,10 @@ if TYPE_CHECKING:
     from jinja2 import Environment, Template
 
     from datamodel_code_generator import DataclassArguments
+    from datamodel_code_generator import types as _types
+    from datamodel_code_generator._format_types import PythonVersion
     from datamodel_code_generator.imports import Imports
+    from datamodel_code_generator.model import runtime_validation as _runtime_validation
     from datamodel_code_generator.python_literal import PythonRuntimeExpression
 
 TEMPLATE_DIR: Path = Path(__file__).parents[0] / "template"
@@ -65,6 +68,7 @@ _TYPING_IMPORT_NAMES: frozenset[str] = frozenset({
 _ADDITIONAL_PROPERTIES_REFERENCE_CLASSES_TEMPLATE_DATA_KEY = "additionalPropertiesReferenceClasses"
 _ADDITIONAL_PROPERTIES_TEMPLATE_DATA_KEY = "additionalProperties"
 _ADDITIONAL_PROPERTIES_TYPE_TEMPLATE_DATA_KEY = "additionalPropertiesType"
+# This key remains part of the legacy template contract, including custom outputs.
 _USE_TYPED_DICT_BACKPORT_TEMPLATE_DATA_KEY = "use_typeddict_backport"
 _MODULE_NAME_INVALID_CHAR_PATTERN = re.compile(r"[^0-9a-zA-Z_]")
 _MODULE_NAME_INVALID_CHAR_WITH_DOTS_PATTERN = re.compile(r"[^0-9a-zA-Z_.]")
@@ -656,6 +660,27 @@ class DataModelFieldBase(_BaseModel):  # noqa: PLR0904
         result = self.parent.reference.path in {d.reference.path for d in self.data_type.all_data_types if d.reference}
         self.__dict__["_self_reference_cache"] = result
         return result
+
+    @property
+    def _can_apply_constraints(self) -> bool:
+        """Apply constraints to containers without suppressing recursive item types."""
+        if self.self_reference():
+            data_type = self.data_type
+            while True:
+                if (
+                    data_type.is_list  # noqa: PLR0916
+                    or data_type.is_sequence
+                    or data_type.is_dict
+                    or data_type.is_mapping
+                    or data_type.is_set
+                    or data_type.is_frozen_set
+                    or data_type.is_tuple
+                ):
+                    break
+                if data_type.alias or data_type.type or data_type.reference or len(data_type.data_types) != 1:
+                    return False
+                data_type = data_type.data_types[0]
+        return not (self.data_type.strict and self.data_type.kwargs)
 
     @property
     def _use_union_operator(self) -> bool:
@@ -1884,7 +1909,24 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
     ROOT_MODEL_CONSTRAINTS_FALLBACK: ClassVar[
         Callable[[Path | None], Callable[[list[DataModelFieldBase]], type[DataModel] | None] | None] | None
     ] = None
-    PLAIN_PATTERN_ROOT_TYPES: ClassVar[Callable[[], tuple[type, type, type, type]] | None] = None
+    # Retain the original extension hook; the backend interprets its result.
+    PLAIN_PATTERN_ROOT_TYPES: ClassVar[
+        Callable[[], tuple[type[DataModel], type[DataModel], type[DataModelFieldBase], type[_types.DataTypeManager]]]
+        | None
+    ] = None
+    PLAIN_PATTERN_ROOT_CHECKER: ClassVar[
+        Callable[
+            [
+                type[DataModel],
+                type[DataModel],
+                type[DataModelFieldBase],
+                type[_types.DataTypeManager],
+                Iterable[DataType],
+            ],
+            bool,
+        ]
+        | None
+    ] = None
     SCHEMA_RUNTIME_VALIDATION_ROOT_MODEL: ClassVar[Callable[[], type[DataModel]] | None] = None
     DOCSTRING_INDENT: ClassVar[int] = 4
     FIELD_DOCSTRING_INDENT: ClassVar[int] = 4
@@ -1926,6 +1968,75 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
     def has_keyword_only_definition(self) -> bool:  # noqa: PLR6301
         """Return whether the model already makes inherited fields keyword-only."""
         return False
+
+    @classmethod
+    def configure_annotations(
+        cls,
+        extra_template_data: defaultdict[str, dict[str, Any]],
+        *,
+        target_python_version: PythonVersion,
+        use_deferred_annotations: bool,
+    ) -> None:
+        """Prepare the output's annotation representation for the target runtime."""
+        if key := cls.TYPED_EXTRA_PLAIN_ANNOTATION_TEMPLATE_DATA_KEY:
+            extra_template_data.setdefault(ALL_MODEL, {})[key] = (
+                target_python_version.has_native_deferred_annotations or not use_deferred_annotations
+            )
+
+    @classmethod
+    def configure_required_fields(
+        cls,
+        extra_template_data: defaultdict[str, dict[str, Any]],
+        *,
+        target_python_version: PythonVersion,
+        use_total_false: bool,
+    ) -> None:
+        """Preserve the declared total=False capability for custom output classes."""
+        if use_total_false and cls.SUPPORTS_TYPED_DICT_TOTAL_FALSE:
+            data = extra_template_data[ALL_MODEL]
+            data["use_total_false_for_typed_dict"] = True
+            if not target_python_version.has_typed_dict_non_required:
+                data["use_total_false_typeddict_backport"] = True
+
+    @staticmethod
+    def requires_extra_items_backport(target_python_version: PythonVersion) -> bool:
+        """Preserve the historic extra-item template flag for custom output metadata."""
+        return not target_python_version.has_typed_dict_closed
+
+    @staticmethod
+    def resolve_dataclass_arguments(
+        arguments: DataclassArguments | None, *, frozen: bool, keyword_only: bool
+    ) -> DataclassArguments:
+        """Preserve explicit decorator arguments ahead of the legacy flags."""
+        if arguments is not None:
+            return arguments
+        arguments = {}
+        if frozen:
+            arguments["frozen"] = True
+        if keyword_only:
+            arguments["kw_only"] = True
+        return arguments
+
+    @classmethod
+    def prepare_constructor_arguments(
+        cls,
+        arguments: dict[str, Any],
+        *,
+        dataclass_arguments: DataclassArguments | None,
+        frozen: bool,
+        keyword_only: bool,
+    ) -> None:
+        """Adapt shared model creation options to the selected output constructor."""
+        if not cls.USES_DATACLASS_ARGUMENTS:
+            arguments.pop("dataclass_arguments", None)
+            return
+        if (explicit_arguments := arguments.pop("dataclass_arguments", None)) is None:
+            explicit_arguments = dataclass_arguments
+        arguments["dataclass_arguments"] = cls.resolve_dataclass_arguments(
+            explicit_arguments, frozen=frozen, keyword_only=keyword_only
+        )
+        arguments.pop("frozen", None)
+        arguments.pop("keyword_only", None)
 
     def enable_model_keyword_only(self) -> None:
         """Enable output-specific model-level keyword-only behavior when supported."""
@@ -2437,6 +2548,33 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
     def get_native_hash_model_paths(cls, models: list[DataModel]) -> set[str]:  # noqa: ARG003
         """Return models whose backend hash can replace the legacy set-item hash."""
         return set()
+
+    def enable_identity_hash(self) -> None:
+        """Retain the legacy identity hash for a set item without a usable native hash."""
+        self._append_internal_template_data("class_body_lines", "__hash__ = object.__hash__")
+
+    @property
+    def schema_runtime_validation(self) -> _runtime_validation.SchemaRuntimeValidation | None:
+        """Return executable schema rules already prepared by this output model."""
+        return self._internal_template_data.get("schema_runtime_validation")
+
+    @property
+    def has_runtime_object_validation(self) -> bool:
+        """Keep object validators when replacing a root model with its underlying type."""
+        rules = self._internal_template_data.get("schema_runtime_validation") or self.extra_template_data.get(
+            "schema_runtime_validation"
+        )
+        return bool(
+            rules
+            and any(
+                getattr(rules, name, None) for name in ("pattern_properties", "required_groups", "conditional_required")
+            )
+        )
+
+    @property
+    def has_model_config(self) -> bool:
+        """Return whether collapsing this model would discard its emitted configuration."""
+        return bool(self.extra_template_data.get("config"))
 
     @classmethod
     def prepare_module_code(cls, models: list[DataModel]) -> None:

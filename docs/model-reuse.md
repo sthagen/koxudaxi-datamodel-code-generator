@@ -29,12 +29,14 @@ datamodel-codegen --input schema.json --output model.py
 ```python
 # Duplicate enums for animal and pet fields
 class Animal(Enum):
-    dog = 'dog'
-    cat = 'cat'
+    dog = "dog"
+    cat = "cat"
+
 
 class Pet(Enum):  # Duplicate!
-    dog = 'dog'
-    cat = 'cat'
+    dog = "dog"
+    cat = "cat"
+
 
 class User(BaseModel):
     animal: Optional[Animal] = None
@@ -48,6 +50,8 @@ datamodel-codegen --input schema.json --output model.py --reuse-model
 ```
 
 <!-- BEGIN AUTO-GENERATED DOC EXAMPLE: model-reuse.reuse-model.output -->
+<!-- fmt: off -->
+
 ```python
 from __future__ import annotations
 
@@ -79,6 +83,8 @@ class Redistribute(RootModel[list[RedistributeEnum]]):
         ..., description='Redistribute type for routes.'
     )
 ```
+
+<!-- fmt: on -->
 <!-- END AUTO-GENERATED DOC EXAMPLE: model-reuse.reuse-model.output -->
 
 ### Benefits
@@ -121,6 +127,8 @@ schemas/
 <!-- BEGIN AUTO-GENERATED DOC EXAMPLE: model-reuse.reuse-scope-tree.output -->
 **Output with `--reuse-scope tree`:**
 
+<!-- fmt: off -->
+
 ```text
 models/
 |-- __init__.py
@@ -129,10 +137,14 @@ models/
 `-- shared.py
 ```
 
+<!-- fmt: on -->
+
 **models/__init__.py:**
 _No code beyond the generated header._
 
 **models/schema_a.py:**
+
+<!-- fmt: off -->
 
 ```python
 from __future__ import annotations
@@ -150,7 +162,11 @@ class Model(BaseModel):
     data: SharedModel | None = None
 ```
 
+<!-- fmt: on -->
+
 **models/schema_b.py:**
+
+<!-- fmt: off -->
 
 ```python
 from __future__ import annotations
@@ -164,7 +180,11 @@ class Model(BaseModel):
     info: shared.SharedModel | None = None
 ```
 
+<!-- fmt: on -->
+
 **models/shared.py:**
+
+<!-- fmt: off -->
 
 ```python
 from __future__ import annotations
@@ -176,6 +196,8 @@ class SharedModel(BaseModel):
     id: int | None = None
     name: str | None = None
 ```
+
+<!-- fmt: on -->
 <!-- END AUTO-GENERATED DOC EXAMPLE: model-reuse.reuse-scope-tree.output -->
 
 ---
@@ -209,6 +231,7 @@ Inline root model definitions instead of creating separate wrapper classes.
 ```python
 class UserId(BaseModel):
     __root__: str
+
 
 class User(BaseModel):
     id: UserId
@@ -315,10 +338,11 @@ Without using `$ref`, each class gets its own inline field definition:
 
 ```python
 class ClassA(BaseModel):
-    place_name: Annotated[str, Field(alias='placeName')]  # Duplicate!
+    place_name: Annotated[str, Field(alias="placeName")]  # Duplicate!
+
 
 class ClassB(BaseModel):
-    place_name: Annotated[str, Field(alias='placeName')]  # Duplicate!
+    place_name: Annotated[str, Field(alias="placeName")]  # Duplicate!
 ```
 
 ### Solution: Use `$defs` with `--use-type-alias`
@@ -326,6 +350,8 @@ class ClassB(BaseModel):
 **Step 1: Define the shared type in `$defs`**
 
 <!-- BEGIN AUTO-GENERATED DOC EXAMPLE: model-reuse.use-type-alias.schema -->
+<!-- fmt: off -->
+
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -370,6 +396,8 @@ class ClassB(BaseModel):
   ]
 }
 ```
+
+<!-- fmt: on -->
 <!-- END AUTO-GENERATED DOC EXAMPLE: model-reuse.use-type-alias.schema -->
 
 **Step 2: Generate with `--use-type-alias`**
@@ -384,6 +412,8 @@ datamodel-codegen \
 ### Result: Single TypeAlias reused across classes
 
 <!-- BEGIN AUTO-GENERATED DOC EXAMPLE: model-reuse.use-type-alias.output -->
+<!-- fmt: off -->
+
 ```python
 from __future__ import annotations
 
@@ -418,6 +448,8 @@ class ClassB(BaseModel):
 
 Model = TypeAliasType("Model", Annotated[ClassA | ClassB, Field(..., title='Model')])
 ```
+
+<!-- fmt: on -->
 <!-- END AUTO-GENERATED DOC EXAMPLE: model-reuse.use-type-alias.output -->
 
 ### Benefits

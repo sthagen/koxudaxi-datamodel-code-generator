@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import importlib
 import importlib.util
 import itertools
@@ -68,7 +69,7 @@ from datamodel_code_generator import (
     load_data_from_path,
 )
 from datamodel_code_generator.__main__ import Exit
-from datamodel_code_generator.format import DatetimeClassType, Formatter, is_supported_in_black
+from datamodel_code_generator.format import DatetimeClassType, Formatter, apply_builtin_formatter, is_supported_in_black
 from datamodel_code_generator.model import base as model_base
 from datamodel_code_generator.model import get_data_model_types
 from datamodel_code_generator.model.base import TEMPLATE_DIR
@@ -5024,8 +5025,10 @@ first_pet: Pet = pets[0]
 selected_pets: list[Pet] = pets[:1]
 pet_names = [pet.name for pet in pets]
 
+
 def render_pet_names(pets: Sequence[Pet]) -> list[str]:
     return [pet.name for pet in pets]
+
 
 render_pet_names(pets)
 ```
@@ -5891,6 +5894,116 @@ def test_main_builtin_generated_formatter_fallbacks(
         expected_file=expected_name,
         extra_args=[*extra_args, "--formatters", "builtin"],
     )
+
+
+@pytest.mark.parametrize("entrypoint", ["cli", "api"])
+@pytest.mark.parametrize("formatter", ["builtin", "external"])
+@pytest.mark.parametrize("operator", ["and", "or"])
+def test_main_builtin_boolean_wrapping(output_file: Path, entrypoint: str, formatter: str, operator: str) -> None:
+    """Match Black when a nested boolean group exceeds the configured line length."""
+    source = JSON_SCHEMA_DATA_PATH / "conditional_json_equality/object.json"
+    templates = DATA_PATH / "templates/builtin_boolean_wrapping" / operator
+    expected = f"builtin_boolean_wrapping/{operator}.py"
+    formatters = [Formatter.BUILTIN] if formatter == "builtin" else [Formatter.BLACK, Formatter.ISORT]
+    if entrypoint == "cli":
+        run_main_and_assert(
+            input_path=source,
+            output_path=output_file,
+            input_file_type="jsonschema",
+            extra_args=[
+                "--generate-schema-validators",
+                "--disable-timestamp",
+                "--custom-template-dir",
+                str(templates),
+                "--formatters",
+                *(value.value for value in formatters),
+            ],
+            assert_func=assert_file_content,
+            expected_file=expected,
+        )
+    else:
+        run_generate_file_and_assert(
+            input_path=source,
+            output_path=output_file,
+            input_file_type=InputFileType.JsonSchema,
+            output_model_type=DataModelType.PydanticV2BaseModel,
+            generate_schema_validators=True,
+            disable_timestamp=True,
+            custom_template_dir=templates,
+            formatters=formatters,
+            assert_func=assert_file_content,
+            expected_file=expected,
+        )
+    assert_output(
+        apply_builtin_formatter(output_file.read_text(encoding="utf-8")),
+        EXPECTED_JSON_SCHEMA_PATH / expected,
+    )
+    cases = json.loads((DATA_PATH / "payloads/conditional_json_equality.json").read_text(encoding="utf-8"))
+    payloads = next(case for case in cases if case["name"] == "object")
+    with _generated_model(output_file, "boolean_wrapping", "Root") as model:
+        for value in payloads["valid"]:
+            model.model_validate(value)
+            model.model_validate_json(json.dumps(value))
+        for value in payloads["invalid"]:
+            _assert_model_json_invalid(model.model_validate, value, "value_error")
+            _assert_model_json_invalid(model.model_validate_json, json.dumps(value), "value_error")
+
+
+@pytest.mark.parametrize("entrypoint", ["cli", "api"])
+@pytest.mark.parametrize("line_length", [88, 120])
+def test_main_builtin_boolean_wrapping_preserves_expressions(
+    output_file: Path, entrypoint: str, line_length: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Preserve groups, assignment expressions, Unicode, comments and docstrings."""
+    source = JSON_SCHEMA_DATA_PATH / "builtin_boolean_wrapping.json"
+    templates = DATA_PATH / "templates/builtin_boolean_wrapping/guards"
+    expected = f"builtin_boolean_wrapping/guards_{line_length}.py"
+    if entrypoint == "cli":
+        config = DATA_PATH / f"templates/builtin_boolean_wrapping/{line_length}.toml"
+        (output_file.parent / "pyproject.toml").write_bytes(config.read_bytes())
+        monkeypatch.chdir(output_file.parent)
+        run_main_and_assert(
+            input_path=source,
+            output_path=output_file,
+            input_file_type="jsonschema",
+            extra_args=[
+                "--disable-timestamp",
+                "--formatters",
+                "builtin",
+                "--custom-template-dir",
+                str(templates),
+            ],
+            assert_func=assert_file_content,
+            expected_file=expected,
+        )
+    else:
+        run_generate_file_and_assert(
+            input_path=source,
+            output_path=output_file,
+            input_file_type=InputFileType.JsonSchema,
+            output_model_type=DataModelType.PydanticV2BaseModel,
+            disable_timestamp=True,
+            custom_template_dir=templates,
+            formatters=[Formatter.BUILTIN],
+            builtin_format_line_length=line_length,
+            assert_func=assert_file_content,
+            expected_file=expected,
+        )
+    leading_blank_lines = (DATA_PATH / "templates/builtin_boolean_wrapping/leading_blank_lines.txt").read_text(
+        encoding="utf-8"
+    )
+    assert_output(
+        apply_builtin_formatter(leading_blank_lines + output_file.read_text(encoding="utf-8"), line_length=line_length),
+        EXPECTED_JSON_SCHEMA_PATH / expected,
+    )
+    payloads = json.loads((DATA_PATH / "payloads/builtin_boolean_wrapping.json").read_text(encoding="utf-8"))
+    with _generated_model(output_file, "boolean_wrapping_guards", "Model") as model:
+        values = [model(value=value) for value in payloads]
+        results = [{**value.evaluate(), "async": asyncio.run(value.evaluate_async())} for value in values]
+        assert_output(
+            json.dumps(results, indent=2) + "\n",
+            EXPECTED_JSON_SCHEMA_PATH / "builtin_boolean_wrapping/runtime.txt",
+        )
 
 
 @pytest.mark.allow_direct_assert
@@ -13495,6 +13608,37 @@ def test_main_jsonschema_collapse_root_models_container_field_constraints(output
             "builtin",
         ],
         force_exec_validation=True,
+    )
+
+
+def test_main_jsonschema_collapse_root_models_array_item_union_self_reference(output_file: Path) -> None:
+    """Keep an array field's own constraints when its items collapse into a self-referencing union."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "collapse_root_models_array_item_union_self_reference.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        assert_func=assert_file_content,
+        expected_file="collapse_root_models_array_item_union_self_reference.py",
+        extra_args=[
+            "--collapse-root-models",
+            "--use-annotated",
+            "--use-union-operator",
+            "--use-generic-container-types",
+            "--output-model-type",
+            "pydantic_v2.BaseModel",
+            "--disable-timestamp",
+            "--formatters",
+            "builtin",
+        ],
+        force_exec_validation=True,
+    )
+    assert_generated_model_json_validation(
+        output_file,
+        module_name="output_array_item_union_self_reference",
+        model_name="All",
+        valid_json=(DATA_PATH / "payloads/collapse_root_array_valid.json").read_text(),
+        invalid_json=(DATA_PATH / "payloads/collapse_root_array_invalid.json").read_text(),
+        expected_error_type="too_short",
     )
 
 
@@ -21523,6 +21667,27 @@ def test_validator_finalized_model_import(output_dir: Path, entrypoint: str, exa
         )
 
 
+def test_custom_model_field_name_binding_policy(output_file: Path) -> None:
+    """Keep import aliases chosen by a custom model's existing naming policy."""
+    from datamodel_code_generator.model.pydantic_v2 import BaseModel
+    from datamodel_code_generator.parser.jsonschema import JsonSchemaParser
+    from datamodel_code_generator.reference import ModelType
+
+    class CustomModel(BaseModel):
+        FIELD_NAME_MODEL_TYPE = ModelType.MSGSPEC
+
+    parser = JsonSchemaParser(
+        (JSON_SCHEMA_DATA_PATH / "field_name_bindings/required.json").resolve(),
+        data_model_type=CustomModel,
+        formatters=[Formatter.BUILTIN],
+    )
+    output_file.write_text(parser.parse(), encoding="utf-8")
+    assert_output(
+        output_file.read_text(encoding="utf-8"),
+        EXPECTED_JSON_SCHEMA_PATH / "field_name_bindings/custom_naming_policy.py",
+    )
+
+
 @pytest.mark.parametrize("entrypoint", ["cli", "api"])
 @pytest.mark.parametrize(
     ("backend", "case", "union", "target"),
@@ -24217,6 +24382,57 @@ def test_undeclared_required(
     )
 
 
+@pytest.mark.parametrize("mode", ["all", "request-response"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_undeclared_required_variants(output_file: Path, mode: str, *, enabled: bool) -> None:
+    """Retain undeclared required keys in both variants only when validators are enabled."""
+    source = UNDECLARED_REQUIRED_FIXTURES / "variants.json"
+    run_main_and_assert(
+        input_path=source,
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=[
+            "--read-only-write-only-model-type",
+            mode,
+            "--disable-timestamp",
+            *(["--schema-validator-type", "pydantic-v2"] if enabled else []),
+        ],
+    )
+    api_output = output_file.with_name("api.py")
+    run_generate_and_assert(
+        input_=source,
+        expected_file=output_file,
+        config=GenerateConfig(
+            output=api_output,
+            input_file_type=InputFileType.JsonSchema,
+            read_only_write_only_model_type=mode,
+            schema_validator_type=SchemaValidatorType.PydanticV2 if enabled else None,
+            disable_timestamp=True,
+        ),
+    )
+    payloads = json.loads((DATA_PATH / "payloads/variant_required.json").read_text())
+    results = {}
+    for suffix in ("Request", "Response"):
+        with (
+            _generated_model(api_output, "variant_required_generated", f"Document{suffix}") as model,
+            assert_inputs_not_mutated({"payloads": payloads}),
+        ):
+            records = []
+            for payload in payloads:
+                record = {}
+                for name, validate, value in (
+                    ("python", model.model_validate, payload),
+                    ("json", model.model_validate_json, json.dumps(payload)),
+                ):
+                    try:
+                        record[name] = validate(value).model_dump(mode="json")
+                    except ValidationError:  # noqa: PERF203
+                        record[name] = "rejected"
+                records.append(record)
+            results[suffix] = {"fields": list(model.model_fields), "validation": records}
+    assert_output(json.dumps(results, indent=2), UNDECLARED_REQUIRED_EXPECTED / f"variants_{enabled}_runtime.txt")
+
+
 UNKNOWN_PATTERN_FIXTURES = JSON_SCHEMA_DATA_PATH / "unknown_pattern_annotations"
 
 
@@ -24321,7 +24537,8 @@ def test_unknown_pattern_root_annotations(
 
 
 @pytest.mark.parametrize(
-    "custom", ["parser", "parser_other", "schema", "model", "unproven_model", "root", "field", "manager"]
+    "custom",
+    ["parser", "parser_other", "schema", "model", "unproven_model", "unchecked_model", "root", "field", "manager"],
 )
 def test_custom_pattern_annotation_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, custom: str) -> None:
     """Keep existing custom extension code, raw metadata and accepted dumps intact."""
@@ -24333,12 +24550,14 @@ def test_custom_pattern_annotation_context(tmp_path: Path, monkeypatch: pytest.M
         CustomModel,
         CustomRoot,
         CustomSchema,
+        CustomUncheckedModel,
         CustomUnprovenModel,
     )
 
     options = {
         "model": {"data_model_type": CustomModel},
         "unproven_model": {"data_model_type": CustomUnprovenModel},
+        "unchecked_model": {"data_model_type": CustomUncheckedModel},
         "root": {"data_model_root_type": CustomRoot},
         "field": {"data_model_field_type": CustomField},
         "manager": {"data_type_manager_type": CustomManager},
@@ -24350,7 +24569,7 @@ def test_custom_pattern_annotation_context(tmp_path: Path, monkeypatch: pytest.M
     parser = parser_type(source, generate_schema_validators=True, formatters=[Formatter.BUILTIN], **options)
     output = tmp_path / "output.py"
     output.write_text(parser.parse())
-    expected_case = "model" if custom == "unproven_model" else custom
+    expected_case = "model" if custom in {"unproven_model", "unchecked_model"} else custom
     assert_output(output.read_text(), UNKNOWN_PATTERN_EXPECTED / f"custom_{expected_case}.py")
     contexts = [value["extensions"] for value in parser.extra_template_data.values() if "extensions" in value]
     records = []

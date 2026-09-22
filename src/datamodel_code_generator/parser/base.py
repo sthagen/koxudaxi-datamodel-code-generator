@@ -7,7 +7,6 @@ code generation.
 
 from __future__ import annotations
 
-import ast
 import builtins
 import contextlib
 import operator
@@ -18,7 +17,7 @@ from abc import ABC, abstractmethod
 from collections import Counter, OrderedDict, defaultdict
 from copy import deepcopy
 from dataclasses import dataclass
-from functools import cache
+from functools import cache, partial
 from itertools import chain, groupby
 from pathlib import Path
 from typing import (
@@ -70,6 +69,7 @@ from datamodel_code_generator._source import (
     _is_parsed_source_cache_enabled,
     _read_parser_source_data_from_path,
 )
+from datamodel_code_generator._template_data import copy_extra_template_data
 from datamodel_code_generator.enums import DefaultValueType, StrictTypes
 from datamodel_code_generator.imports import (
     IMPORT_ANNOTATIONS,
@@ -80,7 +80,7 @@ from datamodel_code_generator.imports import (
     Imports,
 )
 from datamodel_code_generator.model.base import (
-    ALL_MODEL,
+    ALL_MODEL,  # noqa: F401  # Preserve the established parser.base export.
     GENERIC_BASE_CLASS_NAME,
     GENERIC_BASE_CLASS_PATH,
     UNDEFINED,
@@ -98,6 +98,11 @@ from datamodel_code_generator.model.base import (
 )
 from datamodel_code_generator.model.enum import Enum, Member, get_raw_enum_member_value
 from datamodel_code_generator.model.enum import escape_characters as _enum_escape_characters
+from datamodel_code_generator.model.output import (
+    _expression_names,  # noqa: F401  # Preserve the existing parser helper export.
+    _model_field_name_collisions,
+    prepare_output_model_config,
+)
 from datamodel_code_generator.model.type_alias import TypeAliasBase, TypeStatement
 from datamodel_code_generator.parser._scc import find_circular_sccs, strongly_connected_components
 from datamodel_code_generator.parser.generation import GenerationIndex, GenerationStore, set_model_base_classes
@@ -128,7 +133,7 @@ from datamodel_code_generator.types import (
 from datamodel_code_generator.util import camel_to_snake, record_watch_dependency
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
+    from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 
     from datamodel_code_generator._types import ParserConfigDict
     from datamodel_code_generator.config import ParserConfig
@@ -376,55 +381,28 @@ def _index_module_models(
     return model_to_module_models, model_path_to_module_name
 
 
+def _expand_result_module_path(input_tuple: tuple[str, ...]) -> tuple[str, ...]:
+    """Expand dotted result paths without changing result identity or ordering."""
+    r = []
+    for item in input_tuple:
+        p = item.split(".")
+        if len(p) > 1:
+            r.extend(p[:-1])
+            r.append(p[-1])
+        else:
+            r.append(item)
+
+    if len(r) >= 2:  # noqa: PLR2004
+        r = [*r[:-2], f"{r[-2]}.{r[-1]}"]
+    return tuple(r)
+
+
 def _normalize_result_module_path(module: ModulePath, *, treat_dot_as_module: bool | None) -> ModulePath:
     """Apply the module-key normalization used by the public parser result."""
     normalized = tuple(part.replace("-", "_") for part in module)
     if treat_dot_as_module:
         return normalized
     return tuple(part[: part.rfind(".")].replace(".", "_") + part[part.rfind(".") :] for part in normalized)
-
-
-def _expression_names(expression: ast.AST) -> set[str]:
-    """Find unqualified loads without treating literal or keyword text as bindings."""
-    return {node.id for node in ast.walk(expression) if isinstance(node, ast.Name)}
-
-
-def _model_field_name_collisions(model: DataModel, import_names: Collection[str]) -> set[str]:
-    """Find imported names hidden by assignments in the emitted model body."""
-    field_names = {field.name for field in model.fields if field.name is not None}
-    candidates = field_names.intersection(import_names)
-    if not candidates:
-        return set()
-    class_body = next(
-        (
-            node.body
-            for node in ast.parse(model.render()).body
-            if isinstance(node, ast.ClassDef) and node.name == model.class_name
-        ),
-        None,
-    )
-    if class_body is None:
-        return set()
-    fields = [
-        (node.target.id, node)
-        for node in class_body
-        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
-    ]
-    # Struct creates slot descriptors even for fields without a default assignment.
-    assigned_names = (
-        field_names
-        if model.FIELD_NAME_MODEL_TYPE is ModelType.MSGSPEC
-        else {name for name, node in fields if node.value is not None}
-    )
-    candidates.intersection_update(assigned_names)
-    collisions: set[str] = set()
-    previous_names: set[str] = set()
-    for name, node in fields:
-        collisions.update(candidates.intersection(_expression_names(node.annotation)))
-        if node.value is not None:
-            collisions.update(candidates.intersection(previous_names, _expression_names(node.value)))
-            previous_names.add(name)
-    return collisions
 
 
 def _bind_module_field_names(models: list[DataModel], imports: Imports) -> None:
@@ -2225,6 +2203,12 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         """
         ...
 
+    _generation_store_factory = staticmethod(GenerationStore.create_with_results)
+    _model_resolver_factory = staticmethod(ModelResolver)
+    _copy_model_field = staticmethod(partial(_copy_data_model_field))
+    _copy_model_type = staticmethod(partial(_copy_data_type))
+    _copy_inherited_field = staticmethod(partial(_copy_resolved_inherited_field))
+
     _config_class_name: ClassVar[str] = "ParserConfig"
     _cache_local_sources_during_parse: ClassVar[bool] = False
     _cache_parsed_sources_from_path: ClassVar[bool] = False
@@ -2348,27 +2332,15 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         if "decorators" not in kwargs and self.class_decorators:
             kwargs["decorators"] = list(self.class_decorators)
         data_model_class = model_type or self.data_model_type
-        if not data_model_class.USES_DATACLASS_ARGUMENTS:
-            kwargs.pop("dataclass_arguments", None)
-            return data_model_class(**kwargs)
-
-        # Use dataclass_arguments from kwargs, or fall back to self.dataclass_arguments.
-        # If both are None, construct from legacy frozen_dataclasses/keyword_only flags.
-        if (dataclass_arguments := kwargs.pop("dataclass_arguments", None)) is None:
-            dataclass_arguments = self.dataclass_arguments
-        if dataclass_arguments is None:
-            # Construct from legacy flags for library API compatibility.
-            dataclass_arguments = {}
-            if self.frozen_dataclasses:
-                dataclass_arguments["frozen"] = True
-            if self.keyword_only:
-                dataclass_arguments["kw_only"] = True
-        kwargs["dataclass_arguments"] = dataclass_arguments
-        kwargs.pop("frozen", None)
-        kwargs.pop("keyword_only", None)
+        data_model_class.prepare_constructor_arguments(
+            kwargs,
+            dataclass_arguments=self.dataclass_arguments,
+            frozen=self.frozen_dataclasses,
+            keyword_only=self.keyword_only,
+        )
         return data_model_class(**kwargs)
 
-    def __init__(  # noqa: PLR0912, PLR0915
+    def __init__(  # noqa: PLR0915
         self,
         source: str | Path | list[Path] | ParseResult | dict[str, YamlValue],
         *,
@@ -2449,7 +2421,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         self.base_class_map: dict[str, str | list[str]] | None = config.base_class_map
         self.target_python_version: PythonVersion = config.target_python_version
         self.builtin_names: frozenset[str] = _get_builtin_names_for_target(self.target_python_version)
-        self.generation_store, self.results = GenerationStore.create_with_results()
+        self.generation_store, self.results = self._generation_store_factory()
         self.model_metadata: ModelMetadata | None = None
         self.invalid_dotted_stdout_repair_modules: tuple[ModulePath, ...] = ()
         self.generated_model_inventory: tuple[str, ...] | None = None
@@ -2530,83 +2502,38 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             and isinstance(source, Path | list)
         )
         self.custom_template_dir = config.custom_template_dir
-        self.extra_template_data: defaultdict[str, Any] = config.extra_template_data or defaultdict(dict)
+        self.extra_template_data: defaultdict[str, Any] = (
+            copy_extra_template_data(data) if (data := config.extra_template_data) else defaultdict(dict)
+        )
         self.validators = config.validators
         self.generate_schema_validators: bool = config.generate_schema_validators
         self._set_typed_extra_annotation_mode(use_deferred_annotations=True)
 
-        if self.use_total_false_for_typed_dict and self.data_model_type.SUPPORTS_TYPED_DICT_TOTAL_FALSE:
-            typed_dict_data = self.extra_template_data[ALL_MODEL]
-            typed_dict_data["use_total_false_for_typed_dict"] = True
-            if not self.target_python_version.has_typed_dict_non_required:
-                typed_dict_data["use_total_false_typeddict_backport"] = True
-
-        if self.validators:
-            for model_name, model_config in self.validators.items():
-                self.extra_template_data[model_name]["validators"] = [
-                    v.model_dump(mode="json") for v in model_config.validators
-                ]
+        self.data_model_type.configure_required_fields(
+            self.extra_template_data,
+            target_python_version=self.target_python_version,
+            use_total_false=self.use_total_false_for_typed_dict,
+        )
 
         self.use_generic_base_class: bool = config.use_generic_base_class
-        self.generic_base_class_config: dict[str, Any] = {}
+        self.generic_base_class_config = prepare_output_model_config(
+            self.extra_template_data,
+            validators=config.validators,
+            use_generic_base_class=config.use_generic_base_class,
+            allow_population_by_field_name=config.allow_population_by_field_name,
+            alias_generator=config.alias_generator,
+            no_alias=config.no_alias,
+            allow_extra_fields=config.allow_extra_fields,
+            extra_fields=config.extra_fields,
+            enable_faux_immutability=config.enable_faux_immutability,
+            use_attribute_docstrings=config.use_attribute_docstrings,
+            use_single_line_docstring=config.use_single_line_docstring,
+            target_pydantic_version=config.target_pydantic_version,
+            schema_validator_base_class_name=config.schema_validator_base_class_name,
+            generate_schema_validators=config.generate_schema_validators,
+        )
 
-        if config.allow_population_by_field_name:
-            if config.use_generic_base_class:
-                self.generic_base_class_config["allow_population_by_field_name"] = True
-            else:
-                self.extra_template_data[ALL_MODEL]["allow_population_by_field_name"] = True
-
-        if config.alias_generator:
-            if config.use_generic_base_class:
-                self.generic_base_class_config["allow_population_by_field_name"] = True
-                self.generic_base_class_config["alias_generator"] = config.alias_generator
-                self.extra_template_data[ALL_MODEL]["_alias_generator"] = config.alias_generator
-            else:
-                self.extra_template_data[ALL_MODEL]["allow_population_by_field_name"] = True
-                self.extra_template_data[ALL_MODEL]["alias_generator"] = config.alias_generator
-
-        if config.no_alias:
-            self.extra_template_data[ALL_MODEL]["_no_alias"] = True
-
-        if config.allow_extra_fields:
-            if config.use_generic_base_class:
-                self.generic_base_class_config["allow_extra_fields"] = True
-            else:
-                self.extra_template_data[ALL_MODEL]["allow_extra_fields"] = True
-
-        if config.extra_fields:
-            if config.use_generic_base_class:
-                self.generic_base_class_config["extra_fields"] = config.extra_fields
-            else:
-                self.extra_template_data[ALL_MODEL]["extra_fields"] = config.extra_fields
-
-        if config.enable_faux_immutability:
-            if config.use_generic_base_class:
-                self.generic_base_class_config["allow_mutation"] = False
-            else:
-                self.extra_template_data[ALL_MODEL]["allow_mutation"] = False
-
-        if config.use_attribute_docstrings:
-            if config.use_generic_base_class:
-                self.generic_base_class_config["use_attribute_docstrings"] = True
-            else:
-                self.extra_template_data[ALL_MODEL]["use_attribute_docstrings"] = True
-        if config.use_single_line_docstring:
-            self.extra_template_data[ALL_MODEL]["use_single_line_docstring"] = True
-
-        if config.target_pydantic_version:
-            if config.use_generic_base_class:
-                self.generic_base_class_config["target_pydantic_version"] = config.target_pydantic_version
-            else:
-                self.extra_template_data[ALL_MODEL]["target_pydantic_version"] = config.target_pydantic_version
-        if config.schema_validator_base_class_name:
-            self.extra_template_data[ALL_MODEL]["schema_validator_base_class_name"] = (
-                config.schema_validator_base_class_name
-            )
-        if config.generate_schema_validators:
-            self.extra_template_data[ALL_MODEL]["schema_runtime_validation_enabled"] = True
-
-        self.model_resolver = ModelResolver(
+        self.model_resolver = self._model_resolver_factory(
             base_url=source.geturl() if isinstance(source, ParseResult) else None,
             singular_name_suffix="" if config.disable_appending_item_suffix else None,
             aliases=config.aliases,
@@ -3616,7 +3543,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         for model in set_item_models:
             if model.reference.path in native_hash_paths:
                 continue
-            model._append_internal_template_data("class_body_lines", "__hash__ = object.__hash__")  # noqa: SLF001
+            model.enable_identity_hash()
 
     @classmethod
     def __set_reference_default_value_to_field(
@@ -3850,18 +3777,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
 
                     # These runtime rules are owned by the referenced root model;
                     # replacing it with the raw type would discard its validator.
-                    runtime_validation = (
-                        root_type_model._internal_template_data.get("schema_runtime_validation")  # noqa: SLF001
-                        or root_type_model.extra_template_data.get("schema_runtime_validation")
-                    )
-                    if runtime_validation and any(
-                        getattr(runtime_validation, rule_name, None)
-                        for rule_name in (
-                            "pattern_properties",
-                            "required_groups",
-                            "conditional_required",
-                        )
-                    ):
+                    if root_type_model.has_runtime_object_validation:
                         continue
 
                     root_constraints = root_type_field.constraints
@@ -3938,7 +3854,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                     source_module_name = _get_model_module_name(root_type_model, model_path_to_module_name)
                     target_module_name = _get_model_module_name(model, model_path_to_module_name)
                     copied_data_type = (
-                        _copy_data_type(root_type_field.data_type)
+                        self._copy_model_type(root_type_field.data_type)
                         if source_module_name != target_module_name
                         else root_type_field.data_type.model_copy()
                     )
@@ -4406,7 +4322,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                     changed = True
                     continue
                 if (
-                    copied_original_field := _copy_resolved_inherited_field(
+                    copied_original_field := self._copy_inherited_field(
                         model_field,
                         original_field,
                         force_optional=self.force_optional_for_required_fields,
@@ -4414,7 +4330,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                         reserved_names=reserved_names,
                     )
                 ) is None:
-                    copied_original_field = _copy_data_model_field(original_field)
+                    copied_original_field = self._copy_model_field(original_field)
                     copied_original_field.name = model_field.name
                     copied_original_field.original_name = model_field.original_name
                     copied_original_field.alias = model_field.alias
@@ -4884,25 +4800,17 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                 model.has_forward_reference = model.has_forward_reference or process_all_fields
                 _clear_model_imports_cache_if_retained(model, can_retain_cache=can_retain_cache)
 
+    @property
+    def _result_modules_postprocessor(self) -> Callable[..., dict[tuple[str, ...], Result]]:
+        """Resolve the legacy postprocessor dynamically for each render."""
+        return self.__postprocess_result_modules
+
     @classmethod
     def __postprocess_result_modules(
         cls, results: dict[tuple[str, ...], Result], *, empty_init: bool = False
     ) -> dict[tuple[str, ...], Result]:
-        def process(input_tuple: tuple[str, ...]) -> tuple[str, ...]:
-            r = []
-            for item in input_tuple:
-                p = item.split(".")
-                if len(p) > 1:
-                    r.extend(p[:-1])
-                    r.append(p[-1])
-                else:
-                    r.append(item)
 
-            if len(r) >= 2:  # noqa: PLR2004
-                r = [*r[:-2], f"{r[-2]}.{r[-1]}"]
-            return tuple(r)
-
-        results = {process(k): v for k, v in results.items()}
+        results = {_expand_result_module_path(k): v for k, v in results.items()}
 
         init_result = Result(body="") if empty_init else next(v for k, v in results.items() if k[-1] == "__init__.py")
         folders = {t[:-1] if t[-1].endswith(".py") else t for t in results}
@@ -5591,20 +5499,12 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         return "\n".join(import_ for import_ in (future_imports_str, str(ctx.imports.extract_future())) if import_)
 
     def _set_typed_extra_annotation_mode(self, *, use_deferred_annotations: bool) -> None:
-        """Select the safe typed-extra annotation form for the generated runtime."""
-        if not (key := self.data_model_type.TYPED_EXTRA_PLAIN_ANNOTATION_TEMPLATE_DATA_KEY):
-            return
-
-        native_deferred_annotations = self.target_python_version.has_native_deferred_annotations
-        match native_deferred_annotations:
-            case True:
-                use_plain_annotation = True
-            case False if use_deferred_annotations:
-                use_plain_annotation = False
-            case _:
-                use_plain_annotation = True
-
-        self.extra_template_data.setdefault(ALL_MODEL, {})[key] = use_plain_annotation
+        """Let the selected output configure its annotation representation."""
+        self.data_model_type.configure_annotations(
+            self.extra_template_data,
+            target_python_version=self.target_python_version,
+            use_deferred_annotations=use_deferred_annotations,
+        )
 
     def _prepare_parse_config(
         self,
@@ -6790,7 +6690,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             for module, result in results.items()
         }
         if self.treat_dot_as_module:
-            results = self.__postprocess_result_modules(results, empty_init=config.all_exports_scope is not None)
+            results = self._result_modules_postprocessor(results, empty_init=config.all_exports_scope is not None)
             if config.all_exports_scope is not None:
                 self._generate_empty_init_exports(results, contexts, config, future_imports_str)
         return results

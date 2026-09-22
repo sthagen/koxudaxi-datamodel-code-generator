@@ -5,6 +5,68 @@ This changelog is automatically generated from GitHub Releases.
 
 ---
 
+## [0.82.0](https://github.com/datamodel-code-generator/datamodel-code-generator/releases/tag/0.82.0) - 2026-09-16
+
+## Breaking Changes
+
+
+### Code Generation Changes
+* Constraints are now emitted on recursive container fields - Previously any field that was a self reference had all of its constraints suppressed. The new `_can_apply_constraints` property in the base field model only suppresses constraints for direct self references, so a self referencing field whose type is a container such as `list`, `Sequence`, `dict`, `Mapping`, `set`, `frozenset`, or `tuple` now keeps its size constraints. Pydantic output gains `Field(min_length=..., max_length=...)` and msgspec output gains `Meta(min_length=..., max_length=...)` where the generated code previously had a bare default, for example `friends: list[Pet] | None = None` becomes `friends: list[Pet] | None = Field(None, min_length=1)` (#4071)
+* Stricter runtime validation of recursive container payloads - Because the recovered size constraints are now present in the generated models, input data that violates `minItems` or `maxItems` on a recursive array is rejected at validation time instead of being accepted. Existing code that relied on the previously unconstrained generated models may start raising pydantic `ValidationError` or `msgspec.ValidationError` for payloads that used to pass (#4071)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+* Fix builtin formatter wrapping of boolean expressions by @koxudaxi in https://github.com/datamodel-code-generator/datamodel-code-generator/pull/4073
+* Fix collapse-root-models dropping array constraints on self-referencing unions by @ysheikh2 in https://github.com/datamodel-code-generator/datamodel-code-generator/pull/4071
+* Generate validators for not-required groups and presence-only if conditions by @ysheikh2 in https://github.com/datamodel-code-generator/datamodel-code-generator/pull/4072
+* Fix bare Mapping import dropped when schema validators alias it by @ysheikh2 in https://github.com/datamodel-code-generator/datamodel-code-generator/pull/4076
+* Allow manual replay of failed release draft analysis by @koxudaxi in https://github.com/datamodel-code-generator/datamodel-code-generator/pull/4079
+
+## New Contributors
+* @ysheikh2 made their first contribution in https://github.com/datamodel-code-generator/datamodel-code-generator/pull/4071
+
+**Full Changelog**: https://github.com/datamodel-code-generator/datamodel-code-generator/compare/0.81.0...0.82.0
+
+---
+
+## [0.81.0](https://github.com/datamodel-code-generator/datamodel-code-generator/releases/tag/0.81.0) - 2026-09-14
+
+## Breaking Changes
+
+
+### Code Generation Changes
+* Undeclared required keys now retained in variant runtime validation - When combining `--read-only-write-only-model-type` request/response variants with `--schema-validator-type` runtime validators, generated models now keep runtime validation rules for required keys that are not declared as properties (for example keys required via additionalProperties or if/then/else), whereas these rules were previously dropped from the variant models. Regenerated Request and Response models therefore enforce stricter validation and may reject payloads that the previously generated validators accepted (#4055)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+* Fix parser template data reuse by @koxudaxi in https://github.com/datamodel-code-generator/datamodel-code-generator/pull/4054
+* Fix required validation in request and response models by @koxudaxi in https://github.com/datamodel-code-generator/datamodel-code-generator/pull/4055
+* Share JSON Schema reference rewriting across inputs by @koxudaxi in https://github.com/datamodel-code-generator/datamodel-code-generator/pull/4057
+* Move output model decisions out of parsers by @koxudaxi in https://github.com/datamodel-code-generator/datamodel-code-generator/pull/4058
+* Move output configuration out of parsers by @koxudaxi in https://github.com/datamodel-code-generator/datamodel-code-generator/pull/4059
+* Guard output policy and private parser boundaries by @koxudaxi in https://github.com/datamodel-code-generator/datamodel-code-generator/pull/4060
+
+
+**Full Changelog**: https://github.com/datamodel-code-generator/datamodel-code-generator/compare/0.80.0...0.81.0
+
+---
+
 ## [0.80.0](https://github.com/datamodel-code-generator/datamodel-code-generator/releases/tag/0.80.0) - 2026-09-12
 
 ## Breaking Changes
@@ -436,21 +498,25 @@ class _JsonSchemaRuntimeValidationBase(BaseModel):
     __json_schema_conditional_required__: ClassVar[tuple[Any, ...]] = ()
     ...
 
+
 class ApiConditionalEnvelopeRequestModel(_JsonSchemaRuntimeValidationBase):
-    __json_schema_conditional_required__: ClassVar[tuple[Any, ...]] = (...)
+    __json_schema_conditional_required__: ClassVar[tuple[Any, ...]] = ...
+
 
 # After
 class _JsonSchemaRuntimeValidationBaseCore(BaseModel):
     __json_schema_conditional_required__: ClassVar[tuple[Any, ...]] = ()
     ...
 
+
 class _JsonSchemaRuntimeValidationBase(_JsonSchemaRuntimeValidationBaseCore):
     __json_schema_property_count_rule__: ClassVar[tuple[Any, ...]] = ()
     ...
 
+
 class ApiConditionalEnvelopeRequestModel(_JsonSchemaRuntimeValidationBase):
     __json_schema_property_count_rule__: ClassVar[tuple[Any, ...]] = (2, 2)
-    __json_schema_conditional_required__: ClassVar[tuple[Any, ...]] = (...)
+    __json_schema_conditional_required__: ClassVar[tuple[Any, ...]] = ...
 ```
 
 ## What's Changed
@@ -478,12 +544,14 @@ class ApiConditionalEnvelopeRequestModel(_JsonSchemaRuntimeValidationBase):
 # Before
 from math import inf
 
+
 class Model(BaseModel):
     value: float | None = inf
 
+
 # After
 class Model(BaseModel):
-    value: float | None = float('inf')
+    value: float | None = float("inf")
 ```
 
 ## What's Changed
@@ -638,9 +706,7 @@ Trusted custom root templates (`--custom-template-dir` providing the root templa
 nested: Nested | UnsetType = field(default_factory=dict)
 
 # After
-nested: Nested | UnsetType = field(
-    default_factory=lambda: convert({}, type=Nested)
-)
+nested: Nested | UnsetType = field(default_factory=lambda: convert({}, type=Nested))
 ```
 * Pydantic v2 dataclass optional nested-model default factory - Under `--use-default-factory-for-optional-nested-models`, optional nested Pydantic dataclass fields now emit `Field(default_factory=<Nested>)` where they previously did not, because the field now resolves Pydantic dataclass references. Output for these fields changes on regeneration when that flag is enabled (#3668)
 ```python
@@ -652,12 +718,13 @@ nested: Nested | None = Field(default_factory=Nested)
 # Before
 @dataclass
 class Model:
-    inner: Inner | None = field(default_factory=lambda: {'v': float('inf')})
+    inner: Inner | None = field(default_factory=lambda: {"v": float("inf")})
+
 
 # After
 @dataclass
 class Model:
-    inner: Inner | None = field(default_factory=lambda: Inner(v=float('inf')))
+    inner: Inner | None = field(default_factory=lambda: Inner(v=float("inf")))
 ```
 * Deprecated decorator detection now requires an exact name match - The check that decides whether a `@deprecated` class decorator is already present changed from a text prefix match (`decorator.startswith("@deprecated")`) to an exact unqualified-name match (`is_named_python_decorator(decorator, "deprecated")`). If a schema marks a class as deprecated and you also apply a custom class decorator that merely shares the `deprecated` prefix (e.g. `@deprecated_custom`), the generator previously treated it as the deprecated decorator and skipped emitting one; it now recognizes them as distinct and adds the real `@deprecated('... is deprecated.')` decorator along with the `typing_extensions.deprecated` import. Generated output for these cases changes accordingly. Idempotency for the standard `@deprecated('...')` decorator is unchanged. (#3685)
 ```python
@@ -666,15 +733,14 @@ class Model:
 # Before
 @deprecated_custom
 @dataclass
-class LegacyUser:
-    ...
+class LegacyUser: ...
+
 
 # After
 @deprecated_custom
-@deprecated('LegacyUser is deprecated.')
+@deprecated("LegacyUser is deprecated.")
 @dataclass
-class LegacyUser:
-    ...
+class LegacyUser: ...
 ```
 
 ## What's Changed
@@ -775,13 +841,14 @@ Output and model metadata paths must be different: <path>
 
 ```python
 # Before
-class DictModel(RootModel[dict[str, Literal['fixed']]]):
-    root: dict[str, Literal['fixed']]
+class DictModel(RootModel[dict[str, Literal["fixed"]]]):
+    root: dict[str, Literal["fixed"]]
+
 
 # After
 DictModelAdditionalProperty = TypeAliasType(
     "DictModelAdditionalProperty",
-    Annotated[Literal['fixed'], Field(max_length=100, min_length=1)],
+    Annotated[Literal["fixed"], Field(max_length=100, min_length=1)],
 )
 
 
@@ -813,7 +880,8 @@ class DictModel(RootModel[dict[str, DictModelAdditionalProperty]]):
 ```python
 # Before (invalid duplicate-value discriminator was emitted):
 class GroupedItem(RootModel[Item | ItemReference]):
-    root: Item | ItemReference = Field(..., discriminator='type')
+    root: Item | ItemReference = Field(..., discriminator="type")
+
 
 # After (falls back to a plain union when variants are not valid discriminated members):
 class MixedItem(RootModel[str | ItemReference | None]):
@@ -1017,10 +1085,12 @@ class MixedItem(RootModel[str | ItemReference | None]):
 ```python
 # Before
 from typing import Annotated, Optional, Union
+
 name: Union[Annotated[Optional[str], Meta(max_length=5)], UnsetType] = UNSET
 
 # After
 from typing import Annotated, Union
+
 name: Union[Annotated[str, Meta(max_length=5)], None, UnsetType] = UNSET
 ```
 
@@ -1644,12 +1714,12 @@ name: Union[Annotated[str, Meta(max_length=5)], None, UnsetType] = UNSET
   Before:
   ```python
   count: CountType | None = Field(default_factory=lambda: CountType(10))
-  items: dict[str, Item] | None = Field(default_factory=dict, title='Items')
+  items: dict[str, Item] | None = Field(default_factory=dict, title="Items")
   ```
   After:
   ```python
   count: CountType | None = Field(10, validate_default=True)
-  items: dict[str, Item] | None = Field({}, title='Items', validate_default=True)
+  items: dict[str, Item] | None = Field({}, title="Items", validate_default=True)
   ```
 * Default values for fields referencing models now use `validate_default=True` instead of `default_factory=lambda:` - Fields with structured defaults (dicts/lists) that reference Pydantic models previously generated `default_factory=lambda: Model.model_validate(...)` or `default_factory=lambda: TypeAdapter(Type).validate_python(...)` patterns. They now generate the raw default value directly with `validate_default=True` (e.g., `Field({'key': 'val'}, validate_default=True)` instead of `Field(default_factory=lambda: Model.model_validate({'key': 'val'}))`). This changes the generated code output and may affect users who depend on the exact generated code structure, pin generated output in tests, or use custom post-processing. The runtime behavior should be equivalent for Pydantic v2 users. (#3072)
 * `TypeAdapter` import removed from generated code - Generated code no longer imports `pydantic.TypeAdapter` for default value handling. Code that previously used `TypeAdapter(...).validate_python(...)` in default factories now uses inline defaults with `validate_default=True`. (#3072)
@@ -1865,17 +1935,19 @@ name: Union[Annotated[str, Meta(max_length=5)], None, UnsetType] = UNSET
 * Parser subclass signature change - The `Parser` base class now requires two generic type parameters: `Parser[ParserConfigT, SchemaFeaturesT]` instead of just `Parser[ParserConfigT]`. Custom parser subclasses must be updated to include the second type parameter. (#2929)
   ```python
   # Before
-  class MyCustomParser(Parser["MyParserConfig"]):
-      ...
+  class MyCustomParser(Parser["MyParserConfig"]): ...
+
+
   # After
-  class MyCustomParser(Parser["MyParserConfig", "JsonSchemaFeatures"]):
-      ...
+  class MyCustomParser(Parser["MyParserConfig", "JsonSchemaFeatures"]): ...
   ```
 * New abstract `schema_features` property required - Custom parser subclasses must now implement the `schema_features` abstract property that returns a `JsonSchemaFeatures` (or subclass) instance. (#2929)
   ```python
   from functools import cached_property
   from datamodel_code_generator.parser.schema_version import JsonSchemaFeatures
   from datamodel_code_generator.enums import JsonSchemaVersion
+
+
   class MyCustomParser(Parser["MyParserConfig", "JsonSchemaFeatures"]):
       @cached_property
       def schema_features(self) -> JsonSchemaFeatures:
@@ -1899,14 +1971,12 @@ name: Union[Annotated[str, Meta(max_length=5)], None, UnsetType] = UNSET
   Before:
   ```python
   class Family(BaseModel):
-      __root__: list[ID] = ['abc', 'efg']
+      __root__: list[ID] = ["abc", "efg"]
   ```
   After:
   ```python
   class Family(BaseModel):
-      __root__: list[ID] = Field(
-          default_factory=lambda: [ID.parse_obj(v) for v in ['abc', 'efg']]
-      )
+      __root__: list[ID] = Field(default_factory=lambda: [ID.parse_obj(v) for v in ["abc", "efg"]])
   ```
 
 ## What's Changed
@@ -1985,20 +2055,22 @@ name: Union[Annotated[str, Meta(max_length=5)], None, UnsetType] = UNSET
   **Before:**
   ```python
   class ProcessingTaskTitle(BaseModel):
-      processing_status_union: (
-          ProcessingStatusDetail | ExtendedProcessingTask | ProcessingStatusTitle | None
-      ) = Field('COMPLETED', title='Processing Status Union Title')
+      processing_status_union: ProcessingStatusDetail | ExtendedProcessingTask | ProcessingStatusTitle | None = Field(
+          "COMPLETED", title="Processing Status Union Title"
+      )
   ```
   **After:**
   ```python
   class ProcessingStatusUnionTitle(BaseModel):
-      __root__: (
-          ProcessingStatusDetail | ExtendedProcessingTask | ProcessingStatusTitle
-      ) = Field(..., title='Processing Status Union Title')
+      __root__: ProcessingStatusDetail | ExtendedProcessingTask | ProcessingStatusTitle = Field(
+          ..., title="Processing Status Union Title"
+      )
+
+
   class ProcessingTaskTitle(BaseModel):
       processing_status_union: ProcessingStatusUnionTitle | None = Field(
-          default_factory=lambda: ProcessingStatusUnionTitle.parse_obj('COMPLETED'),
-          title='Processing Status Union Title',
+          default_factory=lambda: ProcessingStatusUnionTitle.parse_obj("COMPLETED"),
+          title="Processing Status Union Title",
       )
   ```
 * Inline types with titles now generate named type aliases when `--use-title-as-name` is enabled - Arrays, dicts, enums-as-literals, and oneOf/anyOf unions that have a `title` in the schema now generate named type aliases or RootModel classes instead of being inlined. This improves readability but changes the generated type structure. For TypedDict output, generates `type MyArrayName = list[str]`. For Pydantic output, generates `class MyArrayName(RootModel[list[str]])`. (#2889)
@@ -2008,8 +2080,12 @@ name: Union[Annotated[str, Meta(max_length=5)], None, UnsetType] = UNSET
   ```python
   class UserA(BaseModel):
       name: str
+
+
   class UserB(BaseModel):
       name: str
+
+
   class Model(BaseModel):
       user_a: UserA | None = None
       user_b: UserB | None = None
@@ -2018,6 +2094,8 @@ name: Union[Annotated[str, Meta(max_length=5)], None, UnsetType] = UNSET
   ```python
   class User(BaseModel):
       name: str
+
+
   class Model(BaseModel):
       user_a: User | None = None
       user_b: User | None = None
@@ -2062,7 +2140,7 @@ name: Union[Annotated[str, Meta(max_length=5)], None, UnsetType] = UNSET
   Before:
   ```python
   class Person(BaseModel):
-      type: str | None = 'playground:Person'
+      type: str | None = "playground:Person"
       name: constr(min_length=1) | None = None
       address: constr(min_length=5)
       age: int | None = None
@@ -2072,10 +2150,14 @@ name: Union[Annotated[str, Meta(max_length=5)], None, UnsetType] = UNSET
   class Thing(BaseModel):
       type: str
       name: constr(min_length=1)
+
+
   class Location(BaseModel):
       address: constr(min_length=5)
+
+
   class Person(Thing, Location):
-      type: str | None = 'playground:Person'
+      type: str | None = "playground:Person"
       name: constr(min_length=1) | None = None
       age: int | None = None
   ```
@@ -2094,10 +2176,10 @@ name: Union[Annotated[str, Meta(max_length=5)], None, UnsetType] = UNSET
   ```python
   # Before (v0.x)
   map_view_mode: str = Field("MODE_2D", alias="mapViewMode", const=True)
-  apiVersion: str = Field('v1', const=True)
+  apiVersion: str = Field("v1", const=True)
   # After (this PR)
   map_view_mode: Literal["MODE_2D"] = Field("MODE_2D", alias="mapViewMode", const=True)
-  apiVersion: Literal['v1'] = Field('v1', const=True)
+  apiVersion: Literal["v1"] = Field("v1", const=True)
   ```
   This is a bug fix that makes the generated code more type-safe, but downstream code performing type comparisons or using `isinstance(field, str)` checks may need adjustment. (#2864)
 
@@ -2238,7 +2320,7 @@ name: Union[Annotated[str, Meta(max_length=5)], None, UnsetType] = UNSET
   Now generates:
   ```python
   class Resource(BaseModel):
-      model_config = ConfigDict(extra='forbid')
+      model_config = ConfigDict(extra="forbid")
       name: str | None = None
   ```
 

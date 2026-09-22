@@ -18,6 +18,8 @@ datamodel-codegen --input api.yaml --input-file-type openapi --output model.py
 <details>
 <summary>api.yaml</summary>
 
+<!-- fmt: off -->
+
 ```yaml
 openapi: "3.0.0"
 info:
@@ -199,12 +201,16 @@ components:
           event:
             $ref: '#/components/schemas/Event'
 ```
+
+<!-- fmt: on -->
 </details>
 <!-- END AUTO-GENERATED DOC EXAMPLE: openapi.quick-start.schema -->
 
 **✨ Generated model.py:**
 
 <!-- BEGIN AUTO-GENERATED DOC EXAMPLE: openapi.quick-start.output -->
+<!-- fmt: off -->
+
 ```python
 from __future__ import annotations
 
@@ -270,6 +276,8 @@ class Event(BaseModel):
 class Result(BaseModel):
     event: Event | None = None
 ```
+
+<!-- fmt: on -->
 <!-- END AUTO-GENERATED DOC EXAMPLE: openapi.quick-start.output -->
 
 ---
@@ -294,6 +302,8 @@ This option generates separate Request/Response models based on these annotation
 ### 📋 Example Schema
 
 <!-- BEGIN AUTO-GENERATED DOC EXAMPLE: openapi.read-only-write-only.schema -->
+<!-- fmt: off -->
+
 ```yaml
 openapi: "3.0.0"
 info:
@@ -325,6 +335,8 @@ components:
           type: string
           writeOnly: true
 ```
+
+<!-- fmt: on -->
 <!-- END AUTO-GENERATED DOC EXAMPLE: openapi.read-only-write-only.schema -->
 
 ### ✨ Generated Output
@@ -336,6 +348,8 @@ datamodel-codegen --input user.yaml --input-file-type openapi \
 ```
 
 <!-- BEGIN AUTO-GENERATED DOC EXAMPLE: openapi.read-only-write-only.output -->
+<!-- fmt: off -->
+
 ```python
 from __future__ import annotations
 
@@ -361,6 +375,8 @@ class User(BaseModel):
     created_at: AwareDatetime | None = None
     secret_token: str | None = None
 ```
+
+<!-- fmt: on -->
 <!-- END AUTO-GENERATED DOC EXAMPLE: openapi.read-only-write-only.output -->
 
 ### 🎯 Usage Patterns
@@ -376,6 +392,8 @@ class User(BaseModel):
 When using `allOf` with `$ref`, fields from all referenced schemas are flattened into Request/Response models:
 
 <!-- BEGIN AUTO-GENERATED DOC EXAMPLE: openapi.read-only-write-only-allof.schema -->
+<!-- fmt: off -->
+
 ```yaml
 openapi: "3.0.0"
 info:
@@ -423,6 +441,8 @@ components:
             email:
               type: string
 ```
+
+<!-- fmt: on -->
 <!-- END AUTO-GENERATED DOC EXAMPLE: openapi.read-only-write-only-allof.schema -->
 
 Generated `UserRequest` will exclude `created_at`, `updated_at`, and `id` because they are readOnly fields from the flattened Timestamps/User schemas. Generated `UserResponse` will exclude `password` and `api_key` because they are writeOnly fields from Credentials.
