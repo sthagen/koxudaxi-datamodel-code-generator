@@ -38,6 +38,7 @@ from typing_extensions import TypeIs
 
 from datamodel_code_generator import Error, NamingStrategy
 from datamodel_code_generator._format_types import PythonVersion
+from datamodel_code_generator._url_redaction import redact_path, redact_reference
 from datamodel_code_generator.enums import ClassNameAffixScope, HTTPBackend
 from datamodel_code_generator.util import camel_to_snake
 
@@ -142,7 +143,10 @@ if TYPE_CHECKING:
     class _ReferenceSource(ReferenceChild, Protocol):
         """Protocol for objects that can be assigned to Reference.source."""
 
-        fields: Sequence[Any]
+        @property
+        def fields(self) -> Sequence[Any]:
+            """The source fields, without requiring a writable sequence."""
+            raise NotImplementedError
 
         @property
         def is_alias(self) -> bool:
@@ -435,6 +439,8 @@ class FieldNameResolver:
                 continue
             name = f"{self.special_field_name_prefix}{name}"
             break
+        if name[0].isnumeric() and name.isascii():
+            name = f"{self.special_field_name_prefix}_{name}"
         if self.capitalise_enum_members or (self.snake_case_field and not ignore_snake_case_field):
             name = camel_to_snake(name)
         count = 1
@@ -957,7 +963,7 @@ class ModelResolver:  # noqa: PLR0904
         reserved_name: str | None,
     ) -> None:
         if not self.validate_name(mapped_name):
-            msg = f"--model-name-map maps {path!r} to invalid class name {mapped_name!r}"
+            msg = f"--model-name-map maps {redact_reference(path)!r} to invalid class name {mapped_name!r}"
             raise Error(msg)
 
         reference_names = self._get_reference_names()
@@ -969,7 +975,10 @@ class ModelResolver:  # noqa: PLR0904
             else None
         )
         if conflict_reason:
-            msg = f"--model-name-map maps {path!r} to {mapped_name!r}, but that model name is {conflict_reason}"
+            msg = (
+                f"--model-name-map maps {redact_reference(path)!r} to {mapped_name!r}, "
+                f"but that model name is {conflict_reason}"
+            )
             raise Error(msg)
 
     def _apply_model_name_map(
@@ -1051,7 +1060,7 @@ class ModelResolver:  # noqa: PLR0904
         """Temporarily set the current base path within a context."""
         if base_path:
             base_path = (self._base_path / base_path).resolve()
-        with context_variable(self.set_current_base_path, self.current_base_path, base_path):  # ty: ignore[invalid-argument-type]
+        with context_variable(self.set_current_base_path, self.current_base_path, base_path):
             yield
 
     @contextmanager
@@ -1065,7 +1074,7 @@ class ModelResolver:  # noqa: PLR0904
         this method was previously a no-op.
         """
         if self._base_url or (base_url and is_url(base_url)):
-            with context_variable(self.set_base_url, self.base_url, base_url):  # ty: ignore[invalid-argument-type]
+            with context_variable(self.set_base_url, self.base_url, base_url):
                 yield
         else:
             yield
@@ -1082,7 +1091,7 @@ class ModelResolver:  # noqa: PLR0904
     @contextmanager
     def current_root_context(self, current_root: Sequence[str]) -> Generator[None, None, None]:
         """Temporarily set the current root path within a context."""
-        with context_variable(self.set_current_root, self.current_root, current_root):  # ty: ignore[invalid-argument-type]
+        with context_variable(self.set_current_root, self.current_root, current_root):
             yield
 
     @property
@@ -1195,8 +1204,9 @@ class ModelResolver:  # noqa: PLR0904
             ref: str | None = scoped_ids.get(joined_path)
             if ref is None:
                 msg = (
-                    f"Unresolved $id reference '{joined_path}' in scope '{id_scope or '<root>'}'. "
-                    f"Known $id values: {', '.join(sorted(scoped_ids)) or '<none>'}"
+                    f"Unresolved $id reference '{joined_path}' in scope "
+                    f"'{redact_path(self.current_root) or '<root>'}'. "
+                    f"Known $id values: {', '.join(sorted(map(redact_reference, scoped_ids))) or '<none>'}"
                 )
                 raise Error(msg)
         else:
@@ -1208,7 +1218,8 @@ class ModelResolver:  # noqa: PLR0904
             file_path, fragment = joined_path.split("#", 1)
             ref = f"{file_path}#{fragment}"
             if (
-                self.root_id_base_path
+                file_path
+                and self.root_id_base_path
                 and not self.base_url
                 and not (is_url(joined_path) or Path(self._base_path, file_path).is_file())
             ):
@@ -1299,16 +1310,19 @@ class ModelResolver:  # noqa: PLR0904
         resolved_file = resolved_path.split("#", maxsplit=1)[0]
         return current_file != resolved_file
 
+    def ref_original_name(self, ref: str, path: str) -> str:
+        """Return the model name a reference derives before its schema is parsed."""
+        split_ref = ref.rsplit("/", 1)
+        if len(split_ref) == 1:
+            return Path(split_ref[0].rstrip("#") if self.is_external_root_ref(path) else split_ref[0]).stem
+        return Path(split_ref[1].rstrip("#")).stem if self.is_external_root_ref(path) else split_ref[1]
+
     def add_ref(self, ref: str, resolved: bool = False) -> Reference:  # noqa: FBT001, FBT002
         """Add a reference and return the Reference object."""
         path = self.resolve_ref(ref) if not resolved else ref
         if reference := self.references.get(path):
             return reference
-        split_ref = ref.rsplit("/", 1)
-        if len(split_ref) == 1:
-            original_name = Path(split_ref[0].rstrip("#") if self.is_external_root_ref(path) else split_ref[0]).stem
-        else:
-            original_name = Path(split_ref[1].rstrip("#")).stem if self.is_external_root_ref(path) else split_ref[1]
+        original_name = self.ref_original_name(ref, path) or self.ref_original_name(path, path)
         # For PrimaryFirst strategy, use unique=True for external references
         # so that definitions in the main input file get priority for clean names
         use_unique = self.naming_strategy == NamingStrategy.PrimaryFirst and self._is_external_path(path)

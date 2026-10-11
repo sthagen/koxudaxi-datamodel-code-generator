@@ -1,5 +1,20 @@
 {
   "$defs": {
+    "ClientOperationsConfig": {
+      "additionalProperties": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "description": "Client settings keyed by operation reference; the client target validates their members.",
+      "title": "ClientOperationsConfig",
+      "type": "object"
+    },
+    "ClientProtocolsConfig": {
+      "additionalProperties": true,
+      "description": "Client helper definitions keyed by helper name; the client target validates them.",
+      "title": "ClientProtocolsConfig",
+      "type": "object"
+    },
     "DefaultValuesConfig": {
       "additionalProperties": true,
       "description": "Default value override mapping.",
@@ -57,6 +72,78 @@
         "validators"
       ],
       "title": "ModelValidators",
+      "type": "object"
+    },
+    "ServerBodyModesConfig": {
+      "additionalProperties": {
+        "enum": [
+          "typed",
+          "request"
+        ],
+        "type": "string"
+      },
+      "description": "Request body modes of server operations, keyed by operation reference.",
+      "title": "ServerBodyModesConfig",
+      "type": "object"
+    },
+    "ServerHandlerModesConfig": {
+      "additionalProperties": {
+        "enum": [
+          "sync",
+          "async"
+        ],
+        "type": "string"
+      },
+      "description": "Handler modes of server operations, keyed by operation reference.",
+      "title": "ServerHandlerModesConfig",
+      "type": "object"
+    },
+    "ServerParameterNamesConfig": {
+      "additionalProperties": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "description": "Server argument names keyed by operation reference, then by location and parameter name.",
+      "title": "ServerParameterNamesConfig",
+      "type": "object"
+    },
+    "ServerPrimaryResponseConfig": {
+      "additionalProperties": false,
+      "description": "The declared response a bare server return value takes.",
+      "properties": {
+        "media_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Media Type"
+        },
+        "status_code": {
+          "maximum": 599,
+          "minimum": 100,
+          "title": "Status Code",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "status_code"
+      ],
+      "title": "ServerPrimaryResponseConfig",
+      "type": "object"
+    },
+    "ServerPrimaryResponsesConfig": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ServerPrimaryResponseConfig"
+      },
+      "description": "Primary responses of server operations, keyed by operation reference.",
+      "title": "ServerPrimaryResponsesConfig",
       "type": "object"
     },
     "StringMappingConfig": {
@@ -176,6 +263,39 @@
       ],
       "default": null
     },
+    "client-operations": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ClientOperationsConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "client-protocols": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ClientProtocolsConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "client-resource-names": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StringMappingConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "custom-formatters-kwargs": {
       "anyOf": [
         {
@@ -254,6 +374,72 @@
       "default": null
     },
     "serialization-aliases": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StringMappingConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "server-body-modes": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ServerBodyModesConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "server-handler-modes": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ServerHandlerModesConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "server-operation-names": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StringMappingConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "server-parameter-names": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ServerParameterNamesConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "server-primary-responses": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ServerPrimaryResponsesConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "server-router-names": {
       "anyOf": [
         {
           "$ref": "#/$defs/StringMappingConfig"

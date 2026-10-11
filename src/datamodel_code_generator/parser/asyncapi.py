@@ -10,12 +10,13 @@ import re
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from pydantic import Field, StrictStr, ValidationError
 from typing_extensions import Unpack
 
 from datamodel_code_generator import Error, InputFileType, snooper_to_methods
+from datamodel_code_generator._url_redaction import redact_path
 from datamodel_code_generator.deprecations import warn_deprecated
 from datamodel_code_generator.enums import AsyncAPIVersion
 from datamodel_code_generator.parser.jsonschema import get_model_by_path, unescape_json_pointer_segment
@@ -137,7 +138,7 @@ def _iter_trait_items(traits: Any, path: list[str]) -> Iterator[tuple[dict[str, 
 
 
 def _path_to_string(path: list[str]) -> str:
-    return "/".join(path)
+    return redact_path(path)
 
 
 def _make_model_name(*parts: object) -> str:
@@ -241,7 +242,7 @@ class AsyncAPIParser(OpenAPIParser):
         **options: Unpack[AsyncAPIParserConfigDict],
     ) -> None:
         """Initialize the AsyncAPI parser."""
-        super().__init__(source=source, config=config, **options)  # ty: ignore[invalid-argument-type]
+        super().__init__(source=source, config=config, **options)
 
     @property
     def schema_features(self) -> OpenAPISchemaFeatures:
@@ -357,7 +358,7 @@ class AsyncAPIParser(OpenAPIParser):
                 context,
             )
             for schema_name, component_schema in _iter_mapping_items(
-                converted_schema.get("components", {}).get("schemas", {})
+                cast("dict[str, YamlValue]", converted_schema.get("components", {})).get("schemas", {})
             )
             if isinstance(component_schema, (dict, bool))
         )

@@ -1,0 +1,60 @@
+# pets pydantic_v2.BaseModel
+  > GET https://api.example.com/v1/pets
+    [host: api.example.com, accept-encoding: gzip;q=0.5, identity, accept: application/json, user-agent: custom/1, x-client: c, x-trace: t1] b''
+  client headers = FieldPetsGetResponse(root=[])
+  > GET https://api.example.com/v1/pets
+    [host: api.example.com, accept-encoding: gzip;q=0.5, identity, accept: application/json, user-agent: custom/1, x-view: v1, x-trace: t1, cookie: session=s1] b''
+  view headers under the parameters = FieldPetsGetResponse(root=[])
+  > GET https://api.example.com/v1/pets
+    [host: api.example.com, accept-encoding: gzip;q=0.5, identity, accept: application/json, user-agent: nested/1, x-view: v2, x-trace: t1] b''
+  nested view headers = FieldPetsGetResponse(root=[])
+  > GET https://api.example.com/v1/pets
+    [host: api.example.com, accept-encoding: gzip;q=0.5, identity, accept: application/json, user-agent: custom/1, x-trace: call] b''
+  call headers over the parameters = FieldPetsGetResponse(root=[])
+  > POST https://api.example.com/v1/pets
+    [host: api.example.com, accept-encoding: gzip;q=0.5, identity, accept: application/json, user-agent: custom/1, x-client: c, content-type: text/plain, content-length: 14] b'{"name":"fox"}'
+  body relabeled = Pet(id=1, name='fox', tag=None)
+  > POST https://api.example.com/v1/pets
+    [host: api.example.com, accept-encoding: gzip;q=0.5, identity, accept: application/json, user-agent: custom/1, x-client: c, content-length: 14] b'{"name":"fox"}'
+  body media type removed = Pet(id=1, name='fox', tag=None)
+  > GET https://api.example.com/v1/pets/3
+    [host: api.example.com, accept-encoding: gzip;q=0.5, identity, accept: application/json, user-agent: custom/1, x-client: c, content-type: text/plain] b''
+  media type of no body = Pet(id=3, name='fox', tag=None)
+  > GET https://api.example.com/v1/pets/3
+    [host: api.example.com, accept-encoding: gzip;q=0.5, identity, accept: */*, user-agent: custom/1, x-client: c] b''
+  narrowed Accept replaced = Pet(id=3, name='fox', tag=None)
+  > GET https://api.example.com/v1/pets/3
+    [host: api.example.com, accept-encoding: gzip;q=0.5, identity, user-agent: custom/1, x-client: c] b''
+  narrowed Accept removed = Pet(id=3, name='fox', tag=None)
+  > POST https://api.example.com/v1/pets
+    [host: api.example.com, accept-encoding: gzip;q=0.5, identity, accept: application/json, user-agent: custom/1, x-client: c, content-type: application/json, content-length: 14] b'{"name":"fox"}'
+  view Content-Type under the body's media type = Pet(id=1, name='fox', tag=None)
+  > POST https://raw.example.com/items
+    [host: raw.example.com, accept-encoding: gzip;q=0.5, identity, user-agent: custom/1, x-client: c, content-type: application/xml, content-length: 4] b'<a/>'
+  raw bytes labeled = b'ok'
+  > POST https://raw.example.com/items
+    [host: raw.example.com, accept-encoding: gzip;q=0.5, identity, user-agent: custom/1, x-client: c, content-type: multipart/mixed; boundary=<boundary>, content-length: 121] b'--<boundary>\r\nContent-Disposition: form-data; name="a"\r\n\r\n1\r\n--<boundary>--\r\n'
+  raw parts relabeled = b'ok'
+  > POST https://raw.example.com/items
+    [host: raw.example.com, accept-encoding: gzip, deflate, content-type: multipart/form-data; boundary=<boundary>, content-length: 121] b'--<boundary>\r\nContent-Disposition: form-data; name="a"\r\n\r\n1\r\n--<boundary>--\r\n'
+  raw parts under a client Content-Type = b'ok'
+  > POST https://raw.example.com/items
+    [host: raw.example.com, accept-encoding: gzip;q=0.5, identity, user-agent: custom/1, x-client: c, content-type: multipart/form-data; boundary=<boundary>, content-length: 121] b'--<boundary>\r\nContent-Disposition: form-data; name="a"\r\n\r\n1\r\n--<boundary>--\r\n'
+  raw parts under a view Content-Type = b'ok'
+  > POST https://raw.example.com/items
+    [host: raw.example.com, accept-encoding: gzip;q=0.5, identity, user-agent: custom/1, x-client: c, content-type: multipart/form-data; boundary=<boundary>, content-length: 121] b'--<boundary>\r\nContent-Disposition: form-data; name="a"\r\n\r\n1\r\n--<boundary>--\r\n'
+  raw parts under a view without Content-Type = b'ok'
+  > POST https://raw.example.com/items
+    [host: raw.example.com, accept-encoding: gzip, deflate, content-type: multipart/mixed; boundary=<boundary>, content-length: 121] b'--<boundary>\r\nContent-Disposition: form-data; name="a"\r\n\r\n1\r\n--<boundary>--\r\n'
+  raw parts relabeled without a boundary = b'ok'
+  > POST https://raw.example.com/items
+    [host: raw.example.com, accept-encoding: gzip, deflate, content-length: 121] b'--<boundary>\r\nContent-Disposition: form-data; name="a"\r\n\r\n1\r\n--<boundary>--\r\n'
+  raw parts unlabeled by the call = b'ok'
+  header value on two lines ! APIConnectionError: APIConnectionError(operation_id='getPet', cause='LocalProtocolError') [operation_id='getPet', cause=LocalProtocolError("Illegal header value b'a\\r\\nb'")]
+  header value on two lines retry waits []
+  > GET https://api.example.com/v1/pets/3
+    [host: api.example.com, accept-encoding: gzip, deflate, accept: application/json, x-call: 1] b''
+  async call headers = Pet(id=3, name='fox', tag=None)
+  > GET https://raw.example.com/items
+    [host: raw.example.com, accept-encoding: gzip, deflate, x-client: c, x-raw: 1] b''
+  async raw headers = b'ok'

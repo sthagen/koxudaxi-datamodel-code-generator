@@ -18,7 +18,7 @@ from collections import Counter, OrderedDict, defaultdict
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import cache, partial
-from itertools import chain, groupby
+from itertools import chain, groupby, pairwise
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -51,6 +51,7 @@ from datamodel_code_generator import (
     ModuleSplitMode,
     ReadOnlyWriteOnlyModelType,
     ReuseScope,
+    cached_path_exists,
 )
 from datamodel_code_generator._format_types import Formatter, PythonVersion
 from datamodel_code_generator._graph import stable_toposort
@@ -70,7 +71,8 @@ from datamodel_code_generator._source import (
     _read_parser_source_data_from_path,
 )
 from datamodel_code_generator._template_data import copy_extra_template_data
-from datamodel_code_generator.enums import DefaultValueType, StrictTypes
+from datamodel_code_generator._url_redaction import redact_reference
+from datamodel_code_generator.enums import DefaultValueType, StrictTypes, _is_pydantic_version_at_least
 from datamodel_code_generator.imports import (
     IMPORT_ANNOTATIONS,
     IMPORT_LITERAL,
@@ -91,6 +93,7 @@ from datamodel_code_generator.model.base import (
     _find_base_classes,
     _refresh_custom_template_paths,
     _set_nested_model_default_factory_order,
+    c3_merge,
     get_inherited_fields,
     get_resolve_reference_action_capabilities,
     linearize_data_models,
@@ -133,13 +136,14 @@ from datamodel_code_generator.types import (
 from datamodel_code_generator.util import camel_to_snake, record_watch_dependency
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+    from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 
     from datamodel_code_generator._types import ParserConfigDict
     from datamodel_code_generator.config import ParserConfig
     from datamodel_code_generator.format import CodeFormatter
     from datamodel_code_generator.http import _HTTPFetchSession
     from datamodel_code_generator.model_metadata import GeneratedModelMetadata, ModelFieldMetadata, ModelMetadata
+    from datamodel_code_generator.parser._scc import ModuleGraph
 
 
 # Preserve the existing parser.base export while sharing one canonical escape table.
@@ -154,6 +158,11 @@ _ConstructorFieldAdjustment: TypeAlias = Literal["assignment", "keyword_only"]
 _PYDANTIC_V2_BASE_MODEL_MODULE: Final = "datamodel_code_generator.model.pydantic_v2.base_model"
 _MODEL_MODULE_PREFIX: Final = "datamodel_code_generator.model."
 _CLASS_NAME_SEPARATOR_PATTERN: Final = re.compile(r"[^A-Za-z0-9]+")
+_STRING_OR_IDENTIFIER_PATTERN: Final = re.compile(
+    r"""'''[\s\S]*?'''|\"\"\"[\s\S]*?\"\"\"|'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|"""
+    r"""^[ \t]*[A-Za-z_]\w*(?=:)|([A-Za-z_]\w*)""",
+    re.MULTILINE,
+)
 _TOP_LEVEL_FUTURE_IMPORT_PATTERN: Final = re.compile(r"(?m)^from __future__ import ")
 _TOP_LEVEL_RELATIVE_IMPORT_PATTERN: Final = re.compile(r"(?m)^from \.")
 
@@ -164,6 +173,7 @@ _RAW_SCHEMA_DEFAULT_KEY: Final = "_raw_schema_default"
 _RAW_SCHEMA_DEFAULT_UNDEFINED: Final = object()
 _SOURCE_REFERENCE_PATH_KEY: Final = "_source_reference_path"
 _DECIMAL_WARNING_EXAMPLE_LIMIT: Final = 5
+_TYPE_ALIAS_MODULE_NAMESPACE_PYDANTIC_MINIMUM: Final = "2.10"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1242,7 +1252,9 @@ def sort_data_models(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
 
             # unresolved
             unresolved_classes = ", ".join(
-                f"[class: {item.path} references: {get_reference_classes(item)}]" for item in unresolved_references
+                f"[class: {redact_reference(item.path)} references: "
+                f"{frozenset(map(redact_reference, get_reference_classes(item)))}]"
+                for item in unresolved_references
             )
             msg = f"A Parser can not resolve classes: {unresolved_classes}."
             raise Exception(msg)  # noqa: TRY002
@@ -1844,20 +1856,110 @@ def _is_any_variant(data_type: DataType) -> bool:
     )
 
 
-_DedupItem = TypeVar("_DedupItem")
+_ModelShape: TypeAlias = tuple[tuple[Any, ...], list[Reference]]
 
 
-def _iter_first_seen_duplicates(
-    items: Iterable[_DedupItem],
-    key_fn: Callable[[_DedupItem], tuple[HashableComparable, ...]],
-) -> Iterator[tuple[_DedupItem, _DedupItem]]:
-    seen: dict[tuple[HashableComparable, ...], _DedupItem] = {}
-    for item in items:
-        key = key_fn(item)
-        if key in seen:
-            yield seen[key], item
+def _model_references(model: DataModel) -> list[Reference]:
+    """Return the references of a model's data types in render order."""
+    return [reference for data_type in model.all_data_types if (reference := data_type.reference)]
+
+
+def _model_shape(model: DataModel, shapes: dict[DataModel, _ModelShape]) -> _ModelShape:
+    """Return a model's dedup key with referenced model names masked, and its references in order.
+
+    The key is rendered afresh, since cached keys keep the names that references had when they were
+    cached, and memoized in shapes for one comparison pass. Names are masked outside string literals and
+    field declarations only, so defaults, descriptions and field names that spell a referenced model name
+    still tell models apart.
+    """
+    if (shape := shapes.get(model)) is not None:
+        return shape
+    references = _model_references(model)
+    masks: dict[str, str] = {}
+    for reference in references:
+        masks.setdefault(reference.short_name, f"<{len(masks)}>")
+    rendered, imports = model._render_dedup_key("M")  # noqa: SLF001
+    masked = _STRING_OR_IDENTIFIER_PATTERN.sub(
+        lambda match: masks.get(name, name) if (name := match[1]) else match[0], rendered
+    )
+    shapes[model] = shape = (type(model), masked, imports, len(references)), references
+    return shape
+
+
+def _referenced_models_match(left: DataModel, right: DataModel, shapes: dict[DataModel, _ModelShape]) -> bool:
+    """Return whether equally rendered models also reference models of the same shape.
+
+    Type hints carry only reference names, and references from different sources can share a
+    name until module-level renaming, so equal render output does not prove equal field types.
+    Referenced models are compared pairwise with the names of their own references masked, so
+    models that differ only in how deeper references are named still match. Reference pairs
+    already under comparison are assumed to match, which keeps recursive models finite, and models
+    that reference the very same models match without rendering them again.
+    """
+    left_references, right_references = _model_references(left), _model_references(right)
+    if len(left_references) == len(right_references) and all(map(operator.is_, left_references, right_references)):
+        return True
+    pending: list[tuple[object, object]] = [(left, right)]
+    assumed_pairs: set[tuple[str, str]] = set()
+    while pending:
+        left_model, right_model = pending.pop()
+        if not (
+            isinstance(left_model, DataModel)
+            and isinstance(right_model, DataModel)
+            and (left_shape := _model_shape(left_model, shapes))[0]
+            == (right_shape := _model_shape(right_model, shapes))[0]
+        ):
+            return False
+        for left_reference, right_reference in zip(left_shape[1], right_shape[1], strict=True):
+            pair = (left_reference.path, right_reference.path)
+            if left_reference is right_reference or pair in assumed_pairs:
+                continue
+            assumed_pairs.add(pair)
+            pending.append((left_reference.source, right_reference.source))
+    return True
+
+
+def _referenced_shapes(model: DataModel, shapes: dict[DataModel, _ModelShape]) -> tuple[object, ...]:
+    """Return the shapes of the models a model references in order, which models that match share.
+
+    A reference to anything other than a model matches only itself, so it stands for itself.
+    """
+    return tuple(
+        _model_shape(source, shapes)[0] if isinstance(source := reference.source, DataModel) else id(reference)
+        for reference in _model_references(model)
+    )
+
+
+def _iter_matching_duplicates(
+    models: Iterable[DataModel],
+    shapes: dict[DataModel, _ModelShape],
+    key_fn: Callable[[DataModel], tuple[HashableComparable, ...]] | None = None,
+) -> Iterator[tuple[DataModel, DataModel]]:
+    """Pair each model with the earlier model of the same key whose content and references both match.
+
+    Earlier unmatched models of a key never match each other, so at most one matches. A model that
+    references the very same models as one of them is paired at once. Otherwise it is compared in full
+    only with those whose referenced models render alike, so many equally rendered models with different
+    references are not compared pairwise. Referenced models are rendered only for keys with a model that
+    is not paired at once.
+    """
+    by_references: dict[tuple[object, ...], DataModel] = {}
+    by_shapes: defaultdict[tuple[object, ...], list[DataModel]] = defaultdict(list)
+    unshaped: dict[tuple[HashableComparable, ...] | None, list[DataModel]] = {}
+    for model in models:
+        key = key_fn(model) if key_fn else None
+        references = (key, *map(id, _model_references(model)))
+        if (canonical := by_references.get(references)) is None and (pending := unshaped.get(key)) is not None:
+            for candidate in pending:
+                by_shapes[key, _referenced_shapes(candidate, shapes)].append(candidate)
+            pending.clear()
+            candidates = by_shapes[key, _referenced_shapes(model, shapes)]
+            canonical = next((c for c in candidates if _referenced_models_match(c, model, shapes)), None)
+        if canonical is None:
+            unshaped.setdefault(key, []).append(model)
+            by_references[references] = model
             continue
-        seen[key] = item
+        yield canonical, model
 
 
 def _check_discriminator_mapping_paths(
@@ -2182,6 +2284,120 @@ def _remap_imports(imports: Imports, overrides: Mapping[str, str]) -> None:
         raise Error(str(e)) from e
 
 
+def _is_generic_class_container(data_type: DataType) -> bool:
+    """Return whether the type subscripts a generic class, whose arguments mypy resolves eagerly."""
+    return (
+        data_type.is_list
+        or data_type.is_dict
+        or data_type.is_set
+        or data_type.is_frozen_set
+        or data_type.is_mapping
+        or data_type.is_sequence
+        or (data_type.is_tuple and data_type.use_standard_collections)
+    )
+
+
+def _iter_alias_references(data_type: DataType, *, in_container: bool = False) -> Iterator[tuple[DataModel, bool]]:
+    """Yield each referenced deferrable alias with whether a container encloses the reference."""
+    in_container = in_container or _is_generic_class_container(data_type)
+    if (
+        (reference := data_type.reference)
+        and isinstance(source := reference.source, DataModel)
+        and source.DEFERS_RECURSIVE_TYPE_HINT
+    ):
+        yield source, in_container
+    for child in (*data_type.data_types, *((data_type.dict_key,) if data_type.dict_key else ())):
+        yield from _iter_alias_references(child, in_container=in_container)
+
+
+def _iter_outermost_containers(
+    data_type: DataType, wrappers: tuple[DataType, ...] = ()
+) -> Iterator[tuple[DataType, tuple[DataType, ...]]]:
+    """Yield each container no other container encloses, with the types that wrap it."""
+    if _is_generic_class_container(data_type):
+        yield data_type, wrappers
+        return
+    for child in data_type.data_types:
+        yield from _iter_outermost_containers(child, (*wrappers, data_type))
+
+
+def _only_groups_members(data_type: DataType) -> bool:
+    """Return whether the type only groups its members, so an enclosing union can hold them directly."""
+    return bool(data_type.data_types) and not (
+        data_type.type
+        or data_type.reference
+        or data_type.alias
+        or data_type.is_func
+        or data_type.kwargs
+        or data_type.python_type
+        or data_type.literals
+        or data_type.enum_member_literals
+        or data_type.dict_key
+        or data_type.discriminator
+        or data_type.use_serialize_as_any
+        or data_type.is_custom_type
+        or data_type.is_tuple
+        or data_type._is_forward_reference  # noqa: SLF001
+        or _is_generic_class_container(data_type)
+    )
+
+
+def _flatten_union_members(data_type: DataType) -> None:
+    """Hoist grouped members and their ``None`` into the union, so ruff finds no nested or repeated member to rewrite.
+
+    Ruff rewrites a union with a nested union or a repeated member into a ``|`` chain, which fails at runtime
+    once a member is a string.
+    """
+    members: list[DataType] = []
+    for member in data_type.data_types:
+        if member.is_optional:
+            member.is_optional = False
+            data_type.is_optional = True
+        if _only_groups_members(member):
+            _flatten_union_members(member)
+            data_type.is_optional = data_type.is_optional or member.is_optional
+            members.extend(member.data_types)
+        else:
+            members.append(member)
+    for member in members:
+        member.parent = data_type
+    data_type.data_types = members
+
+
+def _alias_reference_cycles(models: Sequence[DataModel]) -> dict[int, int]:
+    """Map each alias on a cycle whose every reference is a container item to that cycle."""
+    aliases: dict[ModulePath, DataModel] = {}
+    graph: ModuleGraph = {}
+    pending = [model for model in models if model.DEFERS_RECURSIVE_TYPE_HINT]
+    while pending:
+        if (key := ((model := pending.pop()).path,)) in graph:
+            continue
+        aliases[key] = model
+        graph[key] = set()
+        for field in model.fields:
+            for target, in_container in _iter_alias_references(field.data_type):
+                if in_container:
+                    graph[key].add((target.path,))
+                    pending.append(target)
+    return {id(aliases[key]): index for index, scc in enumerate(find_circular_sccs(graph)) for key in scc}
+
+
+def _iter_cycle_containers(
+    data_type: DataType, cycle: int, cycles: Mapping[int, int], forward_references: Collection[int]
+) -> Iterator[tuple[DataType, tuple[DataType, ...], set[bool]]]:
+    """Yield each outermost container with its wrappers and whether its cycle references are forward ones."""
+    for container, wrappers in _iter_outermost_containers(data_type):
+        yield (
+            container,
+            wrappers,
+            {
+                id(nested) in forward_references
+                for nested in container.all_data_types
+                if nested.reference and cycles.get(id(nested.reference.source)) == cycle
+            },
+        )
+
+
 class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
     """Abstract base class for schema parsers.
 
@@ -2362,7 +2578,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             raise ValueError(msg)
 
         if config is None:
-            config = self._create_default_config(options)  # ty: ignore[invalid-argument-type]
+            config = self._create_default_config(options)
 
         self.config = config
         self._source_context = getattr(config, "_source_context", None) or _source_context_from_config(config)
@@ -2422,6 +2638,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         self.target_python_version: PythonVersion = config.target_python_version
         self.builtin_names: frozenset[str] = _get_builtin_names_for_target(self.target_python_version)
         self.generation_store, self.results = self._generation_store_factory()
+        self._merged_copies: set[DataModel] = set()
         self.model_metadata: ModelMetadata | None = None
         self.invalid_dotted_stdout_repair_modules: tuple[ModulePath, ...] = ()
         self.generated_model_inventory: tuple[str, ...] | None = None
@@ -2864,7 +3081,11 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                 return None
             if isinstance(value, list):
                 seen: set[str] = set()
-                result = [v for v in value if isinstance(v, str) and v and v not in seen and not seen.add(v)]
+                result: list[str] = []
+                for v in value:
+                    if isinstance(v, str) and v and v not in seen:
+                        seen.add(v)
+                        result.append(v)
                 if not result:
                     return None
                 return result[0] if len(result) == 1 else result
@@ -2946,8 +3167,27 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             return None
         return root_reference
 
+    def __renders_as_duplicate(
+        self, model: DataModel, original_model: DataModel, shapes: dict[DataModel, _ModelShape]
+    ) -> bool:
+        """Return whether a model renders like the first model of its class name.
+
+        A copy of a schema merged from another document compares with referenced names masked, since the
+        nested models it names only become the shared ones as they collapse in the same pass.
+        """
+        return model.get_dedup_key(model.duplicate_class_name, use_default=False) == original_model.get_dedup_key(
+            original_model.duplicate_class_name, use_default=False
+        ) or (
+            not self._merged_copies.isdisjoint((model, original_model))
+            and _model_shape(model, shapes)[0] == _model_shape(original_model, shapes)[0]
+        )
+
     def __delete_duplicate_models(self, models: list[DataModel]) -> None:  # noqa: PLR0912
+        if not models:
+            return
+
         model_class_names: dict[str, DataModel] = {}
+        shapes: dict[DataModel, _ModelShape] = {}
         model_to_duplicate_models: defaultdict[DataModel, list[DataModel]] = defaultdict(list)
         # Use set for O(1) membership checks and collect removals for batch processing
         models_set = set(models)
@@ -2961,7 +3201,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             if model in models_to_remove:  # pragma: no cover
                 continue
             reuse_allowed = reuse_constraint is None or reuse_constraint(model)
-            if isinstance(model, self.data_model_root_type):
+            if self._is_root_model(model):
                 root_data_type = model.fields[0].data_type
 
                 # backward compatible
@@ -2988,10 +3228,10 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                 reuse_allowed
                 and (original_model := model_class_names.get(class_name)) is not None
                 and self._reuse_optimization_context.allows_model(original_model)
-                and model.get_dedup_key(model.duplicate_class_name, use_default=False)
-                == original_model.get_dedup_key(original_model.duplicate_class_name, use_default=False)
+                and self.__renders_as_duplicate(model, original_model, shapes)
             ):
-                model_to_duplicate_models[original_model].append(model)
+                if _referenced_models_match(original_model, model, shapes):
+                    model_to_duplicate_models[original_model].append(model)
                 continue
             model_class_names[class_name] = model
         for model, duplicate_models in model_to_duplicate_models.items():
@@ -3013,30 +3253,31 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                     msg = f"Deduplication exceeded max iterations ({max_iterations})"
                     raise RuntimeError(msg)
 
+                shapes.clear()
                 content_key_to_models: dict[tuple[Any, ...], list[DataModel]] = defaultdict(list)
                 for model in self._reuse_optimization_context.eligible_models(models):
-                    if model in models_to_remove or isinstance(model, self.data_model_root_type):
+                    if model in models_to_remove or self._is_root_model(model):
                         continue
                     model._dedup_key_cache.clear()  # noqa: SLF001
                     content_key_to_models[model.get_dedup_key(None, use_default=True)].append(model)
 
                 if not (
                     duplicates := [
-                        (canonical := group[0], dup)
+                        (canonical, dup)
                         for group in content_key_to_models.values()
                         if len(group) > 1
-                        for dup in group[1:]
+                        for canonical, dup in _iter_matching_duplicates(group, shapes)
                         if dup not in models_to_remove
                     ]
                 ):
                     break
 
                 for canonical, duplicate in duplicates:
-                    self.generation_store.redirect_model_reference_users(duplicate, models, canonical.reference)
-                    for child in duplicate.reference.iter_data_model_children():  # pragma: no cover
+                    self.generation_store.redirect_reference_users(duplicate.reference, canonical.reference)
+                    for child in duplicate.reference.iter_data_model_children():
                         self.generation_store.set_base_classes(
                             child,
-                            {c.reference: c for c in child.base_classes}.values(),
+                            {id(c.reference): c for c in child.base_classes}.values(),
                         )
                     models_to_remove.add(duplicate)
 
@@ -3045,6 +3286,11 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             models[:] = [m for m in models if m not in models_to_remove]
 
     def __replace_duplicate_name_in_module(self, models: list[DataModel]) -> None:
+        """Make class names unique within a module.
+
+        Renames change the rendered type hints of referencing models, so cached dedup keys of the
+        module are dropped whenever a model is renamed.
+        """
         scoped_model_resolver = ModelResolver(
             exclude_names={i.alias or i.import_ for m in models for i in m.imports},
             duplicate_name_suffix="Model",
@@ -3052,6 +3298,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         )
 
         model_names: dict[str, DataModel] = {}
+        renamed = False
         for model in models:
             class_name: str = model.class_name
             generated_name: str = scoped_model_resolver.add(
@@ -3063,6 +3310,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             ).name
             if class_name != generated_name:
                 model.class_name = generated_name
+                renamed = True
             model_names[model.class_name] = model
 
         for model in models:
@@ -3072,8 +3320,14 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                 del model_names[model.class_name]
                 model.class_name = duplicate_name
                 model_names[duplicate_name] = model
+                renamed = True
 
-    def __change_from_import(  # noqa: PLR0912, PLR0913, PLR0914
+        if not renamed:
+            return
+        for model in models:
+            model.invalidate_render_caches()
+
+    def __change_from_import(  # noqa: PLR0913
         self,
         models: list[DataModel],
         imports: Imports,
@@ -3104,75 +3358,131 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                     case reference:
                         pass
 
-                target_full_name = _get_data_type_target_full_name(data_type, reference, model_path_to_module_name)
-
-                if isinstance(data_type, BaseClassDataType):
-                    left, right = relative(current_module_name, target_full_name)
-                    from_ = (
-                        left
-                        if is_ancestor_package_reference(current_module_name, target_full_name)
-                        else (f"{left}{right}" if left.endswith(".") else f"{left}.{right}")
-                    )
-                    import_ = reference.short_name
-                    full_path = from_, import_
-                else:
-                    from_, import_ = full_path = relative(current_module_name, target_full_name)
-                    if imports.use_exact:
-                        from_, import_ = full_path = _resolve_exact_import(
-                            current_module_name,
-                            target_full_name,
-                            from_,
-                            import_,
-                            reference.short_name,
-                        )
-                    import_ = import_.replace("-", "_")
-                    current_module_path = tuple(current_module_name.split(".")) if current_module_name else ()
-                    if (  # pragma: no cover
-                        len(current_module_path) > 1
-                        and current_module_path[-1].count(".") > 0
-                        and not self.treat_dot_as_module
-                    ):
-                        rel_path_depth = current_module_path[-1].count(".")
-                        from_ = from_[rel_path_depth:]
-
-                    ref_module = tuple(target_full_name.split(".")[:-1])
-
-                    is_module_class_collision = (
-                        ref_module and import_ == reference.short_name and ref_module[-1] == import_
-                    )
-
-                    if (
-                        from_
-                        and not imports.use_exact
-                        and (ref_module in internal_modules or is_module_class_collision)
-                    ):
-                        from_ = f"{from_}{import_}" if from_.endswith(".") else f"{from_}.{import_}"
-                        import_ = reference.short_name
-                        full_path = from_, import_
-
-                alias = scoped_model_resolver.add(full_path, import_).name
-
-                name = reference.short_name
-                if from_ and import_ and alias != name:
-                    data_type.alias = alias if reference.short_name == import_ else f"{alias}.{name}"
+                if alias := self.__register_reference_import(
+                    reference,
+                    current_module_name,
+                    _get_data_type_target_full_name(data_type, reference, model_path_to_module_name),
+                    imports,
+                    scoped_model_resolver,
+                    init=init,
+                    internal_modules=internal_modules,
+                    base_class=isinstance(data_type, BaseClassDataType),
+                ):
+                    data_type.alias = alias
                     import_sensitive_alias_changed = True
-
-                if init and not target_full_name.startswith(current_module_name + "."):
-                    from_ = "." + from_
-                imports.append(
-                    Import(
-                        from_=from_,
-                        import_=import_,
-                        alias=alias,
-                        reference_path=reference.path,
-                    ),
-                )
             if import_sensitive_alias_changed:  # pragma: no cover
                 model.clear_imports_cache()
                 after_import = model.imports
                 if before_import != after_import:
                     imports.remove(before_import)
                     imports.append(after_import)
+
+    def __register_reference_import(  # noqa: PLR0913
+        self,
+        reference: Reference,
+        current_module_name: str,
+        target_full_name: str,
+        imports: Imports,
+        scoped_model_resolver: ModelResolver,
+        *,
+        init: bool,
+        internal_modules: set[tuple[str, ...]],
+        base_class: bool = False,
+    ) -> str | None:
+        """Import a reference from another module and return its expression when it is not the class name."""
+        name = reference.short_name
+        if base_class:
+            left, right = relative(current_module_name, target_full_name)
+            from_ = (
+                left
+                if is_ancestor_package_reference(current_module_name, target_full_name)
+                else (f"{left}{right}" if left.endswith(".") else f"{left}.{right}")
+            )
+            import_ = name
+            full_path = from_, import_
+        else:
+            from_, import_ = full_path = relative(current_module_name, target_full_name)
+            if imports.use_exact:
+                from_, import_ = full_path = _resolve_exact_import(
+                    current_module_name,
+                    target_full_name,
+                    from_,
+                    import_,
+                    name,
+                )
+            import_ = import_.replace("-", "_")
+            current_module_path = tuple(current_module_name.split(".")) if current_module_name else ()
+            if (  # pragma: no cover
+                len(current_module_path) > 1 and current_module_path[-1].count(".") > 0 and not self.treat_dot_as_module
+            ):
+                rel_path_depth = current_module_path[-1].count(".")
+                from_ = from_[rel_path_depth:]
+
+            ref_module = tuple(target_full_name.split(".")[:-1])
+
+            is_module_class_collision = ref_module and import_ == name and ref_module[-1] == import_
+
+            if from_ and not imports.use_exact and (ref_module in internal_modules or is_module_class_collision):
+                from_ = f"{from_}{import_}" if from_.endswith(".") else f"{from_}.{import_}"
+                import_ = name
+                full_path = from_, import_
+
+        alias = scoped_model_resolver.add(full_path, import_).name
+        expression = None
+        if from_ and import_ and alias != name:
+            expression = alias if name == import_ else f"{alias}.{name}"
+        if init and not target_full_name.startswith(current_module_name + "."):
+            from_ = "." + from_
+        imports.append(
+            Import(
+                from_=from_,
+                import_=import_,
+                alias=alias,
+                reference_path=reference.path,
+            ),
+        )
+        return expression
+
+    def __import_enum_member_literal_classes(
+        self,
+        contexts: list[ModuleContext],
+        *,
+        internal_modules: set[ModulePath],
+        model_path_to_module_name: dict[str, str],
+    ) -> None:
+        """Import enum classes that discriminator literals render outside the enum module."""
+        if not self.use_enum_values_in_discriminator:
+            return
+        for ctx in contexts:
+            model_paths = {model.path for model in ctx.models}
+            for model in ctx.models:
+                for data_type in model.all_data_types:
+                    match data_type._enum_member_literal_reference:  # noqa: SLF001
+                        case None:
+                            continue
+                        case reference if data_type.alias or reference.path in model_paths:
+                            continue
+                        case reference:
+                            pass
+
+                    enum_module_name = _get_model_module_name(
+                        cast("DataModel", reference.source), model_path_to_module_name
+                    )
+                    enum_class = (
+                        self.__register_reference_import(
+                            reference,
+                            _get_model_module_name(model, model_path_to_module_name),
+                            f"{enum_module_name}.{reference.short_name}" if enum_module_name else reference.short_name,
+                            ctx.imports,
+                            ctx.scoped_model_resolver,
+                            init=ctx.is_init,
+                            internal_modules=internal_modules,
+                        )
+                        or reference.short_name
+                    )
+                    data_type.enum_member_literals = [
+                        (enum_class, member) for _, member in data_type.enum_member_literals
+                    ]
 
     @classmethod
     def __extract_inherited_enum(cls, models: list[DataModel]) -> None:
@@ -3198,8 +3508,8 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         self,
         enum_source: Enum | None,
         discriminator_values: list[DiscriminatorValue],
-        discriminator_model: DataModel,
-        imports: Imports,
+        discriminator_model: DataModel,  # noqa: ARG002
+        imports: Imports,  # noqa: ARG002
     ) -> DataType:
         """Create a data type for discriminator field, using enum literals if available."""
         if enum_source:
@@ -3213,8 +3523,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                     else:  # pragma: no cover
                         enum_member_literals.append((enum_class_name, _semantic_value_text(value)))
                 data_type = self.data_type(enum_member_literals=enum_member_literals)
-                if enum_source.module_path != discriminator_model.module_path:  # pragma: no cover
-                    imports.append(Import.from_full_path(enum_source.name))
+                data_type._set_enum_member_literal_reference(enum_source.reference)  # noqa: SLF001
             else:
                 data_type = self.data_type(
                     literals=[
@@ -3571,9 +3880,9 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         reuse_candidates = (
             model
             for model in self._reuse_optimization_context.eligible_models(models.copy())
-            if not (self.collapse_root_models and isinstance(model, self.data_model_root_type))
+            if not (self.collapse_root_models and self._is_root_model(model))
         )
-        for cached_model, model in _iter_first_seen_duplicates(reuse_candidates, lambda item: item.get_dedup_key()):
+        for cached_model, model in _iter_matching_duplicates(reuse_candidates, {}, lambda item: item.get_dedup_key()):
             cached_model_reference = cached_model.reference
             if isinstance(model, Enum) or self.collapse_reuse_models:
                 self.generation_store.redirect_model_reference_users(model, models, cached_model_reference)
@@ -3592,20 +3901,20 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         self,
         module_models: list[tuple[tuple[str, ...], list[DataModel]]],
     ) -> list[tuple[tuple[str, ...], DataModel, tuple[str, ...], DataModel]]:
-        """Find duplicate models across all modules by comparing render output and imports."""
-        all_models: list[tuple[tuple[str, ...], DataModel]] = []
-        for module, models in module_models:
-            all_models.extend((module, model) for model in self._reuse_optimization_context.eligible_models(models))
+        """Find duplicate models across all modules by comparing render output, imports and referenced models.
 
-        duplicates: list[tuple[tuple[str, ...], DataModel, tuple[str, ...], DataModel]] = []
-
-        for (canonical_module, canonical_model), (module, model) in _iter_first_seen_duplicates(
-            all_models,
-            lambda item: item[1].get_dedup_key(),
-        ):
-            duplicates.append((module, model, canonical_module, canonical_model))
-
-        return duplicates
+        Type hints render references by name before imports are resolved, so equal render output from
+        different modules can still reference different models that share a name.
+        """
+        model_modules = {
+            model: module
+            for module, models in module_models
+            for model in self._reuse_optimization_context.eligible_models(models)
+        }
+        return [
+            (model_modules[model], model, model_modules[canonical], canonical)
+            for canonical, model in _iter_matching_duplicates(model_modules, {}, lambda model: model.get_dedup_key())
+        ]
 
     def __validate_shared_module_name(
         self,
@@ -3628,7 +3937,11 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         require_update_action_models: list[str],
         reference_models: list[DataModel] | None,
     ) -> tuple[tuple[str, ...], list[DataModel]]:
-        """Create shared module with canonical models and replace duplicates with inherited models."""
+        """Create shared module with canonical models and replace duplicates with inherited models.
+
+        A duplicate that is removed rather than replaced hands every user to the shared model, since
+        users in other modules would otherwise import it from a module that no longer defines it.
+        """
         shared_module = self.shared_module_name
 
         shared_models: list[DataModel] = []
@@ -3661,15 +3974,14 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             for module, models in module_models:  # pragma: no branch
                 if module != duplicate_module:
                     continue
-                referring_models = reference_models if reference_models is not None else models
                 if isinstance(duplicate_model, Enum) or not supports_inheritance or self.collapse_reuse_models:
-                    self.generation_store.redirect_model_reference_users(duplicate_model, referring_models, shared_ref)
+                    self.generation_store.redirect_reference_users(duplicate_model.reference, shared_ref)
                     models_to_remove[module].add(duplicate_model)
                 else:
                     inherited_model = duplicate_model.create_reuse_model(shared_ref)
                     self.generation_store.redirect_model_reference_users(
                         duplicate_model,
-                        referring_models,
+                        reference_models if reference_models is not None else models,
                         inherited_model.reference,
                     )
                     if shared_ref.path in require_update_action_models:
@@ -3757,18 +4069,20 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         generation_store = self.generation_store
         generation_index = generation_store.index
         circular_root_model_paths = getattr(self, "_circular_root_model_paths", ())
+        is_root_model = self._is_root_model
 
         for model in models:  # noqa: PLR1702
             for model_field in model.fields:
                 for data_type in model_field.data_type.all_data_types:
                     reference = data_type.reference
-                    if not reference or not isinstance(reference.source, self.data_model_root_type):
+                    if not reference or not is_root_model(root_type_model := cast("DataModel", reference.source)):
                         # If the data type is not a reference, we can't collapse it.
                         # If it's a reference to a root model type, we don't do anything.
                         continue
 
                     # Use root-type as model_field type
-                    root_type_model = reference.source
+                    if not root_type_model.fields:
+                        continue
                     root_type_field = root_type_model.fields[0]
 
                     if root_type_model.path in circular_root_model_paths:
@@ -3805,7 +4119,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                             root_model_wrappers, direct_refs = generation_index.root_collapse_reference_usage(
                                 inner_reference,
                                 excluded_model=root_type_model,
-                                root_model_type=self.data_model_root_type,
+                                is_root_model=is_root_model,
                             )
 
                             if len(root_model_wrappers) > 1:
@@ -3973,12 +4287,9 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
     ) -> None:
         """Cache root-model paths in circular components before collapsing them."""
         root_models = {
-            model.path: model
-            for _, models in module_models
-            for model in models
-            if isinstance(model, self.data_model_root_type)
+            model.path: model for _, models in module_models for model in models if self._is_root_model(model)
         }
-        graph = {
+        graph: ModuleGraph = {
             (path,): {
                 (reference_path,)
                 for reference_path in self.generation_store.index.reference_classes_for_model_including_dict_keys(model)
@@ -4278,13 +4589,14 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         pending_models = (
             model
             for model in models
-            if not isinstance(model, (Enum, self.data_model_root_type))
+            if not (isinstance(model, Enum) or self._is_root_model(model))
             and any(
                 field.original_name is not None
                 and not field.data_type.data_types
                 and not field.data_type.reference
                 and not field.data_type.type
                 and not field.data_type.literals
+                and not field.data_type.enum_member_literals
                 and not field.data_type.dict_key
                 for field in model.fields
             )
@@ -4311,6 +4623,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                     or data_type.reference
                     or data_type.type
                     or data_type.literals
+                    or data_type.enum_member_literals
                     or data_type.dict_key
                 ):
                     resolved_fields.append(model_field)
@@ -4385,7 +4698,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             use_deferred_annotations=use_deferred_annotations,
         )
 
-    def __change_field_name(
+    def __change_field_name(  # noqa: PLR0912
         self,
         models: list[DataModel],
         *,
@@ -4394,49 +4707,63 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         if not self.data_model_type.SUPPORTS_FIELD_RENAMING:
             return
 
-        rename_type = self.field_type_collision_strategy == FieldTypeCollisionStrategy.RenameType
-        all_class_names = {cast("str", m.class_name) for m in models if m.class_name}
-
-        resolver = ModelResolver(
-            snake_case_field=self.snake_case_field,
-            remove_suffix_number=True,
+        rename_type = (
+            self.field_type_collision_strategy == FieldTypeCollisionStrategy.RenameType
+            and self.data_model_type.SUPPORTS_FIELD_TYPE_RENAMING
         )
+        all_class_names = (
+            {cast("str", model.class_name) for model in models if model.class_name} if rename_type else set()
+        )
+        resolver: ModelResolver | None = None
 
         for model in models:
-            if "Enum" in model.base_class or not model.BASE_CLASS:
+            if "Enum" in model.base_class or (not model.BASE_CLASS and not isinstance(model, self.data_model_type)):
                 continue
 
             for field in (field for field in model.fields if field.name != self.data_model_type.TYPED_EXTRA_FIELD_NAME):
-                filed_name = field.name
+                field_name = field.name
                 reference_type_names: set[str] = set()
                 colliding_reference: Reference | None = None
 
                 for data_type in field.data_type.all_data_types:
-                    if not data_type.reference:
+                    if (reference := data_type.reference) is None:
                         continue
-                    reference_type_names.add(data_type.reference.short_name)
-                    if rename_type and colliding_reference is None and data_type.reference.short_name == filed_name:
-                        colliding_reference = data_type.reference
+                    if rename_type and (alias := data_type.alias) and alias != field_name:
+                        continue
+                    reference_name = reference.short_name
+                    reference_type_names.add(reference_name)
+                    if rename_type and colliding_reference is None and reference_name == field_name:
+                        colliding_reference = reference
 
-                if colliding_reference is not None:
-                    resolver._reset_for_reuse(all_class_names.copy())  # noqa: SLF001
-                    source = cast("DataModel", colliding_reference.source)
-                    resolver.exclude_names.add(cast("str", filed_name))
-                    new_class_name = resolver.add(["type"], cast("str", source.class_name)).name  # ty: ignore[redundant-cast]
-                    source.class_name = new_class_name
-                    all_class_names.add(new_class_name)
-                elif not rename_type:
-                    resolver._reset_for_reuse(reference_type_names)  # noqa: SLF001
-                    new_filed_name = resolver._get_unique_field_name(cast("str", filed_name))  # noqa: SLF001
-                    if filed_name != new_filed_name:
-                        _rename_field_preserving_alias(field, new_filed_name)
-                        _clear_model_imports_cache_if_retained(model, can_retain_cache=can_retain_cache)
+                if colliding_reference is not None or (
+                    not rename_type
+                    and (self.data_model_type.NORMALIZES_FIELD_NAMES or field_name in reference_type_names)
+                ):
+                    resolver = resolver or ModelResolver(
+                        snake_case_field=self.snake_case_field,
+                        remove_suffix_number=True,
+                    )
+                    if colliding_reference is not None:
+                        resolver._reset_for_reuse(all_class_names.copy())  # noqa: SLF001
+                        source = cast("DataModel", colliding_reference.source)
+                        resolver.exclude_names.add(cast("str", field_name))
+                        new_class_name = resolver.add(["type"], cast("str", source.class_name)).name  # ty: ignore[redundant-cast]
+                        source.class_name = new_class_name
+                        all_class_names.add(new_class_name)
+                    else:
+                        resolver._reset_for_reuse(reference_type_names)  # noqa: SLF001
+                        new_field_name = resolver._get_unique_field_name(cast("str", field_name))  # noqa: SLF001
+                        if field_name != new_field_name:
+                            _rename_field_preserving_alias(field, new_field_name)
+                            _clear_model_imports_cache_if_retained(model, can_retain_cache=can_retain_cache)
 
-                if (current_name := field.name) in self.builtin_names and any(
-                    _is_builtin_type_collision(current_name, dt) for dt in field.data_type.all_data_types
+                if (
+                    self.data_model_type.NORMALIZES_FIELD_NAMES
+                    and (current_name := field.name) in self.builtin_names
+                    and any(_is_builtin_type_collision(current_name, dt) for dt in field.data_type.all_data_types)
                 ):
                     if field.alias is None:
-                        field.alias = filed_name
+                        field.alias = field_name
                     field.name = f"{current_name}_"
                     _clear_model_imports_cache_if_retained(model, can_retain_cache=can_retain_cache)
 
@@ -4739,13 +5066,97 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                 parent.use_union_operator = False
             parent = parent.parent
 
+    @staticmethod
+    def __forward_references(
+        field: DataModelFieldBase, model: DataModel, model_index: Mapping[str, int], index: int
+    ) -> list[tuple[DataType, str]]:
+        """Collect the field's references to same-module models declared at or after the model."""
+        forward_references: list[tuple[DataType, str]] = []
+        for data_type in field.data_type.all_data_types:
+            if not data_type.reference:
+                continue
+            source = data_type.reference.source
+            if not isinstance(source, DataModel):
+                continue  # pragma: no cover
+            if isinstance(source, TypeStatement):
+                continue  # pragma: no cover
+            if source.module_path != model.module_path:
+                continue
+            name = data_type.reference.short_name
+            source_index = model_index.get(name)
+            if source_index is not None and source_index >= index:
+                forward_references.append((data_type, name))
+        return forward_references
+
     @classmethod
-    def __update_type_aliases(
+    def __deferrable_alias_cycles(cls, models: Sequence[DataModel], model_index: Mapping[str, int]) -> dict[int, int]:
+        """Find the container cycles among aliases that quoted containers resolve for mypy and pyright alike.
+
+        mypy cannot resolve a cycle of aliases that only reference each other as container items, unless
+        the containers holding the forward references are strings. pyright cannot resolve an alias declared
+        earlier on the cycle from inside such a string, so a cycle with a container that references it both
+        forward and backward keeps its names quoted one by one.
+        """
+        cycles = _alias_reference_cycles(models)
+        unresolvable: set[int] = set()
+        for index, model in enumerate(models):
+            if (cycle := cycles.get(id(model))) is None:
+                continue
+            for field in model.fields:
+                forward = {id(data_type) for data_type, _ in cls.__forward_references(field, model, model_index, index)}
+                if any(len(kinds) > 1 for *_, kinds in _iter_cycle_containers(field.data_type, cycle, cycles, forward)):
+                    unresolvable.add(cycle)
+        return {alias: cycle for alias, cycle in cycles.items() if cycle not in unresolvable}
+
+    @classmethod
+    def __defer_recursive_containers(  # noqa: PLR0913
+        cls,
+        field: DataModelFieldBase,
+        model: DataModel,
+        *,
+        alias_cycles: Mapping[int, int],
+        model_index: Mapping[str, int],
+        index: int,
+        generation_store: GenerationStore,
+    ) -> None:
+        """Quote each outermost container that forward-references the model's cycle, with its names unquoted.
+
+        Collapsed root models share nested types between their sites, so the field first gets its own copy.
+        A string cannot be an operand of ``|``, so the container and its wrappers stop using the union operator.
+        """
+        if (cycle := alias_cycles.get(id(model))) is None:
+            return
+        forward = {id(data_type) for data_type, _ in cls.__forward_references(field, model, model_index, index)}
+        if not any(
+            True in kinds for *_, kinds in _iter_cycle_containers(field.data_type, cycle, alias_cycles, forward)
+        ):
+            return
+        generation_store.replace_field_type(field, _copy_data_type(field.data_type))
+        forward = {id(data_type) for data_type, _ in cls.__forward_references(field, model, model_index, index)}
+        deferred = [
+            (container, wrappers)
+            for container, wrappers, kinds in _iter_cycle_containers(field.data_type, cycle, alias_cycles, forward)
+            if True in kinds
+        ]
+        for container, wrappers in deferred:
+            container._set_forward_reference(True)  # noqa: FBT003, SLF001
+            for quoted in (container, *wrappers):
+                quoted.use_union_operator = False
+            for nested in container.all_data_types:
+                if (reference := nested.reference) and nested.alias == f'"{reference.short_name}"':
+                    nested.alias = reference.short_name
+        for root in deferred[0][1][:1]:
+            _flatten_union_members(root)
+
+    @classmethod
+    def __update_type_aliases(  # noqa: PLR0913
         cls,
         models: list[DataModel],
         pydantic_v2_root_model_type: type[DataModel] | None,
         *,
         use_deferred_annotations: bool = True,
+        defers_recursive_containers: bool,
+        generation_store: GenerationStore,
         can_retain_cache: bool,
     ) -> None:
         """Update type aliases and RootModels to properly handle forward references per PEP 484.
@@ -4756,6 +5167,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         (e.g. Ruff F821) and older runtimes do not trip over the forward reference.
         """
         model_index: dict[str, int] = {m.class_name: i for i, m in enumerate(models)}
+        alias_cycles: Mapping[int, int] | None = None
 
         for i, model in enumerate(models):
             is_type_alias_or_root = isinstance(model, TypeAliasBase) or _is_pydantic_v2_root_model(
@@ -4779,22 +5191,23 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             for field in model.fields:
                 if not process_all_fields and not field.requires_immediate_forward_reference_resolution:
                     continue
-                for data_type in field.data_type.all_data_types:
-                    if not data_type.reference:
-                        continue
-                    source = data_type.reference.source
-                    if not isinstance(source, DataModel):
-                        continue  # pragma: no cover
-                    if isinstance(source, TypeStatement):
-                        continue  # pragma: no cover
-                    if source.module_path != model.module_path:
-                        continue
-                    name = data_type.reference.short_name
-                    source_index = model_index.get(name)
-                    if source_index is not None and source_index >= i:
-                        data_type.alias = f'"{name}"'
-                        cls.__disable_union_operator_for_forward_ref(data_type)
-                        has_aliased_forward_ref = True
+                if not (forward_references := cls.__forward_references(field, model, model_index, i)):
+                    continue
+                for data_type, name in forward_references:
+                    data_type.alias = f'"{name}"'
+                    cls.__disable_union_operator_for_forward_ref(data_type)
+                if defers_recursive_containers and model.DEFERS_RECURSIVE_TYPE_HINT:
+                    if alias_cycles is None:
+                        alias_cycles = cls.__deferrable_alias_cycles(models, model_index)
+                    cls.__defer_recursive_containers(
+                        field,
+                        model,
+                        alias_cycles=alias_cycles,
+                        model_index=model_index,
+                        index=i,
+                        generation_store=generation_store,
+                    )
+                has_aliased_forward_ref = True
 
             if has_aliased_forward_ref:
                 model.has_forward_reference = model.has_forward_reference or process_all_fields
@@ -4907,9 +5320,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             if not models:  # pragma: no cover
                 continue
 
-            target_models = [
-                m for m in models if m.SUPPORTS_GENERIC_BASE_CLASS and not isinstance(m, self.data_model_root_type)
-            ]
+            target_models = [m for m in models if m.SUPPORTS_GENERIC_BASE_CLASS and not self._is_root_model(m)]
 
             if target_models:
                 modules_with_targets.append((module, models, target_models, imports))
@@ -5135,6 +5546,8 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                     add(qualified_name)
             else:
                 add(data_type.type)
+                for enum_class, _ in data_type.enum_member_literals:
+                    add(enum_class)
             if data_type.reference:
                 add(data_type.reference.short_name)
 
@@ -6028,9 +6441,24 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         self.__restore_inherited_field_names_for_unique_aliases(models)
         self.__apply_discriminator_type(models, imports, can_retain_cache=can_retain_cache)
         self.__set_one_literal_on_default(models, can_retain_cache=can_retain_cache)
+        for model in models:
+            model.refresh_field_config()
         self.__fix_constructor_field_ordering(models)
 
         return self.__remove_overridden_models(models)
+
+    def __assign_forward_reference_fields(  # noqa: PLR6301
+        self, models: list[DataModel], *, can_retain_cache: bool
+    ) -> None:
+        """Let each model render fields by assignment when ``Field()`` inside ``Annotated`` would be unsafe.
+
+        This remains an instance method because ``snooper_to_methods`` does not preserve staticmethod descriptors
+        on parser subclasses.
+        """
+        positions = {model.path: index for index, model in enumerate(models)}
+        for index, model in enumerate(models):
+            if model.assign_forward_reference_fields(positions, index):
+                _clear_model_imports_cache_if_retained(model, can_retain_cache=can_retain_cache)
 
     def __finalize_module_models(
         self,
@@ -6046,6 +6474,9 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             models,
             self.pydantic_v2_root_model_type,
             use_deferred_annotations=use_deferred_annotations,
+            defers_recursive_containers=(target := self.target_pydantic_version) is None
+            or _is_pydantic_version_at_least(target, _TYPE_ALIAS_MODULE_NAMESPACE_PYDANTIC_MINIMUM),
+            generation_store=self.generation_store,
             can_retain_cache=can_retain_cache,
         )
         if not unused_models:
@@ -6054,6 +6485,8 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             unused_model_ids = {id(model) for model in unused_models}
             live_models = [model for model in models if id(model) not in unused_model_ids]
         self.__set_validate_default_on_fields(live_models, can_retain_cache=can_retain_cache)
+        if self.use_annotated and use_deferred_annotations:
+            self.__assign_forward_reference_fields(models, can_retain_cache=can_retain_cache)
         if not can_retain_cache:
             _clear_model_imports_cache(models)
 
@@ -6118,6 +6551,29 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                 ctx.imports.append(import_ for import_ in prepared_imports if import_ not in model_imports[model])
                 model_imports[model] = prepared_imports
 
+    def __prepare_type_alias_fields(self, contexts: list[ModuleContext], unused_models: list[DataModel]) -> None:
+        """Prepare alias bodies once every module has collapsed its roots.
+
+        A type alias has no model config to select Python's regex engine, so its patterns carry it,
+        and its constraints use ``Annotated`` because type checkers reject ``con*`` calls in aliases.
+        Module imports drop the replaced ``con*`` imports; finalization adds the annotation imports.
+        """
+        if (prepare_field := self.data_model_field_type.PREPARE_TYPE_ALIAS_FIELD) is None:
+            return
+        prepared_patterns: dict[str, PythonRuntimeExpression] = {}
+        unused_model_ids = {id(model) for model in unused_models}
+        replace_field_type = self.generation_store.replace_field_type
+        for ctx in contexts:
+            for model in ctx.models:
+                if not isinstance(model, TypeAliasBase) or id(model) in unused_model_ids or not model.fields:
+                    continue
+                previous_imports = model.imports
+                if prepare_field(field := model.fields[0], prepared_patterns, replace_field_type):
+                    field.invalidate_semantic_caches()
+                    current_imports = model.imports
+                    ctx.imports.remove(import_ for import_ in previous_imports if import_ not in current_imports)
+                    self._register_runtime_expression()
+
     def _finalize_modules(  # noqa: PLR0912
         self,
         contexts: list[ModuleContext],
@@ -6128,6 +6584,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         """Finalize module processing: apply generic base class and remove unused imports."""
         self.__apply_generic_base_class(contexts)
         all_models = [model for ctx in contexts for model in ctx.models]
+        self.__prepare_type_alias_fields(contexts, unused_models)
         self.__mark_set_item_models_hashable(all_models)
         self._finalize_structured_imports(contexts)
         if self.use_default_factory_for_optional_nested_models:
@@ -6198,6 +6655,187 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
                     _remap_imports(ctx.imports, overrides)
         return
 
+    def _check_model_inheritance(self, contexts: Sequence[ModuleContext]) -> None:  # noqa: PLR0912, PLR0914, PLR0915
+        """Reject invalid builtin inheritance; an existing topological order needs no DFS."""
+        backend = self.data_model_type.__module__
+        ordinary_backends = {
+            "datamodel_code_generator.model.pydantic_v2.base_model",
+            "datamodel_code_generator.model.pydantic_v2.dataclass",
+            "datamodel_code_generator.model.dataclass",
+        }
+        typed_dict = backend == "datamodel_code_generator.model.typed_dict"
+        struct = backend == "datamodel_code_generator.model.msgspec"
+        if backend not in ordinary_backends and not typed_dict and not struct:
+            return
+        if (
+            typed_dict
+            and (custom_template_dir := self.custom_template_dir) is not None
+            and cached_path_exists(custom_template_dir / "TypedDictClass.jinja2")
+        ):
+            return
+
+        def builtin(model: DataModel) -> bool:
+            return type(model) is self.data_model_type and not (
+                self.custom_template_dir is not None and model._uses_custom_root_template  # noqa: SLF001
+            )
+
+        def emitted_bases(model: DataModel) -> list[BaseClassDataType]:
+            if not builtin(model) or (typed_dict and getattr(model, "is_functional_syntax", False)):
+                return []
+            return model.base_classes
+
+        if not any(base.reference for ctx in contexts for model in ctx.models for base in emitted_bases(model)):
+            return
+
+        models = [model for ctx in contexts for model in ctx.models]
+        positions = [(ctx_index, index) for ctx_index, ctx in enumerate(contexts) for index in range(len(ctx.models))]
+        identities = {id(model): index for index, model in enumerate(models)}
+        for index, model in enumerate(models):
+            references = [base.reference for base in emitted_bases(model) if base.reference]
+            if len(references) > 1 or (references and identities.get(id(references[0].source), index) >= index):
+                break
+        else:
+            if struct:
+                for ctx in contexts:
+                    self.data_model_type.render_module_code(ctx.models)
+            return
+
+        paths: dict[str, list[DataModel]] = defaultdict(list)
+        for model in models:
+            paths[model.path].append(model)
+        parents: list[list[int]] = [[] for _ in models]
+        closed = [backend in ordinary_backends and builtin(model) for model in models]
+        overrides = self._import_overrides or {}
+        ordered = True
+        for index, model in enumerate(models):
+            ctx_index, _ = positions[identities[id(model)]]
+            ctx = contexts[ctx_index]
+            for base in emitted_bases(model):
+                reference = base.reference
+                if reference is None:
+                    terminal = base.import_
+                    closed[index] = closed[index] and (
+                        backend == "datamodel_code_generator.model.pydantic_v2.base_model"
+                        and terminal is not None
+                        and terminal.from_ == "pydantic"
+                        and terminal.import_ == "BaseModel"
+                        and base.type_hint == (terminal.alias or terminal.import_)
+                    )
+                    continue
+                candidates = paths.get(reference.path, [])
+                if len(candidates) != 1 or reference.source is not candidates[0]:
+                    closed[index] = False
+                    continue
+                parent = candidates[0]
+                parent_index = identities[id(parent)]
+                parent_ctx_index, _ = positions[parent_index]
+                imported = ctx.imports.reference_paths.get(reference.path)
+                binding = (
+                    parent.class_name
+                    if ctx_index == parent_ctx_index
+                    else (imported.alias or imported.import_)
+                    if imported is not None and imported.import_ not in overrides
+                    else None
+                )
+                if base.type_hint != binding:
+                    closed[index] = False
+                    continue
+                parents[index].append(parent_index)
+                ordered = ordered and parent_index < index
+
+        if struct:
+            for ctx in contexts:
+                self.data_model_type.render_module_code(ctx.models)
+
+        def label(index: int) -> str:
+            model = models[index]
+            return f"{model.class_name} ({redact_reference(model.path)})"
+
+        postorder = list(range(len(models))) if ordered else []
+        if not ordered:
+            completed: set[int] = set()
+            for start in range(len(models)):
+                if start in completed:
+                    continue
+                active = {start: 0}
+                stack = [(start, iter(parents[start]))]
+                while stack:
+                    index, remaining = stack[-1]
+                    if (parent := next(remaining, None)) is None:
+                        stack.pop()
+                        active.pop(index)
+                        completed.add(index)
+                        postorder.append(index)
+                    elif parent in active:
+                        cycle = [item for item, _ in stack[active[parent] :]]
+                        cycle.append(parent)
+                        msg = "Generated model inheritance cycle: " + " -> ".join(map(label, cycle))
+                        raise Error(msg)
+                    elif parent not in completed:
+                        active[parent] = len(stack)
+                        stack.append((parent, iter(parents[parent])))
+
+            for index, direct in enumerate(parents):
+                ctx_index, position = positions[identities[id(models[index])]]
+                for parent in direct:
+                    parent_ctx_index, parent_position = positions[parent]
+                    if ctx_index == parent_ctx_index and parent_position >= position:
+                        msg = (
+                            f"Generated model {label(index)} requires local base {label(parent)} before its definition."
+                        )
+                        raise Error(msg)
+
+        for index in postorder:
+            closed[index] = closed[index] and all(closed[parent] for parent in parents[index])
+        joins = [index for index in postorder if closed[index] and len(parents[index]) > 1]
+        if not joins:
+            return
+        join_set = set(joins)
+        uses: Counter[int] = Counter()
+        for index in joins:
+            for direct_parent in parents[index]:
+                parent = direct_parent
+                while parent not in join_set and parents[parent]:
+                    parent = parents[parent][0]
+                if parent in join_set:
+                    uses[parent] += 1
+        linearizations: dict[int, list[int]] = {}
+        for index in joins:
+            sequences: list[list[int]] = []
+            consumed: list[int] = []
+            for direct_parent in parents[index]:
+                parent = direct_parent
+                sequence: list[int] = []
+                while parent not in join_set:
+                    sequence.append(parent)
+                    if not parents[parent]:
+                        break
+                    parent = parents[parent][0]
+                if parent in join_set:
+                    sequence.extend(linearizations[parent])
+                    consumed.append(parent)
+                sequences.append(sequence)
+            sequences.append(parents[index])
+            merged = c3_merge([sequence.copy() for sequence in sequences], key=str)
+            order = {item: position for position, item in enumerate(merged)}
+            if any(
+                len(sequence) != len(set(sequence))
+                or any(order[left] >= order[right] for left, right in pairwise(sequence))
+                for sequence in sequences
+            ):
+                msg = (
+                    f"Generated model {label(index)} has inconsistent method resolution order for generated bases "
+                    + ", ".join(map(label, parents[index]))
+                    + "."
+                )
+                raise Error(msg)
+            if uses[index]:
+                linearizations[index] = [index, *merged]
+            for parent in consumed:
+                uses[parent] -= 1
+                if not uses[parent]:
+                    del linearizations[parent]
+
     def _set_nested_model_default_factory_metadata(
         self,
         contexts: list[ModuleContext],
@@ -6208,7 +6846,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         if require_update_action_models:
             models = [model for ctx in contexts for model in ctx.models]
             live_paths = {model.path for model in models}
-            graph = {
+            graph: ModuleGraph = {
                 (model.path,): {
                     (reference_path,)
                     for reference_path in self.generation_store.index.reference_classes_for_model(model)
@@ -6372,7 +7010,7 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
         module: ModulePath,
         source_reference_paths: Mapping[DataModel, str],
     ) -> GeneratedModelMetadata:
-        source_ref = source_reference_paths[model]
+        source_ref = redact_reference(source_reference_paths[model])
         title = model.extra_template_data.get("title")
         return {
             "class_name": model.class_name,
@@ -6425,6 +7063,10 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
     def dispose(self) -> None:
         """Release parser-owned resources after a facade-managed run."""
         self._dispose()
+
+    def _is_root_model(self, model: DataModel) -> bool:
+        """Return whether model uses the configured root model representation."""
+        return isinstance(model, self.data_model_root_type)
 
     def _reset_local_source_cache(self) -> None:
         self._cache_local_sources = False
@@ -6620,7 +7262,13 @@ class Parser(ABC, Generic[ParserConfigT, SchemaFeaturesT]):
             module_to_import[module_] = ctx.imports
             contexts.append(ctx)
 
+        self.__import_enum_member_literal_classes(
+            contexts,
+            internal_modules=internal_modules,
+            model_path_to_module_name=model_path_to_module_name,
+        )
         self._finalize_modules(contexts, unused_models, model_to_module_models, module_to_import)
+        self._check_model_inheritance(contexts)
         self.__warn_about_decimal_defaults()
         if self.use_default_factory_for_optional_nested_models:
             self._set_nested_model_default_factory_metadata(contexts, require_update_action_models)

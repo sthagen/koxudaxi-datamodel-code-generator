@@ -117,34 +117,41 @@ from contextlib import redirect_stdout, suppress
 from datetime import datetime, timezone
 from enum import Enum, IntEnum
 from functools import lru_cache
-from keyword import iskeyword
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NamedTuple, Optional, TypeAlias, Union, cast
-from urllib.parse import ParseResult, urlparse
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypeAlias, cast
 
 from datamodel_code_generator import (
     _SINGLE_MODULE_OUTPUT_DIRECTORY_ERROR,
-    AllExportsScope,
-    ClassNameAffixScope,
     DataModelType,
     Error,
     InputFileType,
-    InputModelRefStrategy,
     InvalidClassNameError,
-    NamingStrategy,
-    OpenAPIScope,
     ReuseScope,
-    _validate_alias_generator,
     _validate_generation_path_conflicts,
-    _validate_output_datetime_class,
     enable_debug_message,
     generate,
 )
+from datamodel_code_generator._cli_config import (
+    _apply_implicit_cli_config_values,
+    _explicit_config_args,
+    _get_config_class,
+    _prepare_cli_config_args,
+    _RawConfigValue,
+    _template_data,
+    is_url,
+)
 from datamodel_code_generator._format_types import Formatter, PythonVersion
+from datamodel_code_generator._project_config import (
+    _PYPROJECT_JSON_CONFIG_FIELDS,
+    _find_datamodel_codegen_project_config_with_path,
+    _get_pyproject_toml_config_with_path,
+    _normalize_pyproject_config,
+    _resolve_profile_extends,
+    _resolve_pyproject_relative_paths,
+)
+from datamodel_code_generator._url_redaction import redact_url
 from datamodel_code_generator.arguments import arg_parser, namespace
 from datamodel_code_generator.deprecations import render_deprecations, warn_deprecated
-from datamodel_code_generator.enums import StrictTypes
-from datamodel_code_generator.util import load_toml
 
 
 def __getattr__(name: str) -> Any:
@@ -158,6 +165,7 @@ def __getattr__(name: str) -> Any:
 if TYPE_CHECKING:
     from argparse import Namespace
     from collections import defaultdict
+    from urllib.parse import ParseResult
 
     from datamodel_code_generator._publication import (
         PublicationAnchor as _PublicationAnchor,
@@ -173,14 +181,11 @@ if TYPE_CHECKING:
         CommandOutputKind,
         GeneratedFilePayload,
     )
-    from datamodel_code_generator.json_config import JsonConfigFieldName, JsonConfigSource
+    from datamodel_code_generator.config import GenerateConfig
     from datamodel_code_generator.validators import ModelValidators
     from datamodel_code_generator.watch_dependencies import WatchDependencies
 
     Config = cast("Any", object)
-    ValidatorsConfigValue: TypeAlias = Mapping[str, ModelValidators]
-else:
-    ValidatorsConfigValue: TypeAlias = Mapping[str, Any]
 
 # Options that should be excluded from pyproject.toml config generation
 EXCLUDED_CONFIG_OPTIONS: frozenset[str] = frozenset({
@@ -209,7 +214,6 @@ EXCLUDED_CONFIG_OPTIONS: frozenset[str] = frozenset({
     "watch_delay",
 })
 
-ORIGINAL_FIELD_NAME_DELIMITER_ERROR = "`--original-field-name-delimiter` can not be used without `--snake-case-field`."
 SENSITIVE_COMMAND_OPTIONS: frozenset[str] = frozenset({"--http-headers", "--http-query-parameters"})
 REDACTED_COMMAND_ARGUMENT = "<redacted>"
 BATCH_UNSAFE_CLI_FIELDS: frozenset[str] = frozenset({"input", "input_model", "output", "url"})
@@ -235,8 +239,20 @@ def sig_int_handler(_: int, __: Any) -> None:  # pragma: no cover
 def _redact_command_args(args: Sequence[str]) -> list[str]:
     redacted: list[str] = []
     redact_values = False
+    url_value = False
     for arg in args:
+        if url_value:
+            redacted.append(redact_url(arg))
+            url_value = False
+            continue
         match arg:
+            case "--url":
+                redacted.append(arg)
+                redact_values = False
+                url_value = True
+            case url_option if url_option.startswith("--url="):
+                redacted.append(f"--url={redact_url(url_option.removeprefix('--url='))}")
+                redact_values = False
             case option if option in SENSITIVE_COMMAND_OPTIONS:
                 redacted.append(option)
                 redact_values = True
@@ -273,464 +289,28 @@ def is_supported_in_black(python_version: PythonVersion) -> bool:
     return supported(python_version)
 
 
-def is_url(ref: str) -> bool:
-    """Check if a reference string is a URL (HTTP, HTTPS, or file scheme)."""
-    # Keep this local so importing the CLI does not import reference.py and its model stack.
-    return ref.startswith(("https://", "http://", "file://"))
-
-
-_HttpKeyValuePair: TypeAlias = tuple[str, str]
-_HttpKeyValueInput: TypeAlias = str | _HttpKeyValuePair
-_HttpSeparator: TypeAlias = Literal[":", "="]
-_HttpItemErrorName: TypeAlias = Literal["http header", "http query parameter"]
-_HttpValueErrorName: TypeAlias = Literal["http_headers", "http_query_parameters"]
-_RawConfigValue: TypeAlias = (
-    str
-    | bool
-    | int
-    | float
-    | Path
-    | ParseResult
-    | Enum
-    | Sequence[str]
-    | Sequence[StrictTypes]
-    | Sequence[OpenAPIScope]
-    | Sequence[tuple[str, str]]
-    | Mapping[str, Any]
-    | Mapping[str, str]
-    | Mapping[str, str | list[str]]
-)
-
-
-def _validate_http_key_value_options(
-    value: Any,
-    *,
-    separator: _HttpSeparator,
-    item_error_name: _HttpItemErrorName,
-    value_error_name: _HttpValueErrorName,
-) -> list[_HttpKeyValuePair] | None:
-    if value is None:  # pragma: no cover
-        return None
-
-    def validate_each_item(each_item: _HttpKeyValueInput) -> _HttpKeyValuePair:
-        if isinstance(each_item, str):  # pragma: no cover
-            try:
-                field_name, field_value = each_item.split(separator, maxsplit=1)
-                return field_name, field_value.lstrip()
-            except ValueError as exc:
-                msg = f"Invalid {item_error_name}: {each_item!r}"
-                raise Error(msg) from exc
-        return each_item  # pragma: no cover
-
-    if isinstance(value, list):
-        return [validate_each_item(cast("_HttpKeyValueInput", each_item)) for each_item in value]
-    msg = f"Invalid {value_error_name} value: {value!r}"  # pragma: no cover
-    raise Error(msg)  # pragma: no cover
-
-
-@lru_cache(maxsize=1)
-def _get_config_class() -> type[Config]:
-    from pydantic import ConfigDict, Field, ValidationInfo, field_validator, model_validator  # noqa: PLC0415
-    from typing_extensions import Self  # noqa: PLC0415
-
-    from datamodel_code_generator.base_config import BaseGenerateConfig  # noqa: PLC0415
-
-    class Config(BaseGenerateConfig):  # noqa: PLR0904
-        """Configuration model for code generation."""
-
-        model_config = ConfigDict(
-            extra="ignore",
-            arbitrary_types_allowed=True,
-            protected_namespaces=(),
-            defer_build=True,
-        )
-
-        def get(self, item: str) -> Any:  # pragma: no cover
-            """Get attribute value by name."""
-            return getattr(self, item)
-
-        def __getitem__(self, item: str) -> Any:  # pragma: no cover
-            """Get item by key."""
-            return self.get(item)
-
-        @classmethod
-        def get_fields(cls) -> dict[str, Any]:
-            """Get model fields."""
-            return cls.model_fields
-
-        @field_validator(
-            "aliases",
-            "serialization_aliases",
-            "extra_template_data",
-            "custom_formatters_kwargs",
-            "default_values",
-            "base_class_map",
-            "model_name_map",
-            "enum_field_as_literal_map",
-            "duplicate_name_suffix",
-            "import_overrides",
-            "type_overrides",
-            mode="before",
-        )
-        @classmethod
-        def validate_json_config(cls, value: Any, info: ValidationInfo) -> Any:
-            """Load and validate JSON configuration values from inline JSON or file paths."""
-            if value is None:  # pragma: no cover
-                return value
-            from datamodel_code_generator.json_config import JsonConfigError, load_json_config_field  # noqa: PLC0415
-
-            field_name: JsonConfigFieldName = cast("JsonConfigFieldName", info.field_name)
-            try:
-                json_config_source: JsonConfigSource = cast("JsonConfigSource", value)
-                return load_json_config_field(field_name, json_config_source)
-            except JsonConfigError as e:
-                raise Error(str(e)) from e
-
-        @field_validator("validators", mode="before")
-        @classmethod
-        def validate_validators_config(cls, value: Any) -> Any:
-            """Validate validators lazily only when the option is present."""
-            if value is None:
-                return None
-
-            from datamodel_code_generator.json_config import JsonConfigError, load_json_config_field  # noqa: PLC0415
-
-            try:
-                return load_json_config_field("validators", cast("JsonConfigSource", value))
-            except JsonConfigError as e:
-                raise Error(str(e)) from e
-
-        @field_validator(
-            "input",
-            "output",
-            "diff_against",
-            "custom_template_dir",
-            "custom_file_header_path",
-            "http_local_ref_path",
-            mode="before",
-        )
-        @classmethod
-        def validate_path(cls, value: Any) -> Path | None:
-            """Validate and resolve path."""
-            if value is None or isinstance(value, Path):
-                return value  # pragma: no cover
-            return Path(value).expanduser().resolve()
-
-        @field_validator("url", mode="before")
-        @classmethod
-        def validate_url(cls, value: Any) -> ParseResult | None:
-            """Validate and parse URL."""
-            if isinstance(value, str) and is_url(value):  # pragma: no cover
-                return urlparse(value)
-            if value is None:  # pragma: no cover
-                return None
-            msg = f"Unsupported URL scheme. Supported: http, https, file. --input={value}"  # pragma: no cover
-            raise Error(msg)  # pragma: no cover
-
-        # Pydantic 1.5.1 doesn't support each_item=True correctly
-        @field_validator("http_headers", mode="before")
-        @classmethod
-        def validate_http_headers(cls, value: Any) -> list[tuple[str, str]] | None:
-            """Validate HTTP headers."""
-            return _validate_http_key_value_options(
-                value,
-                separator=":",
-                item_error_name="http header",
-                value_error_name="http_headers",
-            )
-
-        @field_validator("http_query_parameters", mode="before")
-        @classmethod
-        def validate_http_query_parameters(cls, value: Any) -> list[tuple[str, str]] | None:
-            """Validate HTTP query parameters."""
-            return _validate_http_key_value_options(
-                value,
-                separator="=",
-                item_error_name="http query parameter",
-                value_error_name="http_query_parameters",
-            )
-
-        @model_validator(mode="before")
-        @classmethod
-        def split_additional_imports(cls, values: dict[str, Any]) -> dict[str, Any]:
-            """Validate and split additional imports."""
-            match values.get("additional_imports"):
-                case str() as additional_imports:
-                    values["additional_imports"] = [
-                        import_path for item in additional_imports.split(",") if (import_path := item.strip())
-                    ]
-            return values
-
-        @model_validator(mode="before")
-        @classmethod
-        def validate_custom_formatters(cls, values: dict[str, Any]) -> dict[str, Any]:
-            """Validate and split custom formatters."""
-            custom_formatters = values.get("custom_formatters")
-            if custom_formatters is not None:
-                values["custom_formatters"] = custom_formatters.split(",")
-            return values
-
-        @model_validator(mode="before")
-        @classmethod
-        def validate_naming_strategy_migration(cls, values: dict[str, Any]) -> dict[str, Any]:
-            """Migrate deprecated --parent-scoped-naming to --naming-strategy."""
-            if values.get("parent_scoped_naming") and not values.get("naming_strategy"):
-                values["naming_strategy"] = NamingStrategy.ParentPrefixed
-                warn_deprecated("cli.parent-scoped-naming", stacklevel=2)
-            return values
-
-        @model_validator(mode="before")
-        @classmethod
-        def validate_allow_extra_fields_migration(cls, values: dict[str, Any]) -> dict[str, Any]:
-            """Migrate deprecated --allow-extra-fields to --extra-fields."""
-            if values.get("allow_extra_fields") and not values.get("extra_fields"):
-                values["extra_fields"] = "allow"
-                warn_deprecated("cli.allow-extra-fields", stacklevel=2)
-            return values
-
-        @model_validator(mode="before")
-        @classmethod
-        def validate_class_decorators(cls, values: dict[str, Any]) -> dict[str, Any]:
-            """Validate and split class decorators, adding @ prefix if missing."""
-            class_decorators = values.get("class_decorators")
-            if class_decorators is not None:
-                decorators = []
-                for raw_decorator in class_decorators.split(","):
-                    stripped = raw_decorator.strip()
-                    if stripped:
-                        if not stripped.startswith("@"):
-                            stripped = f"@{stripped}"
-                        decorators.append(stripped)
-                values["class_decorators"] = decorators
-            return values
-
-        @model_validator(mode="before")
-        @classmethod
-        def validate_external_ref_mapping(cls, values: dict[str, Any]) -> dict[str, Any]:
-            """Parse external_ref_mapping from list of KEY=VALUE strings to dict."""
-            raw = values.get("external_ref_mapping")
-            if raw is not None and isinstance(raw, list):
-                mapping: dict[str, str] = {}
-                for item in raw:
-                    if not isinstance(item, str) or "=" not in item:
-                        msg = (
-                            f"Invalid --external-ref-mapping format: {item!r}. "
-                            "Expected FILE_PATH=PYTHON_PACKAGE (e.g., '../common/schema.yaml=mypackage.models')"
-                        )
-                        raise Error(msg)
-                    file_path, python_package = item.split("=", maxsplit=1)
-                    file_path = file_path.strip()
-                    python_package = python_package.strip()
-                    if not file_path or not python_package:
-                        msg = (
-                            f"Invalid --external-ref-mapping format: {item!r}. "
-                            "Both FILE_PATH and PYTHON_PACKAGE must be non-empty."
-                        )
-                        raise Error(msg)
-                    mapping[file_path] = python_package
-                values["external_ref_mapping"] = mapping
-            return values
-
-        __validate_custom_file_header_err: ClassVar[str] = (
-            "`--custom_file_header_path` can not be used with `--custom_file_header`."
-        )
-        __validate_keyword_only_err: ClassVar[str] = (
-            f"`--keyword-only` requires `--target-python-version` {PythonVersion.PY_310.value} or higher."
-        )
-
-        __validate_all_exports_collision_strategy_err: ClassVar[str] = (
-            "`--all-exports-collision-strategy` can only be used with `--all-exports-scope=recursive`."
-        )
-
-        @model_validator(mode="after")
-        def validate_output_datetime_class(self: Self) -> Self:
-            """Validate output datetime class compatibility."""
-            _validate_output_datetime_class(self.output_model_type, self.output_datetime_class)
-            return self
-
-        __validate_original_field_name_delimiter_err: ClassVar[str] = ORIGINAL_FIELD_NAME_DELIMITER_ERROR
-
-        @model_validator(mode="after")
-        def validate_alias_generator(self: Self) -> Self:
-            """Validate alias generator compatibility."""
-            _validate_alias_generator(self.output_model_type, self.alias_generator)
-            return self
-
-        def validate_original_field_name_delimiter(self) -> None:
-            """Validate original field name delimiter requires snake case after preset merging."""
-            if self.original_field_name_delimiter is not None and not self.snake_case_field:
-                raise Error(self.__validate_original_field_name_delimiter_err)
-
-        @model_validator(mode="after")
-        def validate_custom_file_header(self: Self) -> Self:
-            """Validate custom file header options are mutually exclusive."""
-            if self.custom_file_header is not None and self.custom_file_header_path is not None:
-                raise Error(self.__validate_custom_file_header_err)
-            return self
-
-        @model_validator(mode="after")
-        def validate_keyword_only(self: Self) -> Self:
-            """Validate keyword-only compatibility with target Python version."""
-            output_model_type: DataModelType = self.output_model_type
-            python_target: PythonVersion = self.target_python_version
-            if (
-                self.keyword_only
-                and output_model_type == DataModelType.DataclassesDataclass
-                and not python_target.has_kw_only_dataclass
-            ):
-                raise Error(self.__validate_keyword_only_err)  # pragma: no cover
-            return self
-
-        @model_validator(mode="after")
-        def validate_root(self: Self) -> Self:
-            """Validate root model configuration."""
-            if self.use_annotated:
-                self.field_constraints = True
-            return self
-
-        @model_validator(mode="after")
-        def validate_all_exports_collision_strategy(self: Self) -> Self:
-            """Validate all_exports_collision_strategy requires recursive scope."""
-            if self.all_exports_collision_strategy is not None and self.all_exports_scope != AllExportsScope.Recursive:
-                raise Error(self.__validate_all_exports_collision_strategy_err)
-            return self
-
-        @field_validator("input_model", mode="before")
-        @classmethod
-        def coerce_input_model_to_list(cls, v: str | list[str] | None) -> list[str] | None:
-            """Convert string input_model to list for backwards compatibility."""
-            if isinstance(v, str):
-                return [v]
-            return v
-
-        @field_validator("class_name_affix_scope", mode="before")
-        @classmethod
-        def validate_class_name_affix_scope(cls, v: str | ClassNameAffixScope | None) -> ClassNameAffixScope:
-            """Convert string to ClassNameAffixScope enum."""
-            if v is None:  # pragma: no cover
-                return ClassNameAffixScope.All
-            if isinstance(v, str):
-                return ClassNameAffixScope(v)
-            return v  # pragma: no cover
-
-        @field_validator("schema_validator_base_class_name")
-        @classmethod
-        def validate_schema_validator_base_class_name(cls, v: str | None) -> str | None:
-            """Validate schema validator base class name."""
-            if v is None:  # pragma: no cover
-                return v
-            if not v.isidentifier() or iskeyword(v):
-                msg = f"--schema-validator-base-class-name '{v}' is not a valid Python identifier"
-                raise Error(msg)
-            return v
-
-        input: Optional[Union[Path, str]] = None  # noqa: UP007, UP045
-        input_model: Optional[list[str]] = None  # noqa: UP045
-        input_model_ref_strategy: Optional[InputModelRefStrategy] = None  # noqa: UP045
-        input_file_type: InputFileType = InputFileType.Auto
-        output_model_type: DataModelType = DataModelType.PydanticV2BaseModel
-        output: Optional[Path] = None  # noqa: UP045
-        check: bool = False
-        diff_against: Optional[Path] = None  # noqa: UP045
-        repair_invalid_dotted_stdout: bool = Field(default=False, exclude=True)
-        forced_invalid_dotted_stdout_repair_modules: tuple[tuple[str, ...], ...] = Field(default=(), exclude=True)
-        debug: bool = False
-        disable_warnings: bool = False
-        extra_template_data: Mapping[str, dict[str, Any]] | None = None
-        validators: Optional[ValidatorsConfigValue] = None  # noqa: UP045
-        aliases: Optional[Mapping[str, str | list[str]]] = None  # noqa: UP045
-        serialization_aliases: Optional[Mapping[str, str]] = None  # noqa: UP045
-        default_values: Optional[Mapping[str, Any]] = None  # noqa: UP045
-        use_default: bool = False
-        force_optional: bool = False
-        url: Optional[ParseResult] = None  # noqa: UP045
-        strict_types: list[StrictTypes] = Field(default_factory=list)
-        openapi_scopes: Optional[list[OpenAPIScope]] = Field(default_factory=lambda: [OpenAPIScope.Schemas])  # noqa: UP045
-        custom_formatters_kwargs: Optional[dict[str, str]] = None  # noqa: UP045
-        watch: bool = False
-        watch_delay: float = 0.5
-        list_deprecations: Optional[str] = None  # noqa: UP045
-        list_experimental: Optional[str] = None  # noqa: UP045
-
-        def merge_args(self, args: Namespace) -> None:
-            """Merge command-line arguments into config."""
-            set_args = _prepare_cli_config_args(_explicit_config_args(args))
-            explicit_input_sources = {
-                field_name for field_name in ("input", "url", "input_model") if field_name in set_args
-            }
-
-            if explicit_input_sources:
-                for field_name in {"input", "url", "input_model"} - explicit_input_sources:
-                    setattr(self, field_name, None)
-
-            parsed_args = Config.model_validate(set_args)
-            # These switches are mutually exclusive at the command line, but a
-            # pyproject value has already been applied to ``self``. An explicit
-            # CLI mode must replace (rather than combine with) that lower
-            # precedence mode.
-            if "update_lock" in set_args:
-                self.locked = False
-            elif "locked" in set_args:
-                self.update_lock = False
-            for field_name in set_args:
-                setattr(self, field_name, getattr(parsed_args, field_name))
-
-    Config.__qualname__ = "Config"
-    globals()["Config"] = Config
-    return Config
-
-
-def _explicit_config_args(args: Namespace) -> dict[str, _RawConfigValue]:
-    """Return command-line values that explicitly target Config fields."""
-    config_class = _get_config_class()
-    return {field: value for field in config_class.get_fields() if (value := getattr(args, field, None)) is not None}
-
-
-def _prepare_cli_config_args(set_args: Mapping[str, _RawConfigValue]) -> dict[str, _RawConfigValue]:
-    """Apply validation-time CLI config values before merging."""
-    if not set_args:
-        return {}
-
-    prepared_args = dict(set_args)
-    if prepared_args.get("use_annotated"):
-        prepared_args["field_constraints"] = True
-
-    if prepared_args.get("use_type_alias_type"):
-        prepared_args["use_type_alias"] = True
-
-    return prepared_args
-
-
 def _create_config(
     pyproject_config: Mapping[str, Any],
     cli_config_args: Mapping[str, _RawConfigValue],
 ) -> Config:
-    """Create the final CLI config while preserving pyproject/CLI validation order."""
+    """Create the final CLI config while preserving pyproject/CLI validation order.
+
+    The config keeps the text or path each JSON option was given as: a JSON file is the base of the paths it names.
+    """
     config_class = _get_config_class()
-    if not pyproject_config:
-        return config_class.model_validate(_prepare_cli_config_args(cli_config_args))
+    if pyproject_config:
+        from argparse import Namespace as ArgNamespace  # noqa: PLC0415
 
-    from argparse import Namespace as ArgNamespace  # noqa: PLC0415
-
-    config = config_class.model_validate(pyproject_config)
-    cli_namespace = ArgNamespace(**cli_config_args)
-    config.merge_args(cli_namespace)
+        config = config_class.model_validate(pyproject_config)
+        config.merge_args(ArgNamespace(**cli_config_args))
+    else:
+        config = config_class.model_validate(_prepare_cli_config_args(cli_config_args))
+    config._json_sources = {  # noqa: SLF001
+        name: value
+        for name in _PYPROJECT_JSON_CONFIG_FIELDS
+        if isinstance(value := cli_config_args.get(name, pyproject_config.get(name)), str | Path)
+    }
     return config
-
-
-def _apply_implicit_cli_config_values(
-    config: Config,
-    pyproject_config: Mapping[str, _RawConfigValue],
-    cli_config_args: Mapping[str, _RawConfigValue],
-) -> None:
-    """Apply CLI defaults after pyproject, command-line, and preset values have merged."""
-    explicit_fields = {field.replace("-", "_") for field in pyproject_config} | set(cli_config_args)
-    if config.output_model_type is DataModelType.MsgspecStruct and "use_annotated" not in explicit_fields:
-        config.use_annotated = True
-
-    if "field_constraints" in explicit_fields:
-        return
-    config.field_constraints = config.use_annotated
 
 
 def _apply_preset(
@@ -789,122 +369,6 @@ def _validate_final_config(config: Config) -> None:
     config.validate_original_field_name_delimiter()
 
 
-def _extract_additional_imports(extra_template_data: defaultdict[str, dict[str, Any]]) -> list[str]:
-    """Extract additional_imports from extra_template_data entries."""
-    additional_imports: list[str] = []
-    for type_data in extra_template_data.values():
-        if "additional_imports" in type_data:
-            imports = type_data.pop("additional_imports")
-            if isinstance(imports, str):
-                if imports.strip():  # pragma: no branch
-                    additional_imports.append(imports.strip())
-            elif isinstance(imports, list):  # pragma: no branch
-                additional_imports.extend(item.strip() for item in imports if isinstance(item, str) and item.strip())
-    if not additional_imports:
-        return additional_imports
-
-    from datamodel_code_generator.base_config import _validate_additional_import_paths  # noqa: PLC0415
-
-    return _validate_additional_import_paths(additional_imports) or []
-
-
-def _resolve_profile_extends(
-    profiles: Mapping[str, Any],
-    profile_name: str,
-    visited: set[str] | None = None,
-) -> dict[str, Any]:
-    """Resolve profile inheritance via extends key."""
-    if visited is None:
-        visited = set()
-
-    if profile_name in visited:
-        chain = " -> ".join(visited) + f" -> {profile_name}"
-        msg = f"Circular extends detected: {chain}"
-        raise Error(msg)
-
-    if profile_name not in profiles:
-        available = list(profiles.keys()) if profiles else "none"
-        msg = f"Extended profile '{profile_name}' not found in pyproject.toml. Available profiles: {available}"
-        raise Error(msg)
-
-    visited.add(profile_name)
-    profile = profiles[profile_name]
-    if not isinstance(profile, Mapping):
-        msg = f"Profile '{profile_name}' must be a table"
-        raise Error(msg)
-    extends = profile.get("extends")
-
-    if not extends:
-        return dict(profile.items())
-
-    if not isinstance(extends, str | list) or (
-        isinstance(extends, list) and not all(isinstance(parent, str) for parent in extends)
-    ):
-        msg = f"Profile '{profile_name}' extends must be a string or list of strings"
-        raise Error(msg)
-    parents = [extends] if isinstance(extends, str) else extends
-    result: dict[str, Any] = {}
-
-    for parent in parents:
-        if parent == profile_name:
-            msg = f"Profile '{profile_name}' cannot extend itself"
-            raise Error(msg)
-        parent_config = _resolve_profile_extends(profiles, parent, visited.copy())
-        result.update(parent_config)
-
-    result.update({k: v for k, v in profile.items() if k != "extends"})
-    return result
-
-
-def _find_datamodel_codegen_project_config_with_path(source: Path) -> tuple[Path, Mapping[str, Any]] | None:
-    """Return the closest datamodel-codegen TOML table and its pyproject path."""
-    current_path = source
-    while current_path != current_path.parent:
-        pyproject_path = current_path / "pyproject.toml"
-        if pyproject_path.is_file():
-            pyproject_toml = load_toml(pyproject_path)
-            tool_config = pyproject_toml.get("tool", {}).get("datamodel-codegen")
-            if isinstance(tool_config, Mapping):
-                return pyproject_path, tool_config
-
-        if (current_path / ".git").exists():  # pragma: no cover
-            break
-        current_path = current_path.parent
-    return None
-
-
-def _get_pyproject_toml_config_with_path(
-    source: Path,
-    profile: str | None = None,
-) -> tuple[dict[str, Any], Path | None]:
-    """Return resolved project config together with the project file that supplied it."""
-    if (project_config := _find_datamodel_codegen_project_config_with_path(source)) is not None:
-        pyproject_path, tool_config = project_config
-        base_config: dict[str, Any] = {
-            key: value for key, value in tool_config.items() if key not in {"jobs", "profiles"}
-        }
-
-        if profile:
-            profiles = tool_config.get("profiles", {})
-            if not isinstance(profiles, Mapping):
-                msg = "[tool.datamodel-codegen.profiles] must be a table"
-                raise Error(msg)
-            if profile not in profiles:
-                available = list(profiles.keys()) if profiles else "none"
-                msg = f"Profile '{profile}' not found in pyproject.toml. Available profiles: {available}"
-                raise Error(msg)
-            resolved_profile = _resolve_profile_extends(profiles, profile)
-            base_config.update(resolved_profile)
-
-        return _normalize_pyproject_config(base_config), pyproject_path
-
-    if profile:
-        msg = f"Profile '{profile}' requested but no [tool.datamodel-codegen] section found in pyproject.toml"
-        raise Error(msg)
-
-    return {}, None
-
-
 class JobPlan(NamedTuple):
     """An isolated configuration ready for one named batch job."""
 
@@ -943,6 +407,7 @@ class _StagedJobPlan(NamedTuple):
     output_anchor: _PublicationAnchor | None
     model_metadata_anchor: _PublicationAnchor | None
     staging_contexts: tuple[tempfile.TemporaryDirectory[str], ...]
+    targets: list[Any] | None = None
 
 
 class _RemoteLockPlan(NamedTuple):
@@ -974,6 +439,24 @@ def _remote_lock_plan(config: Config, pyproject_path: Path | None) -> _RemoteLoc
     else:
         policy = "inactive"
     return _RemoteLockPlan(canonical_path, canonical_path, literal_path, policy)
+
+
+def _watch_remote_lock_setup(
+    config: Config,
+    pyproject_path: Path | None,
+    watch_dependencies: WatchDependencies | None,
+    bound_plan: _RemoteLockPlan | None,
+) -> tuple[_RemoteLockPlan, set[Path] | None]:
+    """Resolve the lock plan of a run and register its lock with the watcher, returning the lock intent to settle."""
+    lock_plan = bound_plan or _remote_lock_plan(config, pyproject_path)
+    intent: set[Path] | None = None
+    if config.watch and watch_dependencies is not None:
+        if bound_plan is None:
+            (lock_plan,), intent = watch_dependencies._apply_remote_lock_plans((lock_plan,))  # noqa: SLF001
+        watch_dependencies.add_file(lock_plan.canonical_path)
+        if lock_plan.policy == "update":
+            watch_dependencies.exclude_file(lock_plan.canonical_path)
+    return lock_plan, intent
 
 
 def _paths_alias_or_overlap(first: Path, second: Path) -> bool:
@@ -1029,6 +512,7 @@ def _validate_remote_lock_artifacts(
             ("input", config.input if isinstance(config.input, Path) else None),
             ("diff input", config.diff_against),
             ("output", config.output),
+            _target_output(config) or ("target output", None),
             ("model metadata", config.emit_model_metadata),
         ):
             if path is not None:
@@ -1167,7 +651,7 @@ class _RemoteLockTransaction:
         for collector in self._collectors.values():
             try:
                 collector.discard_stage()
-            except OSError as exc:  # noqa: PERF203 - every collector must get its cleanup opportunity
+            except OSError as exc:  # noqa: PERF203 - every anchor must be released before reporting failure
                 cleanup_error = cleanup_error or exc
         try:
             self._close_anchors()
@@ -1184,7 +668,7 @@ class _RemoteLockTransaction:
         for context in self._staging_contexts.values():
             try:
                 context.cleanup()
-            except OSError as exc:  # noqa: PERF203 - every staged lock must be cleaned before reporting failure
+            except OSError as exc:  # noqa: PERF203 - every anchor must be released before reporting failure
                 cleanup_error = cleanup_error or exc
         self._staging_contexts.clear()
         for anchor in self._anchors.values():
@@ -1202,43 +686,6 @@ class _UnresolvedRemoteLocks:
 
 
 _UNRESOLVED_REMOTE_LOCKS = _UnresolvedRemoteLocks()
-
-
-def _normalize_pyproject_config(config: Mapping[str, Any]) -> dict[str, Any]:
-    """Convert TOML option spelling to Config field spelling."""
-    normalized = {key.replace("-", "_"): value for key, value in config.items()}
-    if "capitalize_enum_members" in normalized and "capitalise_enum_members" not in normalized:  # pragma: no cover
-        normalized["capitalise_enum_members"] = normalized.pop("capitalize_enum_members")
-    return normalized
-
-
-_PYPROJECT_RELATIVE_PATH_FIELDS = frozenset({
-    "custom_file_header_path",
-    "custom_template_dir",
-    "diff_against",
-    "emit_model_metadata",
-    "http_local_ref_path",
-    "input",
-    "lockfile",
-    "output",
-})
-
-
-def _resolve_pyproject_relative_paths(config: dict[str, Any], pyproject_path: Path | None) -> dict[str, Any]:
-    """Resolve only pyproject-relative paths from the pyproject directory."""
-    if pyproject_path is None:
-        return config
-
-    config_directory = pyproject_path.parent
-    updates = {
-        field_name: config_directory / resolved_path
-        for field_name in _PYPROJECT_RELATIVE_PATH_FIELDS
-        if isinstance(path := config.get(field_name), str | Path)
-        and not (resolved_path := Path(path).expanduser()).is_absolute()
-    }
-    if not updates:
-        return config
-    return {**config, **updates}
 
 
 def _validate_job_watch_settings(name: str, config: Mapping[str, Any]) -> None:
@@ -1352,9 +799,16 @@ def _paths_overlap_or_samefile(first: Path, second: Path) -> bool:
 
 
 def _preflight_job_plans(plans: Sequence[JobPlan]) -> None:
-    """Validate all selected jobs before any job starts generation."""
+    """Validate all selected jobs before any job starts generation.
+
+    Jobs that each generate a target may name one models output, which they must then generate identically. A job
+    may keep its models inside its target output, or the target output inside its models directory.
+    """
     artifacts: list[tuple[str, str, Path]] = []
     inputs: list[tuple[str, Path]] = []
+    from datamodel_code_generator.base_config import _selected_target  # noqa: PLC0415
+
+    target_jobs = {plan.name for plan in plans if _selected_target(plan.config) is not None}
     for plan in plans:
         config = plan.config
         if config.output is None:  # pragma: no cover - guarded by the TOML validation above
@@ -1366,6 +820,8 @@ def _preflight_job_plans(plans: Sequence[JobPlan]) -> None:
         _validate_generation_path_conflicts(config.input, config.output, config.emit_model_metadata)
         inputs.append((plan.name, config.input.expanduser().resolve()))
         artifacts.append((plan.name, "output", cast("Path", plan.resolved_output_root)))
+        if (target := _target_output(config)) is not None:
+            artifacts.append((plan.name, target[0], target[1].expanduser().resolve(strict=False)))
         if (model_metadata := config.emit_model_metadata) is not None:
             if plan.resolved_model_metadata_root is None:  # pragma: no cover - set when metadata is configured
                 msg = f"Job '{plan.name}' cannot resolve model metadata output: {model_metadata}"
@@ -1375,7 +831,13 @@ def _preflight_job_plans(plans: Sequence[JobPlan]) -> None:
     for index, first_artifact in enumerate(artifacts):
         first_job, first_kind, first_path = first_artifact
         for second_job, second_kind, second_path in artifacts[index + 1 :]:
-            if not _paths_overlap_or_samefile(first_path, second_path):
+            shares_models = (
+                first_path == second_path
+                and first_kind == second_kind == "output"
+                and target_jobs.issuperset((first_job, second_job))
+            )
+            nests_models = first_job == second_job and "model metadata" not in {first_kind, second_kind}
+            if shares_models or nests_models or not _paths_overlap_or_samefile(first_path, second_path):
                 continue
             msg = (
                 f"Jobs '{first_job}' ({first_kind}: {first_path}) and '{second_job}' "
@@ -1430,7 +892,7 @@ def _batch_outer_settings(
     }
     if not values:
         return False, 0.5
-    outer_config = Config.model_validate(values)
+    outer_config = _get_config_class().model_validate(values)
     return outer_config.watch, outer_config.watch_delay
 
 
@@ -1611,6 +1073,11 @@ def _pyproject_toml_value(key: str, value: object) -> TomlValue:
 
     if key not in JsonConfigSpecs.by_field_name or not isinstance(value, Mapping):
         return cast("TomlValue", value)
+    return _compact_json(value)
+
+
+def _compact_json(value: Mapping[str, Any]) -> str:
+    """Serialize a mapping option as the compact JSON text its CLI option accepts."""
     return json.dumps(_json_ready(value), ensure_ascii=False, separators=(",", ":"))
 
 
@@ -1657,12 +1124,35 @@ def _normalize_line_endings(text: str) -> str:
     return text.replace("\r\n", "\n")
 
 
+class _OutputDecodeError(UnicodeError):
+    """An existing output file that the configured encoding cannot decode."""
+
+    def __init__(self, path: Path, error: UnicodeError) -> None:
+        super().__init__(str(error))
+        self.path = path
+
+
+def _read_existing_output(path: Path, encoding: str) -> str:
+    """Read an existing output file with LF line endings, naming it when the encoding cannot decode it."""
+    try:
+        return _normalize_line_endings(path.read_text(encoding=encoding))
+    except UnicodeError as e:
+        raise _OutputDecodeError(path, e) from e
+
+
 class OutputComparisonOptions(NamedTuple):
     """Formatting context for a generated-output comparison."""
 
     is_directory_output: bool
     input_diff: bool = False
     single_file_display_path: str | None = None
+    directory_display_path: str | None = None
+
+    def directory_file_path(self, path: Path) -> str:
+        """Qualify a directory entry when comparing several output roots; a single-module output keeps its own name."""
+        if not path.parts and self.single_file_display_path is not None:
+            return self.single_file_display_path
+        return (path if self.directory_display_path is None else Path(self.directory_display_path) / path).as_posix()
 
     @property
     def fromfile_suffix(self) -> str:
@@ -1720,7 +1210,7 @@ def _compare_single_file(
     generated_content = _normalize_line_endings(generated_path.read_text(encoding=encoding))
 
     display_path = comparison.single_file_display_path or actual_path.as_posix()
-    actual_content = _normalize_line_endings(actual_path.read_text(encoding=encoding))
+    actual_content = _read_existing_output(actual_path, encoding)
 
     if generated_content == actual_content:
         return False, []
@@ -1749,7 +1239,10 @@ def _compare_directories(
     encoding: str,
     comparison: OutputComparisonOptions,
 ) -> tuple[list[DirectoryChangedFile], list[str], list[str]]:
-    """Compare generated directory with existing directory."""
+    """Compare generated directory with existing directory.
+
+    Two inputs can generate a single-module file at the directory path: it is compared as the file at that path.
+    """
     changed_files: list[DirectoryChangedFile] = []
 
     generated_files = {path.relative_to(generated_dir) for path in generated_dir.rglob("*.py")}
@@ -1760,22 +1253,27 @@ def _compare_directories(
             if "__pycache__" not in path.parts:
                 actual_files.add(path.relative_to(actual_dir))
 
-    missing_files = [rel_path.as_posix() for rel_path in sorted(generated_files - actual_files)]
-    extra_files = [rel_path.as_posix() for rel_path in sorted(actual_files - generated_files)]
+    if comparison.input_diff:
+        for files, output in ((generated_files, generated_dir), (actual_files, actual_dir)):
+            if not files and output.is_file():
+                files.add(Path())
+
+    missing_files = [comparison.directory_file_path(rel_path) for rel_path in sorted(generated_files - actual_files)]
+    extra_files = [comparison.directory_file_path(rel_path) for rel_path in sorted(actual_files - generated_files)]
 
     for rel_path in sorted(generated_files & actual_files):
         generated_content = _normalize_line_endings((generated_dir / rel_path).read_text(encoding=encoding))
-        actual_content = _normalize_line_endings((actual_dir / rel_path).read_text(encoding=encoding))
+        actual_content = _read_existing_output(actual_dir / rel_path, encoding)
         if generated_content != actual_content:
             changed_files.append(
                 DirectoryChangedFile(
-                    path=rel_path.as_posix(),
+                    path=(display_path := comparison.directory_file_path(rel_path)),
                     diff_lines=list(
                         difflib.unified_diff(
                             actual_content.splitlines(keepends=True),
                             generated_content.splitlines(keepends=True),
-                            fromfile=f"{rel_path.as_posix()}{comparison.fromfile_suffix}",
-                            tofile=f"{rel_path.as_posix()}{comparison.tofile_suffix}",
+                            fromfile=f"{display_path}{comparison.fromfile_suffix}",
+                            tofile=f"{display_path}{comparison.tofile_suffix}",
                         )
                     ),
                 )
@@ -1801,17 +1299,22 @@ def _compare_generated_single_file(
     from datamodel_code_generator._structured_output import CheckDifferencePayload  # noqa: PLC0415
 
     path = comparison.single_file_display_path or actual_output.as_posix()
-    if not actual_output.exists():
-        missing_kind, _, single_file_missing_message_suffix, _, _ = _output_comparison_policy(
-            input_diff=comparison.input_diff
+    if (actual_exists := actual_output.exists()) != generated_output.exists():
+        missing_kind, _, single_file_missing_message_suffix, extra_kind, extra_message_suffix = (
+            _output_comparison_policy(input_diff=comparison.input_diff)
         )
-        message = f"{missing_kind.upper()}: {path} ({single_file_missing_message_suffix})"
+        kind, message_suffix = (
+            (extra_kind, extra_message_suffix) if actual_exists else (missing_kind, single_file_missing_message_suffix)
+        )
+        message = f"{kind.upper()}: {path} ({message_suffix})"
         return OutputComparison(
-            differences=[CheckDifferencePayload(kind=missing_kind, path=path, message=message)],
+            differences=[CheckDifferencePayload(kind=kind, path=path, message=message)],
             content=f"{message}\n" if comparison.input_diff else message,
         )
 
-    diff_found, diff_lines = _compare_single_file(generated_output, actual_output, encoding, comparison)
+    diff_found, diff_lines = (
+        _compare_single_file(generated_output, actual_output, encoding, comparison) if actual_exists else (False, [])
+    )
     if not diff_found:
         return OutputComparison(differences=[], content="")
 
@@ -1875,6 +1378,13 @@ def _format_cli_value(value: str | list[str]) -> str:
     return f'"{value}"' if " " in value else value
 
 
+def _format_cli_mapping(key: str, value: Mapping[str, Any]) -> str:
+    """Format a pyproject table as the argument its CLI option accepts."""
+    if key == "external_ref_mapping":
+        return " ".join(shlex.quote(f"{path}={package}") for path, package in value.items())
+    return shlex.quote(_compact_json(value))
+
+
 @lru_cache(maxsize=1)
 def _negative_boolean_options() -> dict[str, str]:
     """Index parser-defined negative flags only when command generation needs them."""
@@ -1907,6 +1417,9 @@ def generate_cli_command(config: dict[str, TomlValue]) -> str:
                 parts.append(negative_option)
         elif isinstance(value, list):
             parts.extend((f"--{cli_key}", _format_cli_value(cast("list[str]", value))))
+        elif isinstance(value, Mapping):
+            if argument := _format_cli_mapping(key, value):
+                parts.extend((f"--{cli_key}", argument))
         else:
             parts.extend((f"--{cli_key}", _format_cli_value(str(value))))
 
@@ -2028,17 +1541,21 @@ def _structured_output_json_schema() -> str:
 
 
 def _copy_generated_output(generated_output: Path, actual_output: Path, *, is_directory_output: bool) -> None:
-    if is_directory_output:
-        for generated_file in sorted(generated_output.rglob("*")):
-            if not generated_file.is_file():
-                continue
-            target = actual_output / generated_file.relative_to(generated_output)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(generated_file, target)
-        return
+    from datamodel_code_generator._shadowed_modules import warn_shadowed_modules  # noqa: PLC0415
 
-    actual_output.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(generated_output, actual_output)
+    targets: dict[Path, Path] = {}
+    if is_directory_output:
+        targets = {
+            generated_file: actual_output / generated_file.relative_to(generated_output)
+            for generated_file in sorted(generated_output.rglob("*"))
+            if generated_file.is_file()
+        }
+    if not targets and generated_output.is_file():
+        targets = {generated_output: actual_output}
+    warn_shadowed_modules(targets.values())
+    for generated_file, target in targets.items():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(generated_file, target)
 
 
 def _write_generated_result(
@@ -2085,6 +1602,44 @@ def run_generate_from_config(  # noqa: PLR0913, PLR0917
     logical_output: Path | None = None,
 ) -> str | Mapping[tuple[str, ...], str] | None:
     """Run code generation with the given config and parameters."""
+    generation_config = _generation_config(
+        config,
+        output=output,
+        extra_template_data=extra_template_data,
+        aliases=aliases,
+        serialization_aliases=serialization_aliases,
+        command_line=command_line,
+        custom_formatters_kwargs=custom_formatters_kwargs,
+        settings_path=settings_path,
+        validators=validators,
+        default_value_overrides=default_value_overrides,
+        input_filename=input_filename,
+        generation_timestamp=generation_timestamp,
+        logical_output=logical_output,
+    )
+    return generate(
+        input_=input_,
+        config=cast("Any", generation_config),  # ty: ignore[redundant-cast]
+    )
+
+
+def _generation_config(  # noqa: PLR0913
+    config: Config,
+    *,
+    output: Path | None,
+    extra_template_data: defaultdict[str, dict[str, Any]] | None,
+    aliases: Mapping[str, str | list[str]] | None,
+    serialization_aliases: Mapping[str, str] | None,
+    command_line: str | None,
+    custom_formatters_kwargs: dict[str, str] | None,
+    settings_path: Path | None = None,
+    validators: Mapping[str, ModelValidators] | None = None,
+    default_value_overrides: Mapping[str, Any] | None = None,
+    input_filename: str | None = None,
+    generation_timestamp: str | None = None,
+    logical_output: Path | None = None,
+) -> Config:
+    """Return the settings one generation runs with: the CLI config with its run values and no preset."""
     generation_config = config.model_copy(
         update={
             "input_filename": input_filename,
@@ -2106,10 +1661,160 @@ def run_generate_from_config(  # noqa: PLR0913, PLR0917
         generation_config._generation_timestamp = generation_timestamp  # noqa: SLF001
     if logical_output is not None:
         generation_config._logical_output = logical_output  # noqa: SLF001
-    return generate(
-        input_=input_,
-        config=cast("Any", generation_config),  # ty: ignore[redundant-cast]
+    return generation_config
+
+
+def _target_output(config: Config) -> tuple[str, Path] | None:
+    """Name the package directory of the target a config selects, such as the server output and its path."""
+    from datamodel_code_generator.base_config import _selected_target  # noqa: PLC0415
+
+    if (selected := _selected_target(config)) is None or (output := getattr(config, f"{selected[1]}output")) is None:
+        return None
+    return f"{selected[1].removesuffix('_')} output", output
+
+
+def _target_usage_errors(config: Config, namespace: Namespace) -> list[str]:
+    """Return why the target options of a run cannot apply.
+
+    Target keys of pyproject.toml are validated like model keys but have no effect while their target is not selected.
+    """
+    from datamodel_code_generator.base_config import (  # noqa: PLC0415
+        _TARGET_SELECTORS,
+        _flag,
+        _missing_target_options,
+        _option_list,
     )
+
+    explicit = _explicit_config_args(namespace)
+    unselected = [(selector, prefix) for selector, prefix in _TARGET_SELECTORS if getattr(config, selector) is None]
+    given = [
+        (
+            _flag(selector),
+            [_flag(field, negative=value is False) for field, value in explicit.items() if field.startswith(prefix)],
+        )
+        for selector, prefix in unselected
+    ]
+    if errors := [
+        f"{_option_list(flags)} {'requires' if len(flags) == 1 else 'require'} {selector}"
+        for selector, flags in given
+        if flags
+    ]:
+        return errors
+    return [] if (missing := _missing_target_options(config)) is None else [missing]
+
+
+def _target_lockfile(config: Config, pyproject_path: Path | None) -> Path | None:
+    """Return the remote lock file a generation target's models read or update, or None while no lock applies.
+
+    The default lock file sits next to pyproject.toml or in the working directory, so it reaches the target only
+    while a policy uses it: an update, a locked run, or an existing file to verify.
+    """
+    if config.lockfile is not None:
+        return config.lockfile
+    plan = _remote_lock_plan(config, pyproject_path)
+    return None if plan.policy == "inactive" else plan.literal_path
+
+
+def _target_settings(config: Config, args: Sequence[str], lockfile: Path | None) -> GenerateConfig:
+    """Return the model settings a generation target runs with."""
+    from datamodel_code_generator.config import GenerateConfig  # noqa: PLC0415
+
+    settings = _generation_config(
+        config,
+        output=config.output,
+        extra_template_data=_template_data(config),
+        aliases=config.aliases,
+        serialization_aliases=config.serialization_aliases,
+        command_line=_command_header(args) if config.enable_command_header else None,
+        custom_formatters_kwargs=config.custom_formatters_kwargs,
+        settings_path=config.output,
+        validators=config.validators,
+        default_value_overrides=config.default_values,
+    )
+    values = vars(settings) | {"lockfile": lockfile}
+    return GenerateConfig.model_construct(**{
+        name: values[name] for name in GenerateConfig.model_fields if name in values
+    })
+
+
+def _apply_model_run_options(config: Config, namespace: Namespace, pyproject_config: Mapping[str, Any]) -> Exit | None:
+    """Apply the checks, warnings and debug settings every generation run shares; return the exit code of a refusal."""
+    uses_black_formatter = config.formatters is None or Formatter.BLACK in config.formatters
+    if uses_black_formatter and not is_supported_in_black(config.target_python_version):  # pragma: no cover
+        print(  # noqa: T201
+            f"Installed black doesn't support Python version {config.target_python_version.value}.\n"
+            f"You have to install a newer black.\n"
+            f"Installed black version: {_get_black().__version__}",
+            file=sys.stderr,
+        )
+        return Exit.ERROR
+
+    if config.debug:  # pragma: no cover
+        enable_debug_message()
+
+    if config.disable_warnings:
+        warnings.simplefilter("ignore")
+
+    if (
+        config.output_model_type in {DataModelType.PydanticV2BaseModel, DataModelType.PydanticV2Dataclass}
+        and not config.use_annotated
+        and namespace.use_annotated is None
+        and pyproject_config.get("use_annotated") is None
+    ):
+        warn_deprecated(
+            "behavior.pydantic-v2-use-annotated-default",
+            details=(
+                "The current default (use_annotated=False) generates constrained types like "
+                "'conint(ge=1, le=365)' which are discouraged in Pydantic v2."
+            ),
+            stacklevel=1,
+        )
+
+    if config.reuse_scope == ReuseScope.Tree and not config.reuse_model:
+        print(  # noqa: T201
+            "Warning: --reuse-scope=tree has no effect without --reuse-model",
+            file=sys.stderr,
+        )
+
+    if config.collapse_root_models_name_strategy and not config.collapse_root_models:
+        print(  # noqa: T201
+            "Error: --collapse-root-models-name-strategy requires --collapse-root-models",
+            file=sys.stderr,
+        )
+        return Exit.ERROR
+
+    if (
+        config.use_specialized_enum
+        and namespace.use_specialized_enum is not False  # CLI didn't disable it
+        and (namespace.use_specialized_enum is True or pyproject_config.get("use_specialized_enum") is True)
+        and not config.target_python_version.has_strenum
+    ):
+        print(  # noqa: T201
+            f"Error: --use-specialized-enum requires --target-python-version 3.11 or later.\n"
+            f"Current target version: {config.target_python_version.value}\n"
+            f"StrEnum is only available in Python 3.11+.",
+            file=sys.stderr,
+        )
+        return Exit.ERROR
+    return None
+
+
+def _run_target(  # noqa: PLR0913, PLR0917
+    args: Sequence[str],
+    namespace: Namespace,
+    config: Config,
+    pyproject_path: Path | None,
+    batch: list[Any] | None = None,
+    lock: Any = None,
+    job: str = "",
+) -> Exit:
+    """Hand the selected generation target to its runner, which reports every diagnostic.
+
+    A batch `job` plans the target into `batch` for publication with the batch, recording into the batch's lock.
+    """
+    from datamodel_code_generator._target_cli import run_target  # noqa: PLC0415
+
+    return Exit(run_target(args, namespace, config, pyproject_path, batch, lock, job))
 
 
 def _staging_directory_for(target: Path) -> tempfile.TemporaryDirectory[str]:
@@ -2121,8 +1826,14 @@ def _staging_directory_for(target: Path) -> tempfile.TemporaryDirectory[str]:
 
 
 def _stage_job_plan(plan: JobPlan) -> _StagedJobPlan:
-    """Redirect a write-mode job's artifacts to private, same-filesystem staging paths."""
-    if plan.config.check:
+    """Redirect a write-mode job's artifacts to private, same-filesystem staging paths.
+
+    A target job stages nothing: it renders its models and package without writing them, for publication with the
+    batch.
+    """
+    from datamodel_code_generator.base_config import _selected_target  # noqa: PLC0415
+
+    if plan.config.check or _selected_target(plan.config) is not None:
         return _StagedJobPlan(plan, plan.config, None, None, None, None, None, None, None, None, ())
 
     output = plan.config.output
@@ -2179,11 +1890,15 @@ def _stage_job_plan(plan: JobPlan) -> _StagedJobPlan:
 
 
 def _stage_job_plans(plans: Sequence[JobPlan]) -> tuple[_StagedJobPlan, ...]:
-    """Stage every write-mode job, removing earlier staging if preparation fails."""
+    """Stage every write-mode job, removing earlier staging if preparation fails.
+
+    The jobs share one list for the targets that the target jobs of the batch plan.
+    """
     staged_plans: list[_StagedJobPlan] = []
+    targets: list[Any] = []
     try:
         for plan in plans:
-            staged_plans.append(_stage_job_plan(plan))  # noqa: PERF401
+            staged_plans.append(_stage_job_plan(plan)._replace(targets=targets))  # noqa: PERF401
     except OSError as exc:
         cleanup_errors = _cleanup_staged_job_plans(staged_plans)
         if cleanup_error := _staging_cleanup_error(exc, cleanup_errors):
@@ -2295,16 +2010,28 @@ def _staged_files(staged_plan: _StagedJobPlan) -> Iterator[_StagedFile]:
         )
 
 
-def _publish_staged_files(files: Iterable[tuple[Path, Path] | _StagedFile]) -> None:
-    """Load the publication journal only when an artifact must be published."""
+def _publish_staged_files(files: Iterable[tuple[Path, Path] | _StagedFile], targets: Sequence[Any] = ()) -> None:
+    """Load the publication journal only when an artifact must be published, with the targets its jobs planned."""
+    if targets:
+        from datamodel_code_generator._target_cli import publish_targets  # noqa: PLC0415
+
+        publish_targets(cast("Iterable[_StagedFile]", files), targets)
+        return
     from datamodel_code_generator._publication import publish_staged_files  # noqa: PLC0415
 
     publish_staged_files(files)
 
 
+def _planned_targets(staged_plans: Sequence[_StagedJobPlan]) -> Sequence[Any]:
+    """Return the targets the jobs of a batch planned, in job order."""
+    return next((targets for staged_plan in staged_plans if (targets := staged_plan.targets)), ())
+
+
 def _publish_staged_job_plans(staged_plans: Sequence[_StagedJobPlan]) -> None:
     """Publish every generated batch artifact after all jobs have completed successfully."""
-    _publish_staged_files(file for staged_plan in staged_plans for file in _staged_files(staged_plan))
+    _publish_staged_files(
+        (file for staged_plan in staged_plans for file in _staged_files(staged_plan)), _planned_targets(staged_plans)
+    )
 
 
 def _validate_staged_job_plans(staged_plans: Sequence[_StagedJobPlan]) -> None:
@@ -2415,7 +2142,7 @@ def _publish_or_error(
             lock_files = remote_locks.staged_files()
             if lock_files:
                 output_files = tuple(file for staged_plan in staged_plans for file in _staged_files(staged_plan))
-                _publish_staged_files((*output_files, *lock_files))
+                _publish_staged_files((*output_files, *lock_files), _planned_targets(staged_plans))
                 remote_locks.mark_committed()
             else:
                 _publish_staged_job_plans(staged_plans)
@@ -2442,6 +2169,8 @@ def _run_jobs_text(
             _batch_pyproject_path=staged_plan.plan.pyproject_path,
             _batch_original_output=staged_plan.output,
             _batch_output_is_staged=staged_plan.staged_output is not None,
+            _batch_targets=staged_plan.targets,
+            _batch_job=staged_plan.plan.name,
             _remote_locks=remote_locks,
             _bound_remote_lock_plan=remote_lock_plan,
         )
@@ -2491,6 +2220,8 @@ def _run_jobs_json(
                             _batch_pyproject_path=staged_plan.plan.pyproject_path,
                             _batch_original_output=staged_plan.output,
                             _batch_output_is_staged=staged_plan.staged_output is not None,
+                            _batch_targets=staged_plan.targets,
+                            _batch_job=staged_plan.plan.name,
                             _remote_locks=remote_locks,
                             _bound_remote_lock_plan=remote_lock_plan,
                         )
@@ -2711,6 +2442,30 @@ def _diff_against_validation_error(config: Config, namespace: Namespace) -> str 
     return next((message for is_incompatible, message in incompatible_options if is_incompatible), None)
 
 
+def _watch_and_regenerate(
+    args: Sequence[str],
+    config: Config,
+    dependencies: WatchDependencies | None,
+    *,
+    watch_path: Path | None = None,
+    watch_delay: float | None = None,
+) -> Exit:
+    """Watch what a generation read, regenerating it through the command after each change until interrupted."""
+    try:
+        from datamodel_code_generator.watch import watch_and_regenerate  # noqa: PLC0415
+
+        return watch_and_regenerate(
+            config,
+            dependencies=dependencies,
+            regenerate=lambda: _main(args, start_watch=False, dependencies=dependencies),
+            watch_path=watch_path,
+            watch_delay=watch_delay,
+        )
+    except Exception as e:  # noqa: BLE001
+        print(str(e), file=sys.stderr)  # noqa: T201
+        return Exit.ERROR
+
+
 def _main(  # noqa: PLR0911, PLR0912, PLR0914, PLR0915
     args: Sequence[str] | None = None,
     *,
@@ -2721,6 +2476,8 @@ def _main(  # noqa: PLR0911, PLR0912, PLR0914, PLR0915
     _batch_pyproject_path: Path | None = None,
     _batch_original_output: Path | None = None,
     _batch_output_is_staged: bool = False,
+    _batch_targets: list[Any] | None = None,
+    _batch_job: str = "",
     _remote_locks: _RemoteLockTransaction | _UnresolvedRemoteLocks | None = _UNRESOLVED_REMOTE_LOCKS,
     _bound_remote_lock_plan: _RemoteLockPlan | None = None,
 ) -> Exit:
@@ -2824,23 +2581,13 @@ def _main(  # noqa: PLR0911, PLR0912, PLR0914, PLR0915
         result = _run_watched_jobs(args, batch_plan, watch_dependencies)
         if result is not Exit.OK or not start_watch:
             return result
-        try:
-            from datamodel_code_generator.watch import watch_and_regenerate  # noqa: PLC0415
-
-            return watch_and_regenerate(
-                batch_plan.jobs[0].config,
-                dependencies=watch_dependencies,
-                regenerate=lambda: _main(
-                    args,
-                    start_watch=False,
-                    dependencies=watch_dependencies,
-                ),
-                watch_path=batch_plan.pyproject_path,
-                watch_delay=batch_plan.watch_delay,
-            )
-        except Exception as e:  # noqa: BLE001
-            print(str(e), file=sys.stderr)  # noqa: T201
-            return Exit.ERROR
+        return _watch_and_regenerate(
+            args,
+            batch_plan.jobs[0].config,
+            watch_dependencies,
+            watch_path=batch_plan.pyproject_path,
+            watch_delay=batch_plan.watch_delay,
+        )
 
     # Handle --ignore-pyproject and --profile options
     if _batch_config is not None:
@@ -2983,6 +2730,10 @@ def _main(  # noqa: PLR0911, PLR0912, PLR0914, PLR0915
         )
         return Exit.ERROR
 
+    if target_usage := _target_usage_errors(config, namespace):
+        for error in target_usage:
+            print(f"Error: {error}", file=sys.stderr)  # noqa: T201
+        return Exit.ERROR
     if config.watch and config.check:
         print(  # noqa: T201
             "Error: --watch and --check cannot be used together",
@@ -3011,15 +2762,41 @@ def _main(  # noqa: PLR0911, PLR0912, PLR0914, PLR0915
         )
         return Exit.ERROR
 
-    lock_plan = _bound_remote_lock_plan or _remote_lock_plan(config, pyproject_path)
-    remote_lock_intent: set[Path] | None = None
-    if config.watch and watch_dependencies is not None and _bound_remote_lock_plan is None:
-        (lock_plan,), remote_lock_intent = watch_dependencies._apply_remote_lock_plans((lock_plan,))  # noqa: SLF001
+    from datamodel_code_generator.base_config import _selected_target  # noqa: PLC0415
+
+    if _selected_target(config) is not None:
+        if (refusal := _apply_model_run_options(config, namespace, pyproject_config)) is not None:
+            return refusal
+        lock = None
+        if _batch_targets is None:
+            try:
+                _validate_remote_lock_preflight(
+                    (("command", config, pyproject_path),), (_remote_lock_plan(config, pyproject_path),)
+                )
+            except Error as e:
+                print(str(e), file=sys.stderr)  # noqa: T201
+                return Exit.ERROR
+        elif (job_locks := cast("_RemoteLockTransaction | None", _remote_locks)) is not None:
+            lock = job_locks.collector_for(cast("_RemoteLockPlan", _bound_remote_lock_plan))
+        if not config.watch or watch_dependencies is None:
+            return _run_target(args, namespace, config, pyproject_path, _batch_targets, lock, _batch_job)
+        # A batch job never watches (watch is an outer setting), so this run owns its lock plan and its intent.
+        _, remote_lock_intent = _watch_remote_lock_setup(config, pyproject_path, watch_dependencies, None)
+        with watch_dependencies.generation() as generation:
+            result = _run_target(args, namespace, config, pyproject_path, _batch_targets, lock, _batch_job)
+            generation.failed = result is not Exit.OK
+        if result is Exit.OK:
+            watch_dependencies._commit_remote_lock_intent(cast("set[Path]", remote_lock_intent))  # noqa: SLF001
+        else:
+            watch_dependencies._merge_remote_lock_intent(cast("set[Path]", remote_lock_intent))  # noqa: SLF001
+        if result is not Exit.OK or not start_watch:
+            return result
+        return _watch_and_regenerate(args, config, watch_dependencies)
+
+    lock_plan, remote_lock_intent = _watch_remote_lock_setup(
+        config, pyproject_path, watch_dependencies, _bound_remote_lock_plan
+    )
     active_lockfile = lock_plan.canonical_path if lock_plan.active else None
-    if config.watch and watch_dependencies is not None:
-        watch_dependencies.add_file(lock_plan.canonical_path)
-        if lock_plan.policy == "update":
-            watch_dependencies.exclude_file(lock_plan.canonical_path)
     remote_transaction_owner = False
     if _remote_locks is _UNRESOLVED_REMOTE_LOCKS:
         try:
@@ -3071,17 +2848,7 @@ def _main(  # noqa: PLR0911, PLR0912, PLR0914, PLR0915
             if result is not Exit.OK:
                 return finish_watch_remote_lock_intent(result)
             finish_watch_remote_lock_intent(result)
-            try:
-                from datamodel_code_generator.watch import watch_and_regenerate  # noqa: PLC0415
-
-                return watch_and_regenerate(
-                    config,
-                    dependencies=watch_dependencies,
-                    regenerate=lambda: _main(args, start_watch=False, dependencies=watch_dependencies),
-                )
-            except Exception as e:  # noqa: BLE001
-                print(str(e), file=sys.stderr)  # noqa: T201
-                return Exit.ERROR
+            return _watch_and_regenerate(args, config, watch_dependencies)
         result = _run_single_remote_transaction(
             args,
             config,
@@ -3093,80 +2860,14 @@ def _main(  # noqa: PLR0911, PLR0912, PLR0914, PLR0915
         )
         return finish_watch_remote_lock_intent(result)
     config.resolve_remote_lock(None if remote_locks is None else remote_locks.collector_for(lock_plan))
-    uses_black_formatter = config.formatters is None or Formatter.BLACK in config.formatters
-    if uses_black_formatter and not is_supported_in_black(config.target_python_version):  # pragma: no cover
-        print(  # noqa: T201
-            f"Installed black doesn't support Python version {config.target_python_version.value}.\n"
-            f"You have to install a newer black.\n"
-            f"Installed black version: {_get_black().__version__}",
-            file=sys.stderr,
-        )
-        return Exit.ERROR
+    if (refusal := _apply_model_run_options(config, namespace, pyproject_config)) is not None:
+        return refusal
 
-    if config.debug:  # pragma: no cover
-        enable_debug_message()
-
-    if config.disable_warnings:
-        warnings.simplefilter("ignore")
-
-    if (
-        config.output_model_type in {DataModelType.PydanticV2BaseModel, DataModelType.PydanticV2Dataclass}
-        and not config.use_annotated
-        and namespace.use_annotated is None
-        and pyproject_config.get("use_annotated") is None
-    ):
-        warn_deprecated(
-            "behavior.pydantic-v2-use-annotated-default",
-            details=(
-                "The current default (use_annotated=False) generates constrained types like "
-                "'conint(ge=1, le=365)' which are discouraged in Pydantic v2."
-            ),
-            stacklevel=1,
-        )
-
-    if config.reuse_scope == ReuseScope.Tree and not config.reuse_model:
-        print(  # noqa: T201
-            "Warning: --reuse-scope=tree has no effect without --reuse-model",
-            file=sys.stderr,
-        )
-
-    if config.collapse_root_models_name_strategy and not config.collapse_root_models:
-        print(  # noqa: T201
-            "Error: --collapse-root-models-name-strategy requires --collapse-root-models",
-            file=sys.stderr,
-        )
-        return Exit.ERROR
-
-    if (
-        config.use_specialized_enum
-        and namespace.use_specialized_enum is not False  # CLI didn't disable it
-        and (namespace.use_specialized_enum is True or pyproject_config.get("use_specialized_enum") is True)
-        and not config.target_python_version.has_strenum
-    ):
-        print(  # noqa: T201
-            f"Error: --use-specialized-enum requires --target-python-version 3.11 or later.\n"
-            f"Current target version: {config.target_python_version.value}\n"
-            f"StrEnum is only available in Python 3.11+.",
-            file=sys.stderr,
-        )
-        return Exit.ERROR
-
-    extra_template_data: defaultdict[str, dict[str, Any]] | None
-    if config.extra_template_data is None:
-        extra_template_data = None
-    else:
-        extra_template_data = cast("defaultdict[str, dict[str, Any]]", config.extra_template_data)
-        # Extract additional_imports from extra_template_data entries and merge with config
-        try:
-            additional_imports_from_template_data = _extract_additional_imports(extra_template_data)
-        except Error as e:
-            print(str(e), file=sys.stderr)  # noqa: T201
-            return finish_watch_remote_lock_intent(Exit.ERROR)
-        if additional_imports_from_template_data:
-            if config.additional_imports is None:
-                config.additional_imports = additional_imports_from_template_data
-            else:
-                config.additional_imports = list(config.additional_imports) + additional_imports_from_template_data
+    try:
+        extra_template_data = _template_data(config)
+    except Error as e:
+        print(str(e), file=sys.stderr)  # noqa: T201
+        return finish_watch_remote_lock_intent(Exit.ERROR)
 
     aliases = config.aliases
     serialization_aliases = config.serialization_aliases
@@ -3319,22 +3020,25 @@ def _main(  # noqa: PLR0911, PLR0912, PLR0914, PLR0915
         print(traceback.format_exc(), file=sys.stderr)  # noqa: T201
         return cleanup_and_return(Exit.ERROR)
 
-    if (
-        config.output is not None
-        and config.output.is_dir()
-        and generate_output is not None
-        and generate_output.is_file()
-    ):
-        print(_SINGLE_MODULE_OUTPUT_DIRECTORY_ERROR, file=sys.stderr)  # noqa: T201
-        return cleanup_and_return(Exit.ERROR)
+    if config.output is not None and generate_output is not None:
+        if config.output.is_dir():
+            if generate_output.is_file():
+                print(_SINGLE_MODULE_OUTPUT_DIRECTORY_ERROR, file=sys.stderr)  # noqa: T201
+                return cleanup_and_return(Exit.ERROR)
+        elif (
+            config.check
+            and is_directory_output
+            and (generate_output.is_file() or (config.output.is_file() and not generate_output.exists()))
+        ):
+            is_directory_output = False
 
     if writes_json_output_file and generate_output is not None and config.output is not None:
         _copy_generated_output(generate_output, config.output, is_directory_output=is_directory_output)
 
-    if generate_output is None and result is not None:
+    if generate_output is None and (result is not None or namespace.output_format == "json"):
         if (
             write_error := _write_generated_result(
-                result,
+                {} if result is None else result,
                 namespace.output_format,
                 fail_on_multi_module_stdout=namespace.fail_on_multi_module_stdout is True,
             )
@@ -3370,33 +3074,24 @@ def _main(  # noqa: PLR0911, PLR0912, PLR0914, PLR0915
         return cleanup_and_return(Exit.DIFF if comparison.differences else Exit.OK)
 
     if config.check and config.output is not None and generate_output is not None:
-        comparison = _compare_generated_outputs(
-            generate_output,
-            config.output,
-            config.encoding,
-            OutputComparisonOptions(is_directory_output=is_directory_output),
-        )
+        try:
+            comparison = _compare_generated_outputs(
+                generate_output,
+                config.output,
+                config.encoding,
+                OutputComparisonOptions(is_directory_output=is_directory_output),
+            )
+        except _OutputDecodeError as e:
+            print(  # noqa: T201
+                f"Unable to decode output {e.path.as_posix()} using encoding {config.encoding!r}: {e}",
+                file=sys.stderr,
+            )
+            return cleanup_and_return(Exit.ERROR)
         _write_comparison_output(comparison, namespace.output_format)
         return cleanup_and_return(Exit.DIFF if comparison.differences else Exit.OK)
 
     if config.watch and start_watch:
-        try:
-            from datamodel_code_generator.watch import watch_and_regenerate  # noqa: PLC0415
-
-            return cleanup_and_return(
-                watch_and_regenerate(
-                    config,
-                    dependencies=watch_dependencies,
-                    regenerate=lambda: _main(
-                        args,
-                        start_watch=False,
-                        dependencies=watch_dependencies,
-                    ),
-                )
-            )
-        except Exception as e:  # noqa: BLE001
-            print(str(e), file=sys.stderr)  # noqa: T201
-            return cleanup_and_return(Exit.ERROR)
+        return cleanup_and_return(_watch_and_regenerate(args, config, watch_dependencies))
 
     return cleanup_and_return(Exit.OK)
 

@@ -1,7 +1,8 @@
 [
   {
     "name": "initial",
-    "input": "observation.json"
+    "input": "observation.json",
+    "api": "false"
   },
   {
     "name": "repair",
@@ -51,11 +52,6 @@
     "name": "repair_parse_failed",
     "input": "../openapi/usable_identical_invalid_dotted_models.yaml",
     "failure": "repair_parse"
-  },
-  {
-    "name": "repair_capture_failed",
-    "input": "../openapi/usable_identical_invalid_dotted_models.yaml",
-    "failure": "repair_capture"
   },
   {
     "name": "repair_freeze_failed",

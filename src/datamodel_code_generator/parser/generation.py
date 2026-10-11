@@ -175,19 +175,19 @@ class _GenerationModelList(list["DataModel"]):
         super().__init__()
         self._invalidate = invalidate
 
-    def append(self, item: Any) -> None:  # ty: ignore[invalid-method-override]
+    def append(self, item: Any) -> None:
         """Append a model and invalidate derived facts."""
         super().append(item)
         self._invalidate()
 
-    def extend(self, items: Iterable[Any]) -> None:  # ty: ignore[invalid-method-override]
+    def extend(self, items: Iterable[Any]) -> None:
         """Extend the model list and invalidate derived facts."""
         try:
             super().extend(items)
         finally:
             self._invalidate()
 
-    def insert(self, index: SupportsIndex, item: Any) -> None:  # ty: ignore[invalid-method-override]
+    def insert(self, index: SupportsIndex, item: Any) -> None:
         """Insert a model and invalidate derived facts."""
         super().insert(index, item)
         self._invalidate()
@@ -204,7 +204,7 @@ class _GenerationModelList(list["DataModel"]):
         self,
         index: SupportsIndex | slice,
         item: Any | Iterable[Any],
-    ) -> None:  # ty: ignore[invalid-method-override]
+    ) -> None:
         super().__setitem__(index, item)  # ty: ignore[no-matching-overload]
         self._invalidate()
 
@@ -231,7 +231,7 @@ class _GenerationModelList(list["DataModel"]):
         self._invalidate()
         return item
 
-    def remove(self, item: Any) -> None:  # ty: ignore[invalid-method-override]
+    def remove(self, item: Any) -> None:
         """Remove a model and invalidate derived facts."""
         super().remove(item)
         self._invalidate()
@@ -251,13 +251,13 @@ class _GenerationModelList(list["DataModel"]):
         """Sort the model list and invalidate derived facts."""
         try:
             if key is None:
-                super().sort(reverse=reverse)  # ty: ignore[invalid-argument-type]
+                super().sort(reverse=reverse)
                 return
             super().sort(key=key, reverse=reverse)
         finally:
             self._invalidate()
 
-    def __iadd__(self, items: Iterable[Any], /) -> Self:  # ty: ignore[invalid-method-override]
+    def __iadd__(self, items: Iterable[Any], /) -> Self:
         """Extend the model list in place and invalidate derived facts."""
         try:
             super().__iadd__(items)
@@ -474,10 +474,9 @@ class GenerationIndex:
         self._reset_reference_classes_cache_if_needed()
         if (reference_classes := self._reference_classes_cache.get(model_id)) is not None:
             return reference_classes
-        model_type = model.__class__
         include_dict_key_references = (
-            include_dict_key_reference_classes := model_type._INCLUDE_DICT_KEY_REFERENCE_CLASSES  # noqa: SLF001
-        ) is not None and include_dict_key_reference_classes(model_type)
+            include_dict_key_reference_classes := model._INCLUDE_DICT_KEY_REFERENCE_CLASSES  # noqa: SLF001
+        ) is not None and include_dict_key_reference_classes(model)
         reference_classes = frozenset(
             reference.path
             for data_type_id in facts.data_types_by_model.get(model_id, ())
@@ -543,7 +542,7 @@ class GenerationIndex:
         reference: Reference,
         *,
         excluded_model: DataModel,
-        root_model_type: type[DataModel],
+        is_root_model: Callable[[DataModel], bool],
     ) -> tuple[list[DataModel], list[DataTypeFact]]:
         """Return wrapper models and direct non-wrapper refs for root collapse checks."""
         facts = self._facts()
@@ -557,7 +556,7 @@ class GenerationIndex:
         for data_type_id in data_type_ids:
             fact = facts.data_type_facts[data_type_id]
             owner = facts.model_facts[fact.owner_model].model
-            if isinstance(owner, root_model_type):
+            if is_root_model(owner):
                 if id(owner) not in wrapper_ids:
                     wrapper_ids.add(id(owner))
                     wrappers.append(owner)
@@ -1244,7 +1243,7 @@ class GenerationStore:  # noqa: PLR0904
                 owner_field = current
         owner_model = current if hasattr(current, "clear_imports_cache") else None
         if owner_model is not None:
-            return owner_field, owner_model  # ty: ignore[invalid-return-type]  # dynamic external model hooks
+            return owner_field, owner_model
         if not self.models:
             return owner_field, None
         if self._dirty and self._defer_refresh_depth:
@@ -1270,7 +1269,7 @@ class GenerationStore:  # noqa: PLR0904
             field_.invalidate_semantic_caches(invalidate_parent=False)
         if isinstance(owner_models, tuple):
             for model in owner_models:
-                self._invalidate_render_caches_for_model(model)  # ty: ignore[invalid-argument-type]
+                self._invalidate_render_caches_for_model(model)
             return
         self._invalidate_render_caches_for_model(owner_models)
 
@@ -1285,7 +1284,7 @@ class GenerationStore:  # noqa: PLR0904
                 fields[id(field_)] = field_
             if isinstance(owner_models, tuple):
                 for model in owner_models:
-                    models[id(model)] = model  # ty: ignore[invalid-assignment]
+                    models[id(model)] = model
             elif owner_models is not None:
                 models[id(owner_models)] = owner_models
         for field_ in fields.values():

@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import import_module
 from importlib.util import find_spec
@@ -20,7 +21,7 @@ import pytest
 
 import datamodel_code_generator
 from datamodel_code_generator.__main__ import Exit
-from tests.conftest import assert_output
+from tests.conftest import TARGET_PYTHON, assert_output
 from tests.main.conftest import (
     EXPECTED_MAIN_PATH,
     JSON_SCHEMA_DATA_PATH,
@@ -310,6 +311,30 @@ def _file_contains(path: Path, expected_text: str) -> bool:
     if not path.is_file():
         return False
     return expected_text in path.read_text(encoding="utf-8")
+
+
+@dataclass
+class _WatchedOutput:
+    """A watched output file and the text that last satisfied a wait for it.
+
+    The watch process may regenerate the file again after a wait succeeds and truncate it while the test reads it,
+    so tests assert the text their wait read instead of reading the file a second time.
+    """
+
+    path: Path
+    text: str = ""
+
+    def contains(self, included: str, excluded: str | None = None) -> Callable[[], bool]:
+        """Return a wait condition that keeps the file's text once it has the included and not the excluded text."""
+
+        def condition() -> bool:
+            text = self.path.read_text(encoding="utf-8") if self.path.is_file() else ""
+            if included not in text or (excluded is not None and excluded in text):
+                return False
+            self.text = text
+            return True
+
+        return condition
 
 
 def _batch_pyproject(jobs: list[tuple[str, Path, Path, Path | None]]) -> str:
@@ -861,6 +886,71 @@ def test_watch_cli_regenerates_file_output_on_change(tmp_path: Path) -> None:
         _stop_watch_cli(process, stdout_thread, stderr_thread)
 
 
+@pytest.mark.skipif(sys.version_info < TARGET_PYTHON, reason="The server and client targets need Python 3.11 or later")
+def test_watch_cli_regenerates_server_on_change(tmp_path: Path) -> None:
+    """Regenerate the models and the server package of a single run whenever its input changes."""
+    source = PROJECT_ROOT / "tests/data/generation_platform/fastapi"
+    input_file = tmp_path / "pets.yaml"
+    shutil.copy2(source / "pets.yaml", input_file)
+    router = _WatchedOutput(tmp_path / "server" / "routers" / "pets.py")
+    process, stdout_lines, stderr_lines, stdout_thread, stderr_thread = _start_watch_cli_until_ready(
+        input_file,
+        tmp_path / "models.py",
+        [
+            *("--input-file-type", "openapi", "--target-python-version", "3.11"),
+            *("--openapi-scopes", "schemas", "api", "--output-model-type", "pydantic_v2.BaseModel"),
+            *("--generate-server", "fastapi", "--server-output", str(tmp_path / "server")),
+            *("--server-package", "server", "--server-model-package", "models"),
+        ],
+    )
+
+    try:
+        _write_watch_cli_input_and_wait(
+            process,
+            stdout_lines,
+            stderr_lines,
+            input_file,
+            (source / "cli" / "pets-baseline.yaml").read_text(encoding="utf-8"),
+            router.contains("Page size of a listing."),
+            "the server package to be regenerated",
+        )
+        assert_output(router.text, EXPECTED_MAIN_PATH / "generation_platform/fastapi/cli/watch/pets.py")
+    finally:
+        _stop_watch_cli(process, stdout_thread, stderr_thread)
+
+
+@pytest.mark.skipif(sys.version_info < TARGET_PYTHON, reason="The server and client targets need Python 3.11 or later")
+def test_watch_cli_regenerates_client_job_on_change(tmp_path: Path) -> None:
+    """Regenerate a client job of a watched batch whenever its input changes, as a model job is.
+
+    The job documents its methods with their operations' summaries, so a changed summary changes the client.
+    """
+    source = PROJECT_ROOT / "tests/data/generation_platform/client/cli"
+    input_file = tmp_path / "options.yaml"
+    shutil.copy2(source / "options.yaml", input_file)
+    settings = (source / "pyproject-jobs.toml").read_text(encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        settings.replace("disable-timestamp = true\n", "disable-timestamp = true\nuse-schema-description = true\n"),
+        encoding="utf-8",
+    )
+    resource = _WatchedOutput(tmp_path / "client" / "resources" / "pets" / "_sync.py")
+    process, stdout_lines, stderr_lines, stdout_thread, stderr_thread = _start_batch_watch_cli_until_ready(tmp_path)
+
+    try:
+        _write_watch_cli_input_and_wait(
+            process,
+            stdout_lines,
+            stderr_lines,
+            input_file,
+            input_file.read_text(encoding="utf-8").replace("List the pets.", "List every pet."),
+            resource.contains("List every pet."),
+            "the client package to be regenerated",
+        )
+        assert_output(resource.text, EXPECTED_MAIN_PATH / "generation_platform/client/cli/watch/_sync.py")
+    finally:
+        _stop_watch_cli(process, stdout_thread, stderr_thread)
+
+
 def test_watch_cli_regenerates_for_consecutive_input_changes_without_restart(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -934,8 +1024,9 @@ def test_watch_cli_regenerates_when_a_symlinked_input_is_repointed(tmp_path: Pat
 
     try:
         time.sleep(WATCH_CLI_CHANGE_RETRY_SECONDS)
-        input_link.unlink()
-        input_link.symlink_to(second_input.relative_to(tmp_path))
+        replacement_link = tmp_path / "input-replacement.json"
+        replacement_link.symlink_to(second_input.relative_to(tmp_path))
+        replacement_link.replace(input_link)
         _wait_for_watch_cli(
             process,
             stdout_lines,
@@ -2360,6 +2451,48 @@ lockfile = "{lockfile.as_posix()}"
     assert not dependencies.accepts_event(lockfile)
 
 
+@pytest.mark.skipif(sys.version_info < TARGET_PYTHON, reason="The server and client targets need Python 3.11 or later")
+def test_target_watch_registers_the_remote_lock_like_the_model_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A watched single client run observes its lock and keeps an update-mode lock from triggering itself."""
+    from datamodel_code_generator import __main__ as main_module
+    from datamodel_code_generator.watch_dependencies import WatchDependencies
+
+    source = PROJECT_ROOT / "tests/data/generation_platform/client/cli"
+    input_file = tmp_path / "options.yaml"
+    shutil.copy2(source / "options.yaml", input_file)
+    lockfile = tmp_path / "api.lock"
+    monkeypatch.chdir(tmp_path)
+    arguments = [
+        *("--input", str(input_file), "--input-file-type", "openapi", "--output", "models.py"),
+        *("--target-python-version", "3.11", "--openapi-scopes", "schemas", "api"),
+        *("--output-model-type", "pydantic_v2.BaseModel", "--formatters", "builtin", "--disable-timestamp"),
+        *("--generate-client", "httpx2", "--client-output", "client"),
+        *("--client-package", "client", "--client-model-package", "models"),
+        *("--watch", "--lockfile", str(lockfile)),
+    ]
+
+    report: list[str] = []
+
+    def run(label: str, extra: list[str] | None = None) -> None:
+        dependencies = WatchDependencies()
+        exit_code = main_module._main([*arguments, *(extra or [])], start_watch=False, dependencies=dependencies)
+        verified = lockfile in dependencies._verified_remote_locks
+        report.append(
+            f"{label}: exit={exit_code.name} observed={lockfile in dependencies.files} "
+            f"triggers={dependencies.accepts_event(lockfile)} verified={verified}"
+        )
+
+    run("create")
+    run("update", ["--update-lock"])
+    run("verify")
+    input_file.write_text("openapi: [", encoding="utf-8")
+    run("failing")
+
+    assert_output("\n".join(report) + "\n", EXPECTED_MAIN_PATH / "watch_target_remote_lock.txt")
+
+
 @pytest.mark.skipif(find_spec("grpc_tools") is None, reason="requires the protobuf extra")
 def test_regular_generation_does_not_load_watch_dependency_collector(tmp_path: Path) -> None:
     """Non-watch protobuf and custom formatter execution skip all watch collector work."""
@@ -3213,7 +3346,7 @@ output = "{output_file.as_posix()}"
         _stop_watch_cli(process, stdout_thread, stderr_thread)
 
 
-def test_watch_failed_lock_path_replan_retains_newly_verified_candidate(  # noqa: PLR0914
+def test_watch_failed_lock_path_replan_retains_newly_verified_candidate(  # ruff: ignore[too-many-locals]
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     watched_http_server: str,
@@ -3347,7 +3480,7 @@ input-file-type = "jsonschema"
         _stop_watch_cli(process, stdout_thread, stderr_thread)
 
 
-def test_batch_watch_failed_lock_path_replan_retains_prior_implicit_intent(  # noqa: PLR0914
+def test_batch_watch_failed_lock_path_replan_retains_prior_implicit_intent(  # ruff: ignore[too-many-locals]
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     watched_http_server: str,
@@ -3957,6 +4090,7 @@ def test_watch_cli_tracks_new_reference_after_generation(tmp_path: Path) -> None
     changed = (WATCH_DATA_PATH / "file_change/changed.json").read_text(encoding="utf-8")
     input_file.write_text(initial, encoding="utf-8")
     child_file.write_text(changed, encoding="utf-8")
+    output = _WatchedOutput(output_file)
     process, stdout_lines, stderr_lines, stdout_thread, stderr_thread = _start_watch_cli_until_ready(
         input_file,
         output_file,
@@ -3968,19 +4102,19 @@ def test_watch_cli_tracks_new_reference_after_generation(tmp_path: Path) -> None
             stderr_lines,
             input_file,
             (WATCH_DATA_PATH / "file_change/reference.json").read_text(encoding="utf-8"),
-            lambda: _file_contains(output_file, "age: int | None = None"),
+            output.contains("age: int | None = None"),
             "the newly referenced child to generate",
         )
-        assert_output(output_file.read_text(encoding="utf-8"), EXPECTED_MAIN_PATH / "watch_reference_change.py")
+        assert_output(output.text, EXPECTED_MAIN_PATH / "watch_reference_change.py")
         _write_watch_cli_input_and_wait(
             process,
             stdout_lines,
             stderr_lines,
             child_file,
             initial,
-            lambda: _file_contains(output_file, "name: str") and not _file_contains(output_file, "age:"),
+            output.contains("name: str", excluded="age:"),
             "an edit to the newly referenced child to regenerate",
         )
-        assert_output(output_file.read_text(encoding="utf-8"), EXPECTED_MAIN_PATH / "watch_reference_initial.py")
+        assert_output(output.text, EXPECTED_MAIN_PATH / "watch_reference_initial.py")
     finally:
         _stop_watch_cli(process, stdout_thread, stderr_thread)

@@ -11,6 +11,8 @@ When a schema defines a simple type (not an object with properties), `datamodel-
 - 📌 RootModel and type aliases do not fully support field-specific metadata (default, alias, etc). See [Named Type Aliases](https://docs.pydantic.dev/latest/concepts/types/#named-type-aliases) for details.
 - 🚫 Type aliases do not support some RootModel features (e.g. `model_config`)
 - 📄 A RootModel or type alias is also generated for the main schema, allowing you to define a single type alias from a schema file (e.g. `model.json` containing `{"title": "MyString", "type": "string"}`)
+- 🧩 Pydantic v2 type aliases express constraints as `Annotated[int, Field(ge=1)]` instead of `conint(ge=1)`, because mypy and Pyright reject call expressions in type aliases. A `Decimal` `multipleOf` uses `annotated_types.MultipleOf`, because `Field` types `multiple_of` as a float. Validation, serialization, and JSON schema stay the same, except that on Pydantic 2.0.x a string alias with `minLength: 0` now keeps `minLength: 0` in its JSON schema.
+- 🔤 Pydantic v2 type aliases (`--use-type-alias` and `pydantic_v2.dataclass` output) cannot select Python's regex engine through `model_config`, so patterns that need it, such as lookaround assertions, are generated as compiled `re.compile(...)` patterns. These aliases require **Pydantic 2.8 or later in the environment that runs the generated code**, because [Pydantic 2.8 added support for compiled patterns](https://pydantic.dev/articles/pydantic-v2-8-release#respect-regex-flags-in-constrained-string-validation).
 
 When `--use-root-model-type-alias` is enabled, roots with field constraints or
 patterns that require Python regex configuration use a regular `RootModel` class
@@ -18,6 +20,15 @@ to preserve validation. Unconstrained roots and constraints already represented
 in the alias type keep the alias form. This does not change `--use-type-alias`.
 An existing custom `pydantic_v2/RootModelTypeAlias.jinja2` remains selected;
 that template is responsible for preserving its root constraints.
+
+## API scope parameters
+
+!!! note "Changed in 0.84.0"
+    With `--openapi-scopes api`, OpenAPI path, query, header, and cookie parameter schemas that would be root models
+    are always generated as type aliases, exactly as `--use-type-alias` emits them, whatever the output model type
+    and options; 0.83.0 generated root models for them. Object parameters stay models, and component schemas keep
+    their usual root models. See
+    [OpenAPI Options: Generate all API declarations](openapi-options.md#generate-all-api-declarations).
 
 ## 📊 Type Alias Behavior by Output Type and Python Version
 

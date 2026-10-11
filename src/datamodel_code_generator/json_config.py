@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from io import TextIOBase
@@ -11,16 +12,21 @@ from typing import Any, ClassVar, Literal, TypeAlias, cast
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationError
 
+from datamodel_code_generator._json_limits import CLIENT_PROTOCOLS_MAX_DEPTH
 from datamodel_code_generator.deprecations import warn_deprecated
 from datamodel_code_generator.validators import ValidatorsConfig, format_validation_error
 
 DEFAULT_ENCODING = "utf-8"
 JSON_SCHEMA_DRAFT_2020_12 = "https://json-schema.org/draft/2020-12/schema"
+_JSON_STRING_OR_BRACKET = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"?|[\[\]{}]')
 
 JsonConfigSource: TypeAlias = str | Path | TextIOBase | dict[str, Any] | None
 JsonConfigFieldName: TypeAlias = Literal[
     "aliases",
     "base_class_map",
+    "client_operations",
+    "client_protocols",
+    "client_resource_names",
     "custom_formatters_kwargs",
     "default_values",
     "duplicate_name_suffix",
@@ -29,12 +35,21 @@ JsonConfigFieldName: TypeAlias = Literal[
     "import_overrides",
     "model_name_map",
     "serialization_aliases",
+    "server_body_modes",
+    "server_handler_modes",
+    "server_operation_names",
+    "server_parameter_names",
+    "server_primary_responses",
+    "server_router_names",
     "type_overrides",
     "validators",
 ]
 JsonConfigOptionName: TypeAlias = Literal[
     "--aliases",
     "--base-class-map",
+    "--client-operations",
+    "--client-protocols",
+    "--client-resource-names",
     "--custom-formatters-kwargs",
     "--default-values",
     "--duplicate-name-suffix",
@@ -43,6 +58,12 @@ JsonConfigOptionName: TypeAlias = Literal[
     "--import-overrides",
     "--model-name-map",
     "--serialization-aliases",
+    "--server-body-modes",
+    "--server-handler-modes",
+    "--server-operation-names",
+    "--server-parameter-names",
+    "--server-primary-responses",
+    "--server-router-names",
     "--type-overrides",
     "--validators",
 ]
@@ -88,6 +109,51 @@ class LegacyExtraTemplateDataConfig(RootModel[dict[str, Any]]):
     """Legacy extra template data mapping accepted during strict-validation migration."""
 
 
+class ClientOperationsConfig(RootModel[dict[str, dict[str, Any]]]):
+    """Client settings keyed by operation reference; the client target validates their members."""
+
+    model_config = ConfigDict(defer_build=True)
+
+
+class ClientProtocolsConfig(RootModel[dict[str, Any]]):
+    """Client helper definitions keyed by helper name; the client target validates them."""
+
+    model_config = ConfigDict(defer_build=True)
+
+
+class ServerHandlerModesConfig(RootModel[dict[str, Literal["sync", "async"]]]):
+    """Handler modes of server operations, keyed by operation reference."""
+
+    model_config = ConfigDict(defer_build=True)
+
+
+class ServerBodyModesConfig(RootModel[dict[str, Literal["typed", "request"]]]):
+    """Request body modes of server operations, keyed by operation reference."""
+
+    model_config = ConfigDict(defer_build=True)
+
+
+class ServerPrimaryResponseConfig(BaseModel):
+    """The declared response a bare server return value takes."""
+
+    model_config = ConfigDict(extra="forbid", defer_build=True)
+
+    status_code: int = Field(strict=True, ge=100, le=599)
+    media_type: str | None = None
+
+
+class ServerPrimaryResponsesConfig(RootModel[dict[str, ServerPrimaryResponseConfig]]):
+    """Primary responses of server operations, keyed by operation reference."""
+
+    model_config = ConfigDict(defer_build=True)
+
+
+class ServerParameterNamesConfig(RootModel[dict[str, dict[str, str]]]):
+    """Server argument names keyed by operation reference, then by location and parameter name."""
+
+    model_config = ConfigDict(defer_build=True)
+
+
 JsonConfigStrictModel: TypeAlias = (
     type[StringMappingConfig]
     | type[StringOrStringListMappingConfig]
@@ -95,6 +161,12 @@ JsonConfigStrictModel: TypeAlias = (
     | type[DuplicateNameSuffixConfig]
     | type[DefaultValuesConfig]
     | type[ExtraTemplateDataConfig]
+    | type[ClientOperationsConfig]
+    | type[ClientProtocolsConfig]
+    | type[ServerHandlerModesConfig]
+    | type[ServerBodyModesConfig]
+    | type[ServerPrimaryResponsesConfig]
+    | type[ServerParameterNamesConfig]
     | type[ValidatorsConfig]
 )
 JsonConfigLegacyModel: TypeAlias = type[StringMappingConfig] | type[LegacyExtraTemplateDataConfig]
@@ -103,10 +175,13 @@ JsonConfigLegacyModel: TypeAlias = type[StringMappingConfig] | type[LegacyExtraT
 class JsonConfigSchemasPayload(BaseModel):
     """Strict JSON configuration schemas accepted by datamodel-code-generator."""
 
-    model_config = ConfigDict(extra="forbid", populate_by_name=True, protected_namespaces=())
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, protected_namespaces=(), defer_build=True)
 
     aliases: StringOrStringListMappingConfig | None = Field(default=None)
     base_class_map: StringOrStringListMappingConfig | None = Field(default=None, alias="base-class-map")
+    client_operations: ClientOperationsConfig | None = Field(default=None, alias="client-operations")
+    client_protocols: ClientProtocolsConfig | None = Field(default=None, alias="client-protocols")
+    client_resource_names: StringMappingConfig | None = Field(default=None, alias="client-resource-names")
     custom_formatters_kwargs: StringMappingConfig | None = Field(default=None, alias="custom-formatters-kwargs")
     default_values: DefaultValuesConfig | None = Field(default=None, alias="default-values")
     duplicate_name_suffix: DuplicateNameSuffixConfig | None = Field(default=None, alias="duplicate-name-suffix")
@@ -117,6 +192,14 @@ class JsonConfigSchemasPayload(BaseModel):
     import_overrides: StringMappingConfig | None = Field(default=None, alias="import-overrides")
     model_name_map: StringMappingConfig | None = Field(default=None, alias="model-name-map")
     serialization_aliases: StringMappingConfig | None = Field(default=None, alias="serialization-aliases")
+    server_body_modes: ServerBodyModesConfig | None = Field(default=None, alias="server-body-modes")
+    server_handler_modes: ServerHandlerModesConfig | None = Field(default=None, alias="server-handler-modes")
+    server_operation_names: StringMappingConfig | None = Field(default=None, alias="server-operation-names")
+    server_parameter_names: ServerParameterNamesConfig | None = Field(default=None, alias="server-parameter-names")
+    server_primary_responses: ServerPrimaryResponsesConfig | None = Field(
+        default=None, alias="server-primary-responses"
+    )
+    server_router_names: StringMappingConfig | None = Field(default=None, alias="server-router-names")
     type_overrides: StringMappingConfig | None = Field(default=None, alias="type-overrides")
     validators: ValidatorsConfig | None = Field(default=None)
 
@@ -133,7 +216,7 @@ def json_config_json_schema() -> str:
     })
 
 
-def _invalid_json_message(option_name: str, error: json.JSONDecodeError, load_error_name: str | None) -> str:
+def _invalid_json_message(option_name: str, error: object, load_error_name: str | None) -> str:
     if load_error_name:
         return f"Unable to load {load_error_name}: {error}"
     if option_name:
@@ -148,9 +231,13 @@ def _path_is_file(path: Path) -> bool:
         return False
 
 
+def _json_file(value: str | Path) -> Path | None:
+    """Return the file a JSON option value names, or None for inline JSON."""
+    return path if _path_is_file(path := Path(value).expanduser()) else None
+
+
 def _read_json_or_inline(value: str) -> str:
-    path = Path(value).expanduser()
-    if not _path_is_file(path):
+    if (path := _json_file(value)) is None:
         return value
 
     try:
@@ -160,15 +247,43 @@ def _read_json_or_inline(value: str) -> str:
         raise JsonConfigError(msg) from e
 
 
-def _loads_json(value: str, *, option_name: str, load_error_name: str | None) -> Any:
+def _nests_deeper(value: str, max_depth: int) -> bool:
+    """Return whether JSON text opens more than max_depth arrays and objects at once, skipping strings."""
+    depth = 0
+    for match in _JSON_STRING_OR_BRACKET.finditer(value):
+        match match.group():
+            case "[" | "{":
+                depth += 1
+                if depth > max_depth:
+                    return True
+            case "]" | "}":
+                depth -= 1
+            case _:
+                pass
+    return False
+
+
+def _loads_json(value: str, *, option_name: str, load_error_name: str | None, max_depth: int | None = None) -> Any:
+    """Parse JSON text, reporting text the parser refuses, or nests deeper than max_depth, with one fixed message."""
+    if max_depth is not None and _nests_deeper(value, max_depth):
+        msg = _invalid_json_message(option_name, f"nests collections deeper than {max_depth} levels", load_error_name)
+        raise JsonConfigError(msg)
     try:
         return json.loads(value)
     except json.JSONDecodeError as e:
         msg = _invalid_json_message(option_name, e, load_error_name)
         raise JsonConfigError(msg) from e
+    except RecursionError as e:
+        msg = _invalid_json_message(option_name, "nests too deeply to parse", load_error_name)
+        raise JsonConfigError(msg) from e
+    except ValueError as e:
+        msg = _invalid_json_message(option_name, "has an integer with too many digits", load_error_name)
+        raise JsonConfigError(msg) from e
 
 
-def _load_json_source(value: JsonConfigSource, *, option_name: str, load_error_name: str | None = None) -> Any:
+def _load_json_source(
+    value: JsonConfigSource, *, option_name: str, load_error_name: str | None = None, max_depth: int | None = None
+) -> Any:
     match value:
         case None | dict():
             return value
@@ -176,7 +291,8 @@ def _load_json_source(value: JsonConfigSource, *, option_name: str, load_error_n
             with data:
                 return _loads_json(data.read(), option_name=option_name, load_error_name=load_error_name)
 
-    return _loads_json(_read_json_or_inline(str(value)), option_name=option_name, load_error_name=load_error_name)
+    text = _read_json_or_inline(str(value))
+    return _loads_json(text, option_name=option_name, load_error_name=load_error_name, max_depth=max_depth)
 
 
 def _to_defaultdict(value: Any) -> Any:
@@ -196,6 +312,7 @@ class JsonConfigSpec:
     load_error_name: JsonConfigErrorName | None = None
     validation_error_name: JsonConfigErrorName | None = None
     validation_error_message: str | None = None
+    max_depth: int | None = None
 
     def validate(self, raw: Any) -> Any:
         """Validate a loaded JSON value and return the normalized config value."""
@@ -257,6 +374,11 @@ class JsonConfigSpecs:
             ),
         ),
         "base_class_map": JsonConfigSpec("--base-class-map", StringOrStringListMappingConfig),
+        "client_operations": JsonConfigSpec("--client-operations", ClientOperationsConfig),
+        "client_protocols": JsonConfigSpec(
+            "--client-protocols", ClientProtocolsConfig, max_depth=CLIENT_PROTOCOLS_MAX_DEPTH
+        ),
+        "client_resource_names": JsonConfigSpec("--client-resource-names", StringMappingConfig),
         "custom_formatters_kwargs": JsonConfigSpec(
             "--custom-formatters-kwargs",
             StringMappingConfig,
@@ -294,6 +416,12 @@ class JsonConfigSpecs:
             load_error_name="serialization alias mapping",
             validation_error_message='must be a JSON string mapping (e.g. {"key": "value", ...})',
         ),
+        "server_body_modes": JsonConfigSpec("--server-body-modes", ServerBodyModesConfig),
+        "server_handler_modes": JsonConfigSpec("--server-handler-modes", ServerHandlerModesConfig),
+        "server_operation_names": JsonConfigSpec("--server-operation-names", StringMappingConfig),
+        "server_parameter_names": JsonConfigSpec("--server-parameter-names", ServerParameterNamesConfig),
+        "server_primary_responses": JsonConfigSpec("--server-primary-responses", ServerPrimaryResponsesConfig),
+        "server_router_names": JsonConfigSpec("--server-router-names", StringMappingConfig),
         "type_overrides": JsonConfigSpec("--type-overrides", StringMappingConfig),
         "validators": JsonConfigSpec(
             "--validators",
@@ -310,7 +438,9 @@ def load_json_config_field(
 ) -> Any:
     """Load and validate a JSON configuration field by Config field name."""
     spec = JsonConfigSpecs.by_field_name[field_name]
-    raw = _load_json_source(value, option_name=spec.option_name, load_error_name=spec.load_error_name)
+    raw = _load_json_source(
+        value, option_name=spec.option_name, load_error_name=spec.load_error_name, max_depth=spec.max_depth
+    )
     return None if raw is None else spec.validate(raw)
 
 

@@ -1,0 +1,3845 @@
+{
+  "pets": {
+    "input": "pets.yaml",
+    "services": "pets",
+    "backends": [
+      "pydantic_v2.BaseModel",
+      "pydantic_v2.dataclass"
+    ],
+    "builds": [
+      "missing"
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/pets"
+      },
+      {
+        "method": "GET",
+        "url": "/pets?limit=1&tags=a&tags=b&kind=cat&since=2024-01-01T00:00:00Z",
+        "headers": {
+          "X-Request-Id": "00000000-0000-0000-0000-000000000001",
+          "Cookie": "session=a%20b"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/pets?limit=0"
+      },
+      {
+        "method": "GET",
+        "url": "/pets?kind=bird"
+      },
+      {
+        "method": "GET",
+        "url": "/pets?limit=99"
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "name": "Tom",
+          "tag": null
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "name": ""
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/pets/mine"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/7"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/0"
+      },
+      {
+        "method": "DELETE",
+        "url": "/pets/2"
+      },
+      {
+        "method": "DELETE",
+        "url": "/pets/7"
+      },
+      {
+        "method": "GET",
+        "url": "/store/inventory"
+      },
+      {
+        "method": "GET",
+        "url": "/pets?limit=1&tags=a&tags=b&kind=cat&since=2024-01-01T00:00:00Z",
+        "headers": {
+          "X-Request-Id": "00000000-0000-0000-0000-000000000001"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/pets?limit=101"
+      },
+      {
+        "method": "GET",
+        "url": "/pets?limit=two"
+      },
+      {
+        "method": "GET",
+        "url": "/pets?limit=1&limit=2"
+      },
+      {
+        "method": "GET",
+        "url": "/pets?since=2024-01-01T00:00:00"
+      },
+      {
+        "method": "GET",
+        "url": "/pets",
+        "headers": {
+          "X-Request-Id": "not-a-uuid"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/pets?tags=a+b&tags=c%20d"
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "name": "Tom",
+          "extra": 1
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "tag": "dog"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "name": 7
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "content": "{",
+        "headers": {
+          "Content-Type": "application/json"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "content": "{\"name\": \"Tom\"}",
+        "headers": {
+          "Content-Type": "text/plain"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/pets"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/one"
+      }
+    ],
+    "package_snapshots": [
+      "pydantic_v2.BaseModel",
+      "pydantic_v2.dataclass"
+    ]
+  },
+  "pets-type-checking": {
+    "input": "pets.yaml",
+    "files": [
+      "type-checking/pyproject.toml"
+    ],
+    "services": "pets",
+    "backends": [
+      "pydantic_v2.BaseModel"
+    ],
+    "model": {
+      "formatters": [
+        "ruff-check",
+        "ruff-format"
+      ],
+      "settings_path": "type-checking",
+      "use_type_checking_imports": true
+    },
+    "package_snapshots": [
+      "pydantic_v2.BaseModel"
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/pets"
+      },
+      {
+        "method": "GET",
+        "url": "/pets?limit=1&tags=a&tags=b&kind=cat&since=2024-01-01T00:00:00Z",
+        "headers": {
+          "X-Request-Id": "00000000-0000-0000-0000-000000000001",
+          "Cookie": "session=a%20b"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/pets?limit=0"
+      },
+      {
+        "method": "GET",
+        "url": "/pets?kind=bird"
+      },
+      {
+        "method": "GET",
+        "url": "/pets?limit=99"
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "name": "Tom",
+          "tag": null
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "name": ""
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/pets/mine"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/7"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/0"
+      },
+      {
+        "method": "DELETE",
+        "url": "/pets/2"
+      },
+      {
+        "method": "DELETE",
+        "url": "/pets/7"
+      },
+      {
+        "method": "GET",
+        "url": "/store/inventory"
+      },
+      {
+        "method": "GET",
+        "url": "/pets?limit=1&tags=a&tags=b&kind=cat&since=2024-01-01T00:00:00Z",
+        "headers": {
+          "X-Request-Id": "00000000-0000-0000-0000-000000000001"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/pets?limit=101"
+      },
+      {
+        "method": "GET",
+        "url": "/pets?limit=two"
+      },
+      {
+        "method": "GET",
+        "url": "/pets?limit=1&limit=2"
+      },
+      {
+        "method": "GET",
+        "url": "/pets?since=2024-01-01T00:00:00"
+      },
+      {
+        "method": "GET",
+        "url": "/pets",
+        "headers": {
+          "X-Request-Id": "not-a-uuid"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/pets?tags=a+b&tags=c%20d"
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "name": "Tom",
+          "extra": 1
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "tag": "dog"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "name": 7
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "content": "{",
+        "headers": {
+          "Content-Type": "application/json"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "content": "{\"name\": \"Tom\"}",
+        "headers": {
+          "Content-Type": "text/plain"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/pets"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/one"
+      }
+    ]
+  },
+  "pets-type-checking-default": {
+    "input": "pets.yaml",
+    "files": [
+      "type-checking/pyproject.toml"
+    ],
+    "services": "pets",
+    "backends": [
+      "pydantic_v2.BaseModel"
+    ],
+    "model": {
+      "formatters": [
+        "ruff-check",
+        "ruff-format"
+      ],
+      "settings_path": "type-checking"
+    }
+  },
+  "pets-type-checking-off": {
+    "input": "pets.yaml",
+    "files": [
+      "type-checking/pyproject.toml"
+    ],
+    "services": "pets",
+    "backends": [
+      "pydantic_v2.BaseModel"
+    ],
+    "model": {
+      "formatters": [
+        "ruff-check",
+        "ruff-format"
+      ],
+      "settings_path": "type-checking",
+      "use_type_checking_imports": false
+    }
+  },
+  "parameters": {
+    "input": "server-parameters.yaml",
+    "services": "parameters",
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/search"
+      },
+      {
+        "method": "GET",
+        "url": "/search",
+        "headers": {
+          "Cookie": "session=x"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/search",
+        "headers": {
+          "Cookie": "session=abc"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/search",
+        "headers": {
+          "Cookie": "session=a%20b%2Bc"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/search",
+        "headers": {
+          "Cookie": "session=50%off"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/search",
+        "headers": {
+          "Cookie": "session=\"a b\""
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/search",
+        "headers": {
+          "Cookie": "session=one; session=two"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/search",
+        "headers": {
+          "Cookie": "session=a;b"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/search?code=XY&filter%5Bname%5D=n&ids=1,2&blob=%7B%22a%22%3A1%7D&note=hi",
+        "headers": {
+          "Cookie": "session=abc",
+          "X-Ids": "3, 4"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/search?code=ab&ids=1,x&blob=%7B%22b%22%3A1%7D",
+        "headers": {
+          "Cookie": "session=abc"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/search?blob=%7B",
+        "headers": {
+          "Cookie": "session=abc"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/search?blob=%7B%22a%22%3A1%2C%22a%22%3A2%7D",
+        "headers": {
+          "Cookie": "session=abc"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/search?ids=1,%zz",
+        "headers": {
+          "Cookie": "session=abc"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/search?code=A&code=B",
+        "headers": {
+          "Cookie": "session=abc"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/search?filter%5Bname%5D=n&filter%5Bid%5D=1",
+        "headers": {
+          "Cookie": "session=abc"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/ratios?ratios=1&ratios=2.5"
+      },
+      {
+        "method": "GET",
+        "url": "/ratios?ratios=nan"
+      },
+      {
+        "method": "GET",
+        "url": "/ratios?ratios=inf"
+      },
+      {
+        "method": "GET",
+        "url": "/ratios?ratios=1&limits=3&limits=4"
+      },
+      {
+        "method": "GET",
+        "url": "/ratios?ratios=1&limits=0"
+      },
+      {
+        "method": "GET",
+        "url": "/sizes"
+      },
+      {
+        "method": "GET",
+        "url": "/sizes?size=3&words=x&words=y"
+      },
+      {
+        "method": "GET",
+        "url": "/sizes?cap=4"
+      },
+      {
+        "method": "GET",
+        "url": "/sizes?size=0"
+      },
+      {
+        "method": "GET",
+        "url": "/codes"
+      },
+      {
+        "method": "GET",
+        "url": "/codes",
+        "headers": {
+          "X-Codes": "1, 2"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/repeat/1/again/1"
+      },
+      {
+        "method": "GET",
+        "url": "/repeat/1/again/01"
+      },
+      {
+        "method": "GET",
+        "url": "/repeat/1/again/2"
+      },
+      {
+        "method": "GET",
+        "url": "/repeat/x/again/x"
+      },
+      {
+        "method": "GET",
+        "url": "/repeat/1/again/1",
+        "headers": {
+          "X-Without-Raw-Path": "1"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/repeat/1/again/1",
+        "headers": {
+          "X-Raw-Path": "/elsewhere"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/notes/7"
+      },
+      {
+        "method": "GET",
+        "url": "/notes/seven"
+      },
+      {
+        "method": "GET",
+        "url": "/files/a.txt"
+      },
+      {
+        "method": "GET",
+        "url": "/files/A.txt"
+      },
+      {
+        "method": "GET",
+        "url": "/men%C3%BC/tea"
+      },
+      {
+        "method": "GET",
+        "url": "/%6Den%c3%bc/tea"
+      },
+      {
+        "method": "GET",
+        "url": "/men%C3%BC/Tea"
+      },
+      {
+        "method": "GET",
+        "url": "/items/1?mode=1"
+      },
+      {
+        "method": "GET",
+        "url": "/items/2?mode=2&ratio=1.5&kind=b",
+        "headers": {
+          "X-Flag": "true"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/items/3"
+      },
+      {
+        "method": "GET",
+        "url": "/items/1?mode=3"
+      },
+      {
+        "method": "GET",
+        "url": "/items/1?ratio=2"
+      },
+      {
+        "method": "GET",
+        "url": "/items/1",
+        "headers": {
+          "X-Flag": "false"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/items/1?kind=c"
+      },
+      {
+        "method": "GET",
+        "url": "/items/1?tier=2"
+      },
+      {
+        "method": "GET",
+        "url": "/items/1?levels=1&levels=2"
+      },
+      {
+        "method": "GET",
+        "url": "/search?filter[name]=n&filter[unknown]=extra",
+        "headers": {
+          "Cookie": "session=abc"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/search?filter[name]=n&filter[id]=05",
+        "headers": {
+          "Cookie": "session=abc"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/search?filter[name]=n&filter[id]=%2B1",
+        "headers": {
+          "Cookie": "session=abc"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/search?filter[name]=n&filter[id]=1.0",
+        "headers": {
+          "Cookie": "session=abc"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/items/1?ratio=2.2"
+      },
+      {
+        "method": "GET",
+        "url": "/items/1?ratio=%EF%BC%92.%EF%BC%92"
+      },
+      {
+        "method": "GET",
+        "url": "/items/%D9%A1"
+      },
+      {
+        "method": "GET",
+        "url": "/items/1?levels=%EF%BC%91"
+      },
+      {
+        "method": "GET",
+        "url": "/notes/%D9%A7"
+      },
+      {
+        "method": "GET",
+        "url": "/items/1?ratio=1e999"
+      }
+    ],
+    "package_snapshots": []
+  },
+  "kinds": {
+    "input": "server-kinds.yaml",
+    "services": "kinds",
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/values?amount=12345678901234567890.123&step=0.25&ratio=0.5&level=2&mixed=5"
+      },
+      {
+        "method": "GET",
+        "url": "/values?amount=1.50&step=12345678901234567890.12&level=1&mixed=abc"
+      },
+      {
+        "method": "GET",
+        "url": "/values?amounts=12345678901234567890.123,1.50&steps=12345678901234567890.12,0.25&mixeds=5,abc&codes=AB,C&counts=1,2",
+        "headers": {
+          "X-Amounts": "12345678901234567890.123, 1.50"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values?filter%5Bprice%5D=12345678901234567890.123&filter%5Bcount%5D=3"
+      },
+      {
+        "method": "GET",
+        "url": "/values?ratio=2.2"
+      },
+      {
+        "method": "GET",
+        "url": "/values?amount=abc"
+      },
+      {
+        "method": "GET",
+        "url": "/values?amounts=1.50,abc"
+      },
+      {
+        "method": "GET",
+        "url": "/values?ratio=3.3"
+      },
+      {
+        "method": "GET",
+        "url": "/values?filter%5Bprice%5D=abc"
+      },
+      {
+        "method": "GET",
+        "url": "/values?codes=AB,c&counts=1,-2"
+      }
+    ],
+    "package_snapshots": []
+  },
+  "kinds-annotated": {
+    "input": "server-kinds.yaml",
+    "services": "kinds",
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/values?amount=12345678901234567890.123&step=0.25&ratio=0.5&level=2&mixed=5"
+      },
+      {
+        "method": "GET",
+        "url": "/values?amount=1.50&step=12345678901234567890.12&level=1&mixed=abc"
+      },
+      {
+        "method": "GET",
+        "url": "/values?amounts=12345678901234567890.123,1.50&steps=12345678901234567890.12,0.25&mixeds=5,abc&codes=AB,C&counts=1,2",
+        "headers": {
+          "X-Amounts": "12345678901234567890.123, 1.50"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values?filter%5Bprice%5D=12345678901234567890.123&filter%5Bcount%5D=3"
+      },
+      {
+        "method": "GET",
+        "url": "/values?ratio=2.2"
+      },
+      {
+        "method": "GET",
+        "url": "/values?amount=abc"
+      },
+      {
+        "method": "GET",
+        "url": "/values?amounts=1.50,abc"
+      },
+      {
+        "method": "GET",
+        "url": "/values?ratio=3.3"
+      },
+      {
+        "method": "GET",
+        "url": "/values?filter%5Bprice%5D=abc"
+      },
+      {
+        "method": "GET",
+        "url": "/values?codes=AB,c&counts=1,-2"
+      }
+    ],
+    "package_snapshots": [],
+    "model": {
+      "field_constraints": true,
+      "use_annotated": true
+    }
+  },
+  "kinds-decimal": {
+    "input": "server-kinds.yaml",
+    "services": "kinds",
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/values?amount=12345678901234567890.123&step=0.25&ratio=0.5&level=2&mixed=5"
+      },
+      {
+        "method": "GET",
+        "url": "/values?amount=1.50&step=12345678901234567890.12&level=1&mixed=abc"
+      },
+      {
+        "method": "GET",
+        "url": "/values?amounts=12345678901234567890.123,1.50&steps=12345678901234567890.12,0.25&mixeds=5,abc&codes=AB,C&counts=1,2",
+        "headers": {
+          "X-Amounts": "12345678901234567890.123, 1.50"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values?filter%5Bprice%5D=12345678901234567890.123&filter%5Bcount%5D=3"
+      },
+      {
+        "method": "GET",
+        "url": "/values?ratio=2.2"
+      },
+      {
+        "method": "GET",
+        "url": "/values?amount=abc"
+      },
+      {
+        "method": "GET",
+        "url": "/values?amounts=1.50,abc"
+      },
+      {
+        "method": "GET",
+        "url": "/values?ratio=3.3"
+      },
+      {
+        "method": "GET",
+        "url": "/values?filter%5Bprice%5D=abc"
+      },
+      {
+        "method": "GET",
+        "url": "/values?codes=AB,c&counts=1,-2"
+      }
+    ],
+    "package_snapshots": [],
+    "model": {
+      "use_decimal_for_multiple_of": true
+    }
+  },
+  "kinds-literal": {
+    "input": "server-kinds.yaml",
+    "services": "kinds",
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/values?amount=12345678901234567890.123&step=0.25&ratio=0.5&level=2&mixed=5"
+      },
+      {
+        "method": "GET",
+        "url": "/values?amount=1.50&step=12345678901234567890.12&level=1&mixed=abc"
+      },
+      {
+        "method": "GET",
+        "url": "/values?amounts=12345678901234567890.123,1.50&steps=12345678901234567890.12,0.25&mixeds=5,abc&codes=AB,C&counts=1,2",
+        "headers": {
+          "X-Amounts": "12345678901234567890.123, 1.50"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values?filter%5Bprice%5D=12345678901234567890.123&filter%5Bcount%5D=3"
+      },
+      {
+        "method": "GET",
+        "url": "/values?ratio=2.2"
+      },
+      {
+        "method": "GET",
+        "url": "/values?amount=abc"
+      },
+      {
+        "method": "GET",
+        "url": "/values?amounts=1.50,abc"
+      },
+      {
+        "method": "GET",
+        "url": "/values?ratio=3.3"
+      },
+      {
+        "method": "GET",
+        "url": "/values?filter%5Bprice%5D=abc"
+      },
+      {
+        "method": "GET",
+        "url": "/values?codes=AB,c&counts=1,-2"
+      }
+    ],
+    "package_snapshots": [],
+    "model": {
+      "enum_field_as_literal": "all"
+    }
+  },
+  "bodies": {
+    "input": "server-bodies.yaml",
+    "services": "bodies",
+    "config": {
+      "server_body_modes": {
+        "/paths/~1raw/post": "request"
+      },
+      "server_handler_modes": {
+        "/paths/~1raw/post": "async"
+      }
+    },
+    "requests": [
+      {
+        "method": "POST",
+        "url": "/items"
+      },
+      {
+        "method": "POST",
+        "url": "/items",
+        "json": {
+          "name": "a"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/items",
+        "json": {
+          "name": "a",
+          "extra": 1
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/items",
+        "content": "{",
+        "headers": {
+          "Content-Type": "application/json"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/items",
+        "content": "{}",
+        "headers": {
+          "Content-Type": "text/plain"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/items",
+        "content": "{}"
+      },
+      {
+        "method": "POST",
+        "url": "/items",
+        "content": "{}",
+        "headers": {
+          "Content-Type": "not a media type"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/accounts",
+        "json": {
+          "name": "a"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/accounts",
+        "json": {
+          "id": 1,
+          "name": "a"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/accounts"
+      },
+      {
+        "method": "POST",
+        "url": "/profiles",
+        "headers": {
+          "Content-Type": "application/json; profile=b"
+        },
+        "content": "{\"b\": \"x\"}"
+      },
+      {
+        "method": "POST",
+        "url": "/profiles",
+        "headers": {
+          "Content-Type": "application/json; profile=a"
+        },
+        "content": "{\"a\": 1}"
+      },
+      {
+        "method": "POST",
+        "url": "/profiles",
+        "headers": {
+          "Content-Type": "application/json; profile=a"
+        },
+        "content": "{\"b\": \"x\"}"
+      },
+      {
+        "method": "POST",
+        "url": "/profiles",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "content": "{\"a\": 2}"
+      },
+      {
+        "method": "POST",
+        "url": "/profiles",
+        "headers": {
+          "Content-Type": "application/json; profile=b"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/variants",
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "content": "{\"c\": true}"
+      },
+      {
+        "method": "POST",
+        "url": "/variants",
+        "headers": {
+          "Content-Type": "application/json; profile=v1"
+        },
+        "content": "{\"a\": 1}"
+      },
+      {
+        "method": "POST",
+        "url": "/variants",
+        "content": "tags=a&tags=b",
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded"
+        }
+      },
+      {
+        "method": "PUT",
+        "url": "/documents"
+      },
+      {
+        "method": "PUT",
+        "url": "/documents",
+        "content": "x",
+        "headers": {
+          "Content-Type": "text"
+        }
+      },
+      {
+        "method": "PUT",
+        "url": "/documents",
+        "json": {
+          "name": "a"
+        }
+      },
+      {
+        "method": "PUT",
+        "url": "/documents",
+        "content": "{\"name\": \"b\"}",
+        "headers": {
+          "Content-Type": "application/vnd.item+json"
+        }
+      },
+      {
+        "method": "PUT",
+        "url": "/documents",
+        "content": "hello",
+        "headers": {
+          "Content-Type": "text/markdown; charset=utf-8"
+        }
+      },
+      {
+        "method": "PUT",
+        "url": "/documents",
+        "content": "too long",
+        "headers": {
+          "Content-Type": "text/plain"
+        }
+      },
+      {
+        "method": "PUT",
+        "url": "/documents",
+        "content": "ÿ",
+        "headers": {
+          "Content-Type": "text/plain; charset=utf-8"
+        }
+      },
+      {
+        "method": "PUT",
+        "url": "/blobs",
+        "content": "raw bytes",
+        "headers": {
+          "Content-Type": "application/octet-stream"
+        }
+      },
+      {
+        "method": "PUT",
+        "url": "/archives",
+        "content": "hello",
+        "headers": {
+          "Content-Type": "text/plain"
+        }
+      },
+      {
+        "method": "PUT",
+        "url": "/archives",
+        "content": "too long",
+        "headers": {
+          "Content-Type": "text/plain"
+        }
+      },
+      {
+        "method": "PUT",
+        "url": "/archives",
+        "content": "PK",
+        "headers": {
+          "Content-Type": "application/zip"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/forms",
+        "data": {
+          "name": "a",
+          "tags": [
+            "x",
+            "y"
+          ],
+          "count": "2",
+          "other": "3"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/forms",
+        "data": {
+          "count": "two"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/forms",
+        "content": "name=a&name=b",
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/native-forms",
+        "data": {
+          "name": "a"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/uploads",
+        "files": {
+          "file": [
+            "a.txt",
+            "file body",
+            "text/plain"
+          ]
+        },
+        "data": {
+          "note": "n"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/checks",
+        "json": {
+          "code": "12",
+          "scores": [
+            1,
+            2
+          ]
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/checks",
+        "json": {
+          "code": "twelve"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/checks",
+        "json": {
+          "scores": [
+            1,
+            -1
+          ]
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/checks",
+        "content": "{\"scores\": [11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111]}",
+        "headers": {
+          "Content-Type": "application/json"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/items",
+        "content": "null",
+        "headers": {
+          "Content-Type": "application/json"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/notes"
+      },
+      {
+        "method": "POST",
+        "url": "/notes",
+        "content": "null",
+        "headers": {
+          "Content-Type": "application/json"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/notes",
+        "json": {
+          "name": "a"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/raw",
+        "json": {
+          "any": "thing"
+        }
+      }
+    ],
+    "package_snapshots": []
+  },
+  "results": {
+    "input": "server-results.yaml",
+    "services": "results",
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/results?case=bare"
+      },
+      {
+        "method": "GET",
+        "url": "/results?case=headers",
+        "show_headers": [
+          "x-rate",
+          "x-tag",
+          "x-other",
+          "location"
+        ]
+      },
+      {
+        "method": "GET",
+        "url": "/results?case=created",
+        "show_headers": [
+          "x-rate",
+          "x-tag",
+          "x-other",
+          "location"
+        ]
+      },
+      {
+        "method": "GET",
+        "url": "/results?case=no-content"
+      },
+      {
+        "method": "GET",
+        "url": "/results?case=no-content-body"
+      },
+      {
+        "method": "GET",
+        "url": "/results?case=range"
+      },
+      {
+        "method": "GET",
+        "url": "/results?case=invalid-body"
+      },
+      {
+        "method": "GET",
+        "url": "/results?case=client-error"
+      },
+      {
+        "method": "GET",
+        "url": "/results?case=client-error-number"
+      },
+      {
+        "method": "GET",
+        "url": "/results?case=problem"
+      },
+      {
+        "method": "GET",
+        "url": "/results?case=missing-body"
+      },
+      {
+        "method": "GET",
+        "url": "/results?case=response"
+      },
+      {
+        "method": "GET",
+        "url": "/results?case=response-html"
+      },
+      {
+        "method": "HEAD",
+        "url": "/results?case=head-empty"
+      },
+      {
+        "method": "HEAD",
+        "url": "/results?case=head-body"
+      },
+      {
+        "method": "HEAD",
+        "url": "/results?case=head-bare"
+      },
+      {
+        "method": "HEAD",
+        "url": "/results?case=head-none"
+      },
+      {
+        "method": "GET",
+        "url": "/plain?case=text"
+      },
+      {
+        "method": "GET",
+        "url": "/plain?case=too-long"
+      },
+      {
+        "method": "GET",
+        "url": "/plain?case=undeclared"
+      },
+      {
+        "method": "GET",
+        "url": "/plain?case=response-undeclared"
+      },
+      {
+        "method": "GET",
+        "url": "/nothing?case=value"
+      },
+      {
+        "method": "GET",
+        "url": "/nothing?case=anything"
+      },
+      {
+        "method": "POST",
+        "url": "/empty?case=none"
+      },
+      {
+        "method": "POST",
+        "url": "/empty?case=value"
+      },
+      {
+        "method": "GET",
+        "url": "/latin?case=latin"
+      },
+      {
+        "method": "GET",
+        "url": "/latin?case=euro"
+      },
+      {
+        "method": "GET",
+        "url": "/blob?case=blob"
+      }
+    ],
+    "package_snapshots": []
+  },
+  "security": {
+    "input": "server-security.yaml",
+    "services": "security",
+    "config": {
+      "server_handler_modes": {
+        "/paths/~1maybe/get": "async",
+        "/paths/~1custom/get": "async"
+      }
+    },
+    "apps": [
+      {
+        "set": "default",
+        "openapi": [
+          "info",
+          "servers",
+          "tags"
+        ],
+        "requests": [
+          {
+            "method": "GET",
+            "url": "/pets",
+            "show_headers": [
+              "www-authenticate"
+            ]
+          },
+          {
+            "method": "GET",
+            "url": "/pets",
+            "headers": {
+              "X-API-Key": "abc"
+            }
+          },
+          {
+            "method": "GET",
+            "url": "/pets",
+            "headers": {
+              "X-API-Key": "denied"
+            }
+          },
+          {
+            "method": "GET",
+            "url": "/pets",
+            "headers": [
+              [
+                "X-API-Key",
+                "a"
+              ],
+              [
+                "X-API-Key",
+                "b"
+              ]
+            ]
+          },
+          {
+            "method": "GET",
+            "url": "/pets",
+            "headers": [
+              [
+                "X-API-Key",
+                "a"
+              ],
+              [
+                "X-API-Key",
+                "a"
+              ]
+            ]
+          },
+          {
+            "method": "GET",
+            "url": "/pets",
+            "headers": {
+              "X-API-Key": ""
+            },
+            "show_headers": [
+              "www-authenticate"
+            ]
+          },
+          {
+            "method": "GET",
+            "url": "/public"
+          },
+          {
+            "method": "GET",
+            "url": "/maybe"
+          },
+          {
+            "method": "GET",
+            "url": "/maybe?principal=x",
+            "headers": {
+              "Authorization": "Bearer tok"
+            }
+          },
+          {
+            "method": "GET",
+            "url": "/maybe",
+            "headers": {
+              "Authorization": "Bearer "
+            },
+            "show_headers": [
+              "www-authenticate"
+            ]
+          },
+          {
+            "method": "GET",
+            "url": "/maybe",
+            "headers": {
+              "Authorization": "Basic dXNlcjpwdw=="
+            }
+          },
+          {
+            "method": "PUT",
+            "url": "/pets/1",
+            "headers": {
+              "Authorization": "Bearer tok"
+            }
+          },
+          {
+            "method": "PUT",
+            "url": "/pets/1?key=k",
+            "headers": {
+              "Authorization": "Basic dXNlcjpwdw=="
+            }
+          },
+          {
+            "method": "PUT",
+            "url": "/pets/1?key=k",
+            "show_headers": [
+              "www-authenticate"
+            ]
+          },
+          {
+            "method": "PUT",
+            "url": "/pets/1",
+            "headers": {
+              "Authorization": "Basic !!!"
+            },
+            "show_headers": [
+              "www-authenticate"
+            ]
+          },
+          {
+            "method": "PUT",
+            "url": "/pets/1",
+            "headers": [
+              [
+                "Authorization",
+                "Bearer a"
+              ],
+              [
+                "Authorization",
+                "Basic dXNlcjpwdw=="
+              ]
+            ]
+          },
+          {
+            "method": "GET",
+            "url": "/session",
+            "headers": {
+              "Cookie": "session=s1"
+            }
+          },
+          {
+            "method": "GET",
+            "url": "/session",
+            "headers": {
+              "Cookie": "session=a; session=b"
+            }
+          },
+          {
+            "method": "GET",
+            "url": "/session",
+            "headers": {
+              "Authorization": "Bearer idt",
+              "X-API-Key": "abc"
+            }
+          },
+          {
+            "method": "GET",
+            "url": "/custom",
+            "headers": {
+              "Authorization": "Digest d1"
+            }
+          },
+          {
+            "method": "GET",
+            "url": "/custom",
+            "headers": {
+              "X-Client-Cert": "CN=client"
+            }
+          },
+          {
+            "method": "GET",
+            "url": "/custom",
+            "show_headers": [
+              "www-authenticate"
+            ]
+          }
+        ]
+      },
+      {
+        "set": "async",
+        "openapi": [
+          "info",
+          "servers",
+          "tags"
+        ],
+        "requests": [
+          {
+            "method": "GET",
+            "url": "/api/pets",
+            "headers": {
+              "X-API-Key": "abc"
+            },
+            "show_headers": [
+              "content-encoding"
+            ]
+          },
+          {
+            "method": "GET",
+            "url": "/pets",
+            "headers": {
+              "X-API-Key": "abc"
+            }
+          },
+          {
+            "method": "GET",
+            "url": "/api/public"
+          }
+        ]
+      },
+      {
+        "set": "awaitables",
+        "requests": [
+          {
+            "method": "GET",
+            "url": "/public"
+          },
+          {
+            "method": "PUT",
+            "url": "/pets/1",
+            "headers": {
+              "Authorization": "Bearer tok"
+            }
+          }
+        ]
+      },
+      {
+        "set": "authorize-lambda",
+        "requests": [
+          {
+            "method": "GET",
+            "url": "/pets",
+            "headers": {
+              "X-API-Key": "abc"
+            }
+          },
+          {
+            "method": "GET",
+            "url": "/pets",
+            "headers": {
+              "X-API-Key": "denied"
+            }
+          }
+        ]
+      },
+      {
+        "set": "authorize-wrapped",
+        "requests": [
+          {
+            "method": "GET",
+            "url": "/pets",
+            "headers": {
+              "X-API-Key": "abc"
+            }
+          },
+          {
+            "method": "GET",
+            "url": "/pets",
+            "headers": {
+              "X-API-Key": "denied"
+            }
+          }
+        ]
+      },
+      {
+        "set": "authorize-partial",
+        "requests": [
+          {
+            "method": "GET",
+            "url": "/pets",
+            "headers": {
+              "X-API-Key": "abc"
+            }
+          },
+          {
+            "method": "GET",
+            "url": "/pets",
+            "headers": {
+              "X-API-Key": "denied"
+            }
+          }
+        ]
+      }
+    ],
+    "package_snapshots": []
+  },
+  "security-templates": {
+    "input": "server-security.yaml",
+    "services": "security",
+    "config": {
+      "server_handler_modes": {
+        "/paths/~1maybe/get": "async",
+        "/paths/~1custom/get": "async"
+      }
+    },
+    "model": {
+      "custom_template_dir": "templates/security"
+    },
+    "apps": [
+      {
+        "set": "default",
+        "requests": [
+          {
+            "method": "GET",
+            "url": "/maybe",
+            "show_headers": [
+              "www-authenticate"
+            ]
+          },
+          {
+            "method": "GET",
+            "url": "/pets",
+            "headers": {
+              "X-API-Key": "abc"
+            }
+          }
+        ]
+      }
+    ],
+    "package_snapshots": []
+  },
+  "customized": {
+    "input": "services.yaml",
+    "services": "customized",
+    "config": {
+      "server_handler_mode": "async",
+      "server_operation_names": {
+        "/paths/~1pets/get": "handle_list_pets",
+        "/paths/~1pets~1{petId}/delete": "handle_delete_pet",
+        "/paths/~1pets~1{petId}~1moves/post": "handle_move_pet",
+        "/paths/~1health/get": "handle_get_health"
+      }
+    },
+    "model": {
+      "custom_template_dir": "templates/custom",
+      "extra_template_data": {
+        "#all#": {
+          "support": "Ask the platform team before changing the API document; regenerate the package instead of editing it.",
+          "team": "the platform team"
+        }
+      }
+    },
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/pets"
+      },
+      {
+        "method": "DELETE",
+        "url": "/pets/1"
+      },
+      {
+        "method": "GET",
+        "url": "/health"
+      }
+    ],
+    "package_snapshots": []
+  },
+  "variants": {
+    "input": "server-variants.yaml",
+    "files": [
+      "server-variants-shared.yaml"
+    ],
+    "services": "variants",
+    "backends": [
+      "pydantic_v2.BaseModel",
+      "pydantic_v2.dataclass"
+    ],
+    "requests": [
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "name": "Rex",
+          "secret": "s",
+          "owner": {
+            "name": "Ann",
+            "email": "a@example.com"
+          }
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "id": 5,
+          "name": "Rex"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "name": ""
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/0"
+      },
+      {
+        "method": "GET",
+        "url": "/owners"
+      }
+    ],
+    "package_snapshots": []
+  },
+  "variants-request-response": {
+    "input": "server-variants.yaml",
+    "files": [
+      "server-variants-shared.yaml"
+    ],
+    "services": "variants",
+    "backends": [
+      "pydantic_v2.BaseModel",
+      "pydantic_v2.dataclass"
+    ],
+    "requests": [
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "name": "Rex",
+          "secret": "s",
+          "owner": {
+            "name": "Ann",
+            "email": "a@example.com"
+          }
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "id": 5,
+          "name": "Rex"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "name": ""
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/0"
+      },
+      {
+        "method": "GET",
+        "url": "/owners"
+      }
+    ],
+    "model": {
+      "read_only_write_only_model_type": "request-response"
+    },
+    "package_snapshots": []
+  },
+  "variants-modular": {
+    "input": "server-variants.yaml",
+    "files": [
+      "server-variants-shared.yaml"
+    ],
+    "services": "variants",
+    "backends": [
+      "pydantic_v2.BaseModel",
+      "pydantic_v2.dataclass"
+    ],
+    "requests": [
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "name": "Rex",
+          "secret": "s",
+          "owner": {
+            "name": "Ann",
+            "email": "a@example.com"
+          }
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "id": 5,
+          "name": "Rex"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "name": ""
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/0"
+      },
+      {
+        "method": "GET",
+        "url": "/owners"
+      }
+    ],
+    "modular": true,
+    "model": {
+      "module_split_mode": "single"
+    },
+    "package_snapshots": []
+  },
+  "variants-reuse": {
+    "input": "server-variants.yaml",
+    "files": [
+      "server-variants-shared.yaml"
+    ],
+    "services": "variants",
+    "backends": [
+      "pydantic_v2.BaseModel",
+      "pydantic_v2.dataclass"
+    ],
+    "requests": [
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "name": "Rex",
+          "secret": "s",
+          "owner": {
+            "name": "Ann",
+            "email": "a@example.com"
+          }
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "id": 5,
+          "name": "Rex"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/pets",
+        "json": {
+          "name": ""
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/0"
+      },
+      {
+        "method": "GET",
+        "url": "/owners"
+      }
+    ],
+    "model": {
+      "reuse_model": true,
+      "collapse_root_models": true
+    },
+    "package_snapshots": []
+  },
+  "forms": {
+    "input": "server-forms.yaml",
+    "services": "forms",
+    "backends": [
+      "pydantic_v2.BaseModel",
+      "pydantic_v2.dataclass"
+    ],
+    "requests": [
+      {
+        "method": "POST",
+        "url": "/forms",
+        "data": {
+          "name": "a"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/forms",
+        "data": {
+          "name": "a",
+          "count": "2",
+          "tags": [
+            "x",
+            "y"
+          ]
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/forms",
+        "content": "name=a+b%20c&count=3",
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/forms",
+        "content": "name=a&name=b&tags=x&tags=x",
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/forms",
+        "content": "name=&count=",
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/forms",
+        "content": "name=a&count=",
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/forms",
+        "data": {
+          "name": "a",
+          "count": "two"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/forms",
+        "data": {
+          "count": "2"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/forms",
+        "content": "name=%ZZ",
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/forms",
+        "json": {
+          "name": "a"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/notes",
+        "data": {
+          "a": "1",
+          "b": "two"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/uploads",
+        "files": [
+          [
+            "file",
+            "a.txt",
+            "file body",
+            "text/plain"
+          ]
+        ],
+        "data": {
+          "note": "n"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/uploads",
+        "files": [
+          [
+            "file",
+            "a.bin",
+            "data",
+            "application/octet-stream"
+          ]
+        ]
+      },
+      {
+        "method": "POST",
+        "url": "/uploads",
+        "files": [
+          [
+            "file",
+            "a.txt",
+            "first",
+            "text/plain"
+          ],
+          [
+            "file",
+            "b.txt",
+            "second",
+            "text/plain"
+          ]
+        ]
+      },
+      {
+        "method": "POST",
+        "url": "/uploads",
+        "files": [
+          [
+            "file",
+            null,
+            "no name",
+            "text/plain"
+          ]
+        ]
+      },
+      {
+        "method": "POST",
+        "url": "/uploads",
+        "files": [
+          [
+            "file",
+            "a.txt",
+            "body",
+            "text/plain"
+          ],
+          [
+            "note",
+            "note.txt",
+            "note body",
+            "text/plain"
+          ]
+        ]
+      },
+      {
+        "method": "POST",
+        "url": "/uploads",
+        "data": {
+          "note": "n"
+        },
+        "files": [
+          [
+            "other",
+            "a.txt",
+            "body",
+            "text/plain"
+          ]
+        ]
+      },
+      {
+        "method": "POST",
+        "url": "/uploads",
+        "data": {
+          "file": "not a file"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/uploads",
+        "content": "--x\r\nbroken",
+        "headers": {
+          "Content-Type": "multipart/form-data; boundary=x"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/batches",
+        "files": [
+          [
+            "files",
+            "a.txt",
+            "one",
+            "text/plain"
+          ],
+          [
+            "files",
+            "b.txt",
+            "two",
+            "text/plain"
+          ]
+        ],
+        "data": {
+          "label": "l"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/batches",
+        "files": [
+          [
+            "files",
+            "a.txt",
+            "one",
+            "text/plain"
+          ]
+        ]
+      },
+      {
+        "method": "POST",
+        "url": "/batches",
+        "data": {
+          "label": "l"
+        },
+        "files": [
+          [
+            "other",
+            "a.txt",
+            "body",
+            "text/plain"
+          ]
+        ]
+      }
+    ],
+    "package_snapshots": []
+  },
+  "responses": {
+    "input": "server-responses.yaml",
+    "services": "responses",
+    "backends": [
+      "pydantic_v2.BaseModel",
+      "pydantic_v2.dataclass"
+    ],
+    "apps": [
+      {
+        "set": "standard",
+        "requests": [
+          {
+            "method": "GET",
+            "url": "/greetings"
+          },
+          {
+            "method": "GET",
+            "url": "/greetings?mode=result"
+          },
+          {
+            "method": "GET",
+            "url": "/greetings?mode=other"
+          },
+          {
+            "method": "HEAD",
+            "url": "/greetings"
+          },
+          {
+            "method": "GET",
+            "url": "/pets/1"
+          },
+          {
+            "method": "GET",
+            "url": "/pets/2"
+          },
+          {
+            "method": "GET",
+            "url": "/documents/1"
+          },
+          {
+            "method": "GET",
+            "url": "/documents/2"
+          },
+          {
+            "openapi": [
+              "/greetings",
+              "get",
+              "200"
+            ]
+          },
+          {
+            "openapi": [
+              "/pets/{id}",
+              "get",
+              "404"
+            ]
+          }
+        ]
+      },
+      {
+        "set": "plain",
+        "requests": [
+          {
+            "method": "GET",
+            "url": "/greetings"
+          },
+          {
+            "method": "GET",
+            "url": "/greetings?mode=result"
+          },
+          {
+            "method": "GET",
+            "url": "/greetings?mode=other"
+          },
+          {
+            "method": "HEAD",
+            "url": "/greetings"
+          },
+          {
+            "method": "GET",
+            "url": "/pets/1"
+          },
+          {
+            "method": "GET",
+            "url": "/pets/2"
+          },
+          {
+            "openapi": [
+              "/greetings",
+              "get",
+              "200"
+            ]
+          },
+          {
+            "openapi": [
+              "/pets/{id}",
+              "get",
+              "404"
+            ]
+          }
+        ]
+      },
+      {
+        "set": "included",
+        "requests": [
+          {
+            "method": "GET",
+            "url": "/greetings"
+          },
+          {
+            "method": "GET",
+            "url": "/greetings?mode=result"
+          },
+          {
+            "method": "GET",
+            "url": "/greetings?mode=other"
+          },
+          {
+            "method": "HEAD",
+            "url": "/greetings"
+          },
+          {
+            "method": "GET",
+            "url": "/pets/1"
+          },
+          {
+            "method": "GET",
+            "url": "/pets/2"
+          },
+          {
+            "openapi": [
+              "/greetings",
+              "get",
+              "200"
+            ]
+          },
+          {
+            "openapi": [
+              "/pets/{id}",
+              "get",
+              "404"
+            ]
+          }
+        ]
+      }
+    ],
+    "package_snapshots": []
+  },
+  "unbound": {
+    "input": "unbound.yaml",
+    "services": "unbound",
+    "backends": [
+      "pydantic_v2.BaseModel",
+      "pydantic_v2.dataclass"
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/values/7"
+      },
+      {
+        "method": "GET",
+        "url": "/values/42?at=2026-10-02T12%3A34%3A56Z&tags=alpha&tags=two%20words"
+      },
+      {
+        "method": "GET",
+        "url": "/values/invalid"
+      },
+      {
+        "method": "GET",
+        "url": "/values/0"
+      },
+      {
+        "method": "GET",
+        "url": "/values/7?at=invalid"
+      }
+    ],
+    "package_snapshots": []
+  },
+  "strict": {
+    "input": "server-strict.yaml",
+    "services": "strict",
+    "model": {
+      "strict_types": [
+        "int",
+        "float",
+        "bool",
+        "str"
+      ]
+    },
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/values/5"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?count=12&bounded=3&score=2.5&flag=true&name=n&label=ab&counts=1&counts=2&names=a&names=b&page=2&size=3&maybe=4",
+        "headers": {
+          "X-Trace": "7",
+          "X-Tag": "t"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values/x"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?count=x"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?count=1.5"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?bounded=-1"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?score=x"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?flag=maybe"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?label=a"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?counts=1&counts=x"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?page=x"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?size=0"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?maybe=x"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5",
+        "headers": {
+          "X-Trace": "x"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?blob=abc&size=3"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5",
+        "headers": {
+          "Cookie": "visits=3"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values/5",
+        "headers": {
+          "Cookie": "visits=%33"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values/5",
+        "headers": {
+          "Cookie": "visits=1; visits=2"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?count=1&count=2"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5",
+        "headers": [
+          [
+            "X-Trace",
+            "1"
+          ],
+          [
+            "X-Trace",
+            "2"
+          ]
+        ]
+      },
+      {
+        "method": "POST",
+        "url": "/forms",
+        "content": "count=2&score=2.5&flag=true&name=n&counts=1&counts=2",
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/forms",
+        "content": "count=1&count=3",
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/forms",
+        "content": "count=x&flag=maybe&counts=1&counts=y",
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/uploads",
+        "files": {
+          "file": [
+            "a.txt",
+            "file body",
+            "text/plain"
+          ]
+        },
+        "data": {
+          "count": "2",
+          "score": "2.5",
+          "flag": "true",
+          "note": "n",
+          "counts": [
+            "1",
+            "2"
+          ]
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/uploads",
+        "files": {
+          "file": [
+            "a.txt",
+            "file body",
+            "text/plain"
+          ]
+        },
+        "data": {
+          "count": [
+            "1",
+            "3"
+          ]
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/uploads",
+        "files": {
+          "file": [
+            "a.txt",
+            "file body",
+            "text/plain"
+          ]
+        },
+        "data": {
+          "count": "x",
+          "flag": "maybe"
+        }
+      }
+    ],
+    "package_snapshots": [
+      "pydantic_v2.BaseModel"
+    ],
+    "backends": [
+      "pydantic_v2.BaseModel",
+      "pydantic_v2.dataclass"
+    ]
+  },
+  "strict-annotated": {
+    "input": "server-strict.yaml",
+    "services": "strict",
+    "model": {
+      "strict_types": [
+        "int",
+        "float",
+        "bool",
+        "str"
+      ],
+      "use_annotated": true,
+      "field_constraints": true
+    },
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/values/5"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?count=12&bounded=3&score=2.5&flag=true&name=n&label=ab&counts=1&counts=2&names=a&names=b&page=2&size=3&maybe=4",
+        "headers": {
+          "X-Trace": "7",
+          "X-Tag": "t"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values/x"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?count=x"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?count=1.5"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?bounded=-1"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?score=x"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?flag=maybe"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?label=a"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?counts=1&counts=x"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?page=x"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?size=0"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?maybe=x"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5",
+        "headers": {
+          "X-Trace": "x"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?blob=abc&size=3"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5",
+        "headers": {
+          "Cookie": "visits=3"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values/5",
+        "headers": {
+          "Cookie": "visits=%33"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values/5",
+        "headers": {
+          "Cookie": "visits=1; visits=2"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?count=1&count=2"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5",
+        "headers": [
+          [
+            "X-Trace",
+            "1"
+          ],
+          [
+            "X-Trace",
+            "2"
+          ]
+        ]
+      },
+      {
+        "method": "POST",
+        "url": "/forms",
+        "content": "count=2&score=2.5&flag=true&name=n&counts=1&counts=2",
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/forms",
+        "content": "count=1&count=3",
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/forms",
+        "content": "count=x&flag=maybe&counts=1&counts=y",
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/uploads",
+        "files": {
+          "file": [
+            "a.txt",
+            "file body",
+            "text/plain"
+          ]
+        },
+        "data": {
+          "count": "2",
+          "score": "2.5",
+          "flag": "true",
+          "note": "n",
+          "counts": [
+            "1",
+            "2"
+          ]
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/uploads",
+        "files": {
+          "file": [
+            "a.txt",
+            "file body",
+            "text/plain"
+          ]
+        },
+        "data": {
+          "count": [
+            "1",
+            "3"
+          ]
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/uploads",
+        "files": {
+          "file": [
+            "a.txt",
+            "file body",
+            "text/plain"
+          ]
+        },
+        "data": {
+          "count": "x",
+          "flag": "maybe"
+        }
+      }
+    ],
+    "backends": [
+      "pydantic_v2.BaseModel",
+      "pydantic_v2.dataclass"
+    ],
+    "package_snapshots": []
+  },
+  "strict-preset": {
+    "input": "server-strict.yaml",
+    "services": "strict",
+    "model": {
+      "strict_types": [
+        "int",
+        "float",
+        "bool",
+        "str"
+      ],
+      "preset": "standard-py312-20260909",
+      "target_python_version": "3.12"
+    },
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/values/5"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?count=12&bounded=3&score=2.5&flag=true&name=n&label=ab&counts=1&counts=2&names=a&names=b&page=2&size=3&maybe=4",
+        "headers": {
+          "X-Trace": "7",
+          "X-Tag": "t"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values/x"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?count=x"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?count=1.5"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?bounded=-1"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?score=x"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?flag=maybe"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?label=a"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?counts=1&counts=x"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?page=x"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?size=0"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?maybe=x"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5",
+        "headers": {
+          "X-Trace": "x"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?blob=abc&size=3"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5",
+        "headers": {
+          "Cookie": "visits=3"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values/5",
+        "headers": {
+          "Cookie": "visits=%33"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values/5",
+        "headers": {
+          "Cookie": "visits=1; visits=2"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values/5?count=1&count=2"
+      },
+      {
+        "method": "GET",
+        "url": "/values/5",
+        "headers": [
+          [
+            "X-Trace",
+            "1"
+          ],
+          [
+            "X-Trace",
+            "2"
+          ]
+        ]
+      },
+      {
+        "method": "POST",
+        "url": "/forms",
+        "content": "count=2&score=2.5&flag=true&name=n&counts=1&counts=2",
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/forms",
+        "content": "count=1&count=3",
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/forms",
+        "content": "count=x&flag=maybe&counts=1&counts=y",
+        "headers": {
+          "Content-Type": "application/x-www-form-urlencoded"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/uploads",
+        "files": {
+          "file": [
+            "a.txt",
+            "file body",
+            "text/plain"
+          ]
+        },
+        "data": {
+          "count": "2",
+          "score": "2.5",
+          "flag": "true",
+          "note": "n",
+          "counts": [
+            "1",
+            "2"
+          ]
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/uploads",
+        "files": {
+          "file": [
+            "a.txt",
+            "file body",
+            "text/plain"
+          ]
+        },
+        "data": {
+          "count": [
+            "1",
+            "3"
+          ]
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/uploads",
+        "files": {
+          "file": [
+            "a.txt",
+            "file body",
+            "text/plain"
+          ]
+        },
+        "data": {
+          "count": "x",
+          "flag": "maybe"
+        }
+      }
+    ],
+    "package_snapshots": []
+  },
+  "defaults": {
+    "input": "server-defaults.yaml",
+    "services": "defaults",
+    "backends": [
+      "pydantic_v2.BaseModel",
+      "pydantic_v2.dataclass"
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/values"
+      },
+      {
+        "method": "GET",
+        "url": "/values?depth=5&size=3&bounded=4&page=2&words=x&words=y&tags=t&labels=l&rows=1&rows=2&marks=m&notes=n&extras=e&color=blue&tone=red&shade=light&colors=blue&colors=red&sized=4",
+        "headers": {
+          "X-Level": "6",
+          "X-Colors": "red,blue"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values?depth=-1&size=0&bounded=-1"
+      },
+      {
+        "method": "GET",
+        "url": "/values?words=&tags="
+      }
+    ],
+    "package_snapshots": [
+      "pydantic_v2.BaseModel"
+    ]
+  },
+  "defaults-annotated": {
+    "input": "server-defaults.yaml",
+    "services": "defaults",
+    "backends": [
+      "pydantic_v2.BaseModel",
+      "pydantic_v2.dataclass"
+    ],
+    "model": {
+      "use_annotated": true,
+      "field_constraints": true
+    },
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/values"
+      },
+      {
+        "method": "GET",
+        "url": "/values?depth=5&size=3&bounded=4&page=2&words=x&words=y&tags=t&labels=l&rows=1&rows=2&marks=m&notes=n&extras=e&color=blue&tone=red&shade=light&colors=blue&colors=red&sized=4",
+        "headers": {
+          "X-Level": "6",
+          "X-Colors": "red,blue"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values?depth=-1&size=0&bounded=-1"
+      },
+      {
+        "method": "GET",
+        "url": "/values?words=&tags="
+      }
+    ],
+    "package_snapshots": []
+  },
+  "defaults-preset": {
+    "input": "server-defaults.yaml",
+    "services": "defaults",
+    "model": {
+      "preset": "standard-py312-20260909",
+      "target_python_version": "3.12"
+    },
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/values"
+      },
+      {
+        "method": "GET",
+        "url": "/values?depth=5&size=3&bounded=4&page=2&words=x&words=y&tags=t&labels=l&rows=1&rows=2&marks=m&notes=n&extras=e&color=blue&tone=red&shade=light&colors=blue&colors=red&sized=4",
+        "headers": {
+          "X-Level": "6",
+          "X-Colors": "red,blue"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/values?depth=-1&size=0&bounded=-1"
+      },
+      {
+        "method": "GET",
+        "url": "/values?words=&tags="
+      }
+    ],
+    "package_snapshots": []
+  },
+  "locals": {
+    "input": "server-locals.yaml",
+    "services": "locals",
+    "apps": [
+      {
+        "set": "default",
+        "requests": [
+          {
+            "method": "GET",
+            "url": "/router?wiring=w&router_handler=h&router_principal=p&router_authorize=a&api_key=k",
+            "headers": {
+              "X-API-Key": "abc",
+              "Cookie": "parameters=c"
+            }
+          },
+          {
+            "method": "GET",
+            "url": "/router"
+          },
+          {
+            "method": "GET",
+            "url": "/wiring?router=r&contract=c&dispatch=d&checked=k",
+            "headers": {
+              "Cookie": "wiring_handler=h"
+            }
+          },
+          {
+            "method": "GET",
+            "url": "/security?security=s&authenticate_handler=h",
+            "headers": {
+              "X-API-Key": "abc"
+            }
+          }
+        ]
+      }
+    ],
+    "package_snapshots": [
+      "pydantic_v2.BaseModel"
+    ]
+  },
+  "naming": {
+    "input": "naming.yaml",
+    "services": "naming",
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/items/1?itemId=2&page[size]=10&2fa=t&class=c&request=r&body=b&self=s&itemId_1=5",
+        "headers": {
+          "itemId": "3",
+          "X-Request-Id": "rid",
+          "Cookie": "sessionId=sid"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/items?name=q",
+        "json": {
+          "name": "n",
+          "itemCount": 2
+        }
+      },
+      {
+        "method": "DELETE",
+        "url": "/items/4/tags"
+      },
+      {
+        "method": "GET",
+        "url": "/x1"
+      },
+      {
+        "method": "GET",
+        "url": "/x_1"
+      },
+      {
+        "method": "GET",
+        "url": "/health"
+      }
+    ],
+    "package_snapshots": []
+  },
+  "naming-snake": {
+    "input": "naming.yaml",
+    "services": "naming",
+    "model": {
+      "snake_case_field": true
+    },
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/items/1?itemId=2&page[size]=10&2fa=t&class=c&request=r&body=b&self=s&itemId_1=5",
+        "headers": {
+          "itemId": "3",
+          "X-Request-Id": "rid",
+          "Cookie": "sessionId=sid"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/items?name=q",
+        "json": {
+          "name": "n",
+          "itemCount": 2
+        }
+      },
+      {
+        "method": "DELETE",
+        "url": "/items/4/tags"
+      },
+      {
+        "method": "GET",
+        "url": "/x1"
+      },
+      {
+        "method": "GET",
+        "url": "/x_1"
+      },
+      {
+        "method": "GET",
+        "url": "/health"
+      }
+    ],
+    "package_snapshots": []
+  },
+  "naming-parent-prefixed": {
+    "input": "naming.yaml",
+    "services": "naming",
+    "model": {
+      "naming_strategy": "parent-prefixed"
+    },
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/items/1?itemId=2&page[size]=10&2fa=t&class=c&request=r&body=b&self=s&itemId_1=5",
+        "headers": {
+          "itemId": "3",
+          "X-Request-Id": "rid",
+          "Cookie": "sessionId=sid"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/items?name=q",
+        "json": {
+          "name": "n",
+          "itemCount": 2
+        }
+      },
+      {
+        "method": "DELETE",
+        "url": "/items/4/tags"
+      },
+      {
+        "method": "GET",
+        "url": "/x1"
+      },
+      {
+        "method": "GET",
+        "url": "/x_1"
+      },
+      {
+        "method": "GET",
+        "url": "/health"
+      }
+    ],
+    "package_snapshots": []
+  },
+  "naming-full-path": {
+    "input": "naming.yaml",
+    "services": "naming",
+    "model": {
+      "naming_strategy": "full-path"
+    },
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/items/1?itemId=2&page[size]=10&2fa=t&class=c&request=r&body=b&self=s&itemId_1=5",
+        "headers": {
+          "itemId": "3",
+          "X-Request-Id": "rid",
+          "Cookie": "sessionId=sid"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/items?name=q",
+        "json": {
+          "name": "n",
+          "itemCount": 2
+        }
+      },
+      {
+        "method": "DELETE",
+        "url": "/items/4/tags"
+      },
+      {
+        "method": "GET",
+        "url": "/x1"
+      },
+      {
+        "method": "GET",
+        "url": "/x_1"
+      },
+      {
+        "method": "GET",
+        "url": "/health"
+      }
+    ],
+    "package_snapshots": []
+  },
+  "naming-primary-first": {
+    "input": "naming-refs.yaml",
+    "files": [
+      "naming-refs-shared.yaml"
+    ],
+    "services": "naming",
+    "model": {
+      "naming_strategy": "primary-first"
+    },
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/items/1?cursor=q",
+        "headers": {
+          "cursor": "h"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/items?limit=2",
+        "headers": {
+          "limit": "1"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/shared?limit=3"
+      }
+    ],
+    "package_snapshots": []
+  },
+  "unauthorized": {
+    "input": "server-security.yaml",
+    "services": "unauthorized",
+    "model": {
+      "custom_template_dir": "templates/unauthorized"
+    },
+    "apps": [],
+    "package_snapshots": []
+  },
+  "errors": {
+    "input": "server-errors.yaml",
+    "services": "errors",
+    "apps": [
+      {
+        "set": "default",
+        "requests": [
+          {
+            "method": "POST",
+            "url": "/accounts/1?limit=5",
+            "headers": {
+              "X-Token": "long-token",
+              "Cookie": "session=long-session"
+            },
+            "json": {
+              "secret": "long-secret"
+            }
+          },
+          {
+            "method": "POST",
+            "url": "/accounts/0?limit=11",
+            "headers": {
+              "X-Token": "short",
+              "Cookie": "session=short"
+            },
+            "json": {
+              "secret": "p4ss"
+            }
+          },
+          {
+            "method": "POST",
+            "url": "/accounts/1",
+            "content": "{\"secret\": ",
+            "headers": {
+              "Content-Type": "application/json"
+            }
+          },
+          {
+            "method": "POST",
+            "url": "/accounts/1"
+          },
+          {
+            "method": "GET",
+            "url": "/codes?codes=long-code,short"
+          },
+          {
+            "method": "GET",
+            "url": "/accounts/1"
+          },
+          {
+            "method": "GET",
+            "url": "/missing"
+          }
+        ]
+      },
+      {
+        "set": "override",
+        "requests": [
+          {
+            "method": "POST",
+            "url": "/accounts/1?limit=5",
+            "headers": {
+              "X-Token": "long-token",
+              "Cookie": "session=long-session"
+            },
+            "json": {
+              "secret": "long-secret"
+            }
+          },
+          {
+            "method": "POST",
+            "url": "/accounts/0?limit=11",
+            "headers": {
+              "X-Token": "short",
+              "Cookie": "session=short"
+            },
+            "json": {
+              "secret": "p4ss"
+            }
+          },
+          {
+            "method": "GET",
+            "url": "/codes?codes=short"
+          }
+        ]
+      },
+      {
+        "set": "router",
+        "requests": [
+          {
+            "method": "POST",
+            "url": "/accounts/1?limit=5",
+            "headers": {
+              "X-Token": "long-token",
+              "Cookie": "session=long-session"
+            },
+            "json": {
+              "secret": "long-secret"
+            }
+          },
+          {
+            "method": "POST",
+            "url": "/accounts/0?limit=11",
+            "headers": {
+              "X-Token": "short",
+              "Cookie": "session=short"
+            },
+            "json": {
+              "secret": "p4ss"
+            }
+          },
+          {
+            "method": "GET",
+            "url": "/codes?codes=short"
+          }
+        ]
+      },
+      {
+        "set": "router-handler",
+        "requests": [
+          {
+            "method": "POST",
+            "url": "/accounts/1?limit=5",
+            "headers": {
+              "X-Token": "long-token",
+              "Cookie": "session=long-session"
+            },
+            "json": {
+              "secret": "long-secret"
+            }
+          },
+          {
+            "method": "POST",
+            "url": "/accounts/0?limit=11",
+            "headers": {
+              "X-Token": "short",
+              "Cookie": "session=short"
+            },
+            "json": {
+              "secret": "p4ss"
+            }
+          },
+          {
+            "method": "GET",
+            "url": "/codes?codes=short"
+          }
+        ]
+      }
+    ],
+    "package_snapshots": []
+  },
+  "nested-models": {
+    "input": "unbound.yaml",
+    "services": "unbound",
+    "nested": true,
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/values/7"
+      },
+      {
+        "method": "GET",
+        "url": "/values/invalid"
+      }
+    ],
+    "package_snapshots": []
+  },
+  "stale": {
+    "input": "unbound.yaml",
+    "previous": "pets.yaml",
+    "services": "unbound",
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/values/7"
+      },
+      {
+        "method": "GET",
+        "url": "/pets"
+      },
+      {
+        "method": "GET",
+        "url": "/store/inventory"
+      }
+    ],
+    "stale": [
+      "routers/pets.py",
+      "routers/store.py"
+    ],
+    "package_snapshots": []
+  },
+  "spellings": {
+    "input": "server-spellings.yaml",
+    "services": "spellings",
+    "model": {
+      "import_overrides": {
+        "conint": "pydantic.types",
+        "constr": "pydantic.types"
+      }
+    },
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/code"
+      },
+      {
+        "method": "GET",
+        "url": "/code?invalid=true"
+      },
+      {
+        "method": "GET",
+        "url": "/pets"
+      },
+      {
+        "method": "GET",
+        "url": "/pets?invalid=true"
+      },
+      {
+        "method": "GET",
+        "url": "/counts"
+      },
+      {
+        "method": "GET",
+        "url": "/counts?invalid=true"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?limit=5&code=ab&codes=ab&codes=cde&step=1.5&raw=x&day=2024-01-02&filter[term]=a"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/2"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/0"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?limit=0"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?code=a"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?codes=abcdef"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?step=1.2"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?day=tomorrow"
+      },
+      {
+        "method": "POST",
+        "url": "/fields",
+        "json": {
+          "name": "x"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/days",
+        "json": "2024-01-02"
+      },
+      {
+        "method": "POST",
+        "url": "/days",
+        "json": "never"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?pair=a,1&label=ab&pet=%7B%22petType%22%3A%22dog%22%2C%22bark%22%3Afalse%7D"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?pair=,1"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?label=xa"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?pet=%7B%22petType%22%3A%22dog%22%7D"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?tag=ab"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?tag=xa"
+      },
+      {
+        "method": "POST",
+        "url": "/days",
+        "json": "2024-01-03",
+        "headers": {
+          "Authorization": "Bearer t"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/literal?modes=a,a&named=x&listed=y"
+      },
+      {
+        "method": "GET",
+        "url": "/literal?modes=b"
+      },
+      {
+        "method": "POST",
+        "url": "/things",
+        "json": {
+          "w": 2
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/things",
+        "json": {
+          "w": "no"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/literal-model?modes=b,b"
+      }
+    ],
+    "package_snapshots": [
+      "pydantic_v2.BaseModel"
+    ]
+  },
+  "spellings-exact": {
+    "input": "server-spellings.yaml",
+    "services": "spellings",
+    "model": {
+      "use_exact_imports": true,
+      "collapse_root_models": true,
+      "use_decimal_for_multiple_of": true,
+      "import_overrides": {
+        "conint": "pydantic.types",
+        "constr": "pydantic.types"
+      },
+      "use_union_operator": false,
+      "use_standard_collections": false
+    },
+    "requests": [
+      {
+        "method": "GET",
+        "url": "/code"
+      },
+      {
+        "method": "GET",
+        "url": "/code?invalid=true"
+      },
+      {
+        "method": "GET",
+        "url": "/pets"
+      },
+      {
+        "method": "GET",
+        "url": "/pets?invalid=true"
+      },
+      {
+        "method": "GET",
+        "url": "/counts"
+      },
+      {
+        "method": "GET",
+        "url": "/counts?invalid=true"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?limit=5&code=ab&codes=ab&codes=cde&step=1.5&raw=x&day=2024-01-02&filter[term]=a"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/2"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/0"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?limit=0"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?code=a"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?codes=abcdef"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?step=1.2"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?day=tomorrow"
+      },
+      {
+        "method": "POST",
+        "url": "/fields",
+        "json": {
+          "name": "x"
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/days",
+        "json": "2024-01-02"
+      },
+      {
+        "method": "POST",
+        "url": "/days",
+        "json": "never"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?pair=a,1&label=ab&pet=%7B%22petType%22%3A%22dog%22%2C%22bark%22%3Afalse%7D"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?pair=,1"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?label=xa"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?pet=%7B%22petType%22%3A%22dog%22%7D"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?tag=ab"
+      },
+      {
+        "method": "GET",
+        "url": "/pets/1?tag=xa"
+      },
+      {
+        "method": "POST",
+        "url": "/days",
+        "json": "2024-01-03",
+        "headers": {
+          "Authorization": "Bearer t"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/literal?modes=a,a&named=x&listed=y"
+      },
+      {
+        "method": "GET",
+        "url": "/literal?modes=b"
+      },
+      {
+        "method": "POST",
+        "url": "/things",
+        "json": {
+          "w": 2
+        }
+      },
+      {
+        "method": "POST",
+        "url": "/things",
+        "json": {
+          "w": "no"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "/literal-model?modes=b,b"
+      }
+    ],
+    "package_snapshots": [
+      "pydantic_v2.BaseModel"
+    ]
+  }
+}

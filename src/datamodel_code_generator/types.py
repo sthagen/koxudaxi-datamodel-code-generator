@@ -83,6 +83,8 @@ OPTIONAL = "Optional"
 OPTIONAL_PREFIX = f"{OPTIONAL}["
 
 _RUNTIME_EXPRESSION_IMPORTS_DATA_TYPE_KEY = "_runtime_expression_imports"
+_ENUM_MEMBER_LITERAL_REFERENCE_DATA_TYPE_KEY = "_enum_member_literal_reference"
+_FORWARD_REFERENCE_DATA_TYPE_KEY = "_is_forward_reference"
 
 
 class DefaultValueRecipe(Enum):
@@ -609,6 +611,9 @@ class DataType(_BaseModel):
                 copied_value = deepcopy(value, memo)
                 object.__setattr__(new_obj, field_name, copied_value)
         new_obj._set_runtime_expression_imports(self.runtime_expression_imports)
+        new_obj._set_forward_reference(self._is_forward_reference)
+        if (enum_member_literal_reference := self._enum_member_literal_reference) is not None:
+            new_obj._set_enum_member_literal_reference(enum_member_literal_reference)
 
         return new_obj
 
@@ -755,7 +760,7 @@ class DataType(_BaseModel):
         use_standard_collections = self.use_standard_collections
         yield (self.is_optional and not self.use_union_operator, IMPORT_OPTIONAL)
         yield (len(self.data_types) > 1 and not self.use_union_operator, IMPORT_UNION)
-        yield (bool(self.literals) or bool(self.enum_member_literals), IMPORT_LITERAL)
+        yield ((bool(self.literals) or bool(self.enum_member_literals)) and not self.alias, IMPORT_LITERAL)
         yield (bool(self.discriminator), IMPORT_ANNOTATED)
         yield (self.is_frozen_set and not use_standard_collections, IMPORT_FROZEN_SET)
         yield (self.is_mapping and use_standard_collections, IMPORT_ABC_MAPPING)
@@ -789,6 +794,25 @@ class DataType(_BaseModel):
             self.__dict__[_RUNTIME_EXPRESSION_IMPORTS_DATA_TYPE_KEY] = imports
             return
         self.__dict__.pop(_RUNTIME_EXPRESSION_IMPORTS_DATA_TYPE_KEY, None)
+
+    @property
+    def _is_forward_reference(self) -> bool:
+        """Return whether the type renders as one quoted forward reference, before any nullability."""
+        return self.__dict__.get(_FORWARD_REFERENCE_DATA_TYPE_KEY, False)
+
+    def _set_forward_reference(self, is_forward_reference: bool) -> None:  # noqa: FBT001
+        """Render the type as one string so the names inside it stay unquoted."""
+        if is_forward_reference:
+            self.__dict__[_FORWARD_REFERENCE_DATA_TYPE_KEY] = True
+
+    @property
+    def _enum_member_literal_reference(self) -> Reference | None:
+        """Return the enum whose members ``enum_member_literals`` render."""
+        return self.__dict__.get(_ENUM_MEMBER_LITERAL_REFERENCE_DATA_TYPE_KEY)
+
+    def _set_enum_member_literal_reference(self, reference: Reference) -> None:
+        """Keep the enum identity so every rendering module can import the class."""
+        self.__dict__[_ENUM_MEMBER_LITERAL_REFERENCE_DATA_TYPE_KEY] = reference
 
     @property
     def imports(self) -> Iterator[Import]:
@@ -1105,6 +1129,8 @@ class DataType(_BaseModel):
                 self._TYPE_HINT_CONTAINER_ORDER,
                 use_base_type_hint=False,
             )
+        if self.__dict__.get(_FORWARD_REFERENCE_DATA_TYPE_KEY):
+            type_ = repr(type_) if '"' in type_ or "\\" in type_ else f'"{type_}"'
         if self.is_optional and type_ != ANY:
             return get_optional_type(type_, self.use_union_operator)
         if self.is_func and self.kwargs:

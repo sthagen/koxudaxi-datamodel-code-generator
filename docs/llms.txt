@@ -54,6 +54,11 @@
 - [LLM Integration](https://datamodel-code-generator.koxudaxi.dev/llm-integration/): The `--generate-prompt` option generates a formatted prompt that you can use to consult Large Language Models (LLMs) about datamodel-code-generator...
 - [Using datamodel-code-generator with coding agents](https://datamodel-code-generator.koxudaxi.dev/coding-agent-skill/): This repository includes an experimental Agent Skill for skills-compatible coding agents. The skill teaches an agent to run `datamodel-codegen` whe...
 
+### Generation Targets
+
+- [FastAPI Server Generation](https://datamodel-code-generator.koxudaxi.dev/fastapi-server/): FastAPI server generation is experimental. Its options, generated package, template values, and served OpenAPI document may change. See Experimenta...
+- [Python Client Generation](https://datamodel-code-generator.koxudaxi.dev/python-client/): HTTPX2 client generation is experimental. Its options, generated package, and template values may change. See Experimental Features.
+
 
 ## CLI Reference
 
@@ -66,6 +71,7 @@
 - [OpenAPI-only Options](https://datamodel-code-generator.koxudaxi.dev/cli-reference/openapi-only-options/): This generated reference lists every OpenAPI-only CLI flag and its tested examples. For a workflow-oriented guide, see OpenAPI Options. For input f...
 - [GraphQL-only Options](https://datamodel-code-generator.koxudaxi.dev/cli-reference/graphql-only-options/)
 - [General Options](https://datamodel-code-generator.koxudaxi.dev/cli-reference/general-options/)
+- [Target Generation Options](https://datamodel-code-generator.koxudaxi.dev/cli-reference/target-generation-options/)
 - [Utility Options](https://datamodel-code-generator.koxudaxi.dev/cli-reference/utility-options/)
 ### Focused Topics
 
@@ -81,6 +87,11 @@
 - [Version](https://datamodel-code-generator.koxudaxi.dev/cli-reference/manual/version/)
 - [Debug](https://datamodel-code-generator.koxudaxi.dev/cli-reference/manual/debug/)
 - [Profile](https://datamodel-code-generator.koxudaxi.dev/cli-reference/manual/profile/)
+- [Job](https://datamodel-code-generator.koxudaxi.dev/cli-reference/manual/job/)
+- [All Jobs](https://datamodel-code-generator.koxudaxi.dev/cli-reference/manual/all-jobs/)
+- [Install Skill](https://datamodel-code-generator.koxudaxi.dev/cli-reference/manual/install-skill/)
+- [Overwrite Skill](https://datamodel-code-generator.koxudaxi.dev/cli-reference/manual/overwrite-skill/)
+- [Skill Scope](https://datamodel-code-generator.koxudaxi.dev/cli-reference/manual/skill-scope/)
 - [No Color](https://datamodel-code-generator.koxudaxi.dev/cli-reference/manual/no-color/)
 - [Generate Prompt](https://datamodel-code-generator.koxudaxi.dev/cli-reference/manual/generate-prompt/)
 - [List Deprecations](https://datamodel-code-generator.koxudaxi.dev/cli-reference/manual/list-deprecations/)

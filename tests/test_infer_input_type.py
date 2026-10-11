@@ -107,6 +107,7 @@ def test_infer_input_type() -> None:  # noqa: PLR0912
         if file.name.endswith((
             "external_child.json",
             "external_child.yaml",
+            "extra_data_alias_generator.json",
             "extra_data_builtin_template_config.json",
             "extra_data_builtin_template_msgspec.json",
             "extra_data_builtin_template_reserved.json",
@@ -139,6 +140,8 @@ def test_infer_input_type() -> None:  # noqa: PLR0912
         if "paths_ref_with_external_schema" in file.parts and file.name != "openapi.yaml":
             continue
         if "webhooks_ref_with_external_schema" in file.parts and file.name != "openapi.yaml":
+            continue
+        if "component_embedded_ids" in file.parts and file.suffix == ".json":
             continue
         if file.name.endswith((
             "aliases.json",

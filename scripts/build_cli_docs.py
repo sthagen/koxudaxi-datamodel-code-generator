@@ -198,6 +198,7 @@ CATEGORY_EMOJIS = {
     OptionCategory.TEMPLATE: "🎨",
     OptionCategory.OPENAPI: "📘",
     OptionCategory.GENERAL: "⚙️",
+    OptionCategory.TARGET: "🚀",
 }
 CATEGORY_INTROS = {
     OptionCategory.OPENAPI: (
@@ -216,6 +217,7 @@ OPTION_CATEGORY_ORDER = (
     OptionCategory.OPENAPI,
     OptionCategory.GRAPHQL,
     OptionCategory.GENERAL,
+    OptionCategory.TARGET,
 )
 
 TOPIC_DESCRIPTIONS = {
@@ -1340,6 +1342,7 @@ def generate_index_page(
         OptionCategory.TEMPLATE: "Output formatting and custom rendering",
         OptionCategory.OPENAPI: "OpenAPI-specific features",
         OptionCategory.GENERAL: "Utilities and meta options",
+        OptionCategory.TARGET: "Server and client generation with the models (experimental)",
     }
 
     for category in OptionCategory:

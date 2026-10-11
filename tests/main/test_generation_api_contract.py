@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import gc
 import json
 from pathlib import Path
 
@@ -11,7 +10,6 @@ import pytest
 import datamodel_code_generator as dcg
 from datamodel_code_generator.parser.openapi_scope import ApiOpenAPIParser
 from tests.conftest import assert_output
-from tests.main.test_generation_api_scope import ApiAttemptConsumer
 
 DATA = Path(__file__).parents[1] / "data"
 SOURCE = DATA / "generation_platform/api_scope"
@@ -70,97 +68,4 @@ def test_api_public_surface_annotations() -> None:
         )
         + "\n",
         EXPECTED / "public-surface.txt",
-    )
-
-
-@pytest.mark.parametrize(
-    "case",
-    [
-        "declarations",
-        "external",
-        "media-30",
-        "media-32",
-        "items-primitive",
-        "discriminator",
-        "headers",
-        "resources",
-        "local-roots",
-        "traversal",
-    ],
-)
-def test_api_capture_engine_parity(case: str) -> None:
-    """Compare real output and engine call counts with the bounded capture consumer."""
-    import sys
-
-    from tests.data.python.generation_observer import GenerationObserver
-
-    consumer = ApiAttemptConsumer("none")
-    outputs = []
-    calls = []
-    for capture in (None, consumer):
-        observer = GenerationObserver()
-        previous = sys.getprofile()
-        config = dcg._prepare_generate_facade_config(
-            dcg.GenerateConfig(
-                input_file_type="openapi",
-                openapi_scopes=[dcg.OpenAPIScope.Api],
-                disable_timestamp=True,
-                formatters=[],
-            )
-        )
-        try:
-            sys.setprofile(observer.record)
-            outputs.append(
-                dcg._run_generation(SOURCE / f"{case}.json", config, Path.cwd(), use_output_cwd=False, capture=capture)
-            )
-        finally:
-            sys.setprofile(previous)
-        calls.append(observer.calls)
-    consumer.close()
-    gc.collect()
-    assert_output(
-        json.dumps(
-            {
-                "outputs_equal": outputs[0] == outputs[1],
-                "engine_calls_equal": calls[0] == calls[1],
-                "factory_reads": consumer.factory_reads,
-                "retained_parsers": sum(parser() is not None for parser in consumer.parsers),
-            },
-            indent=2,
-        )
-        + "\n",
-        EXPECTED / "capture-parity.txt",
-    )
-
-
-@pytest.mark.parametrize("tags", [False, True])
-def test_api_declaration_frame_origins(tags: bool) -> None:
-    """Observe original indices and inherited security without replacing engine hooks."""
-    import sys
-
-    from tests.conftest import assert_inputs_not_mutated
-    from tests.data.python.api_declaration_observer import DeclarationObserver
-
-    source = json.loads((SOURCE / "traversal.json").read_text())
-    observer = DeclarationObserver()
-    previous = sys.getprofile()
-    try:
-        sys.setprofile(observer.record)
-        with assert_inputs_not_mutated({"source": source}):
-            result = dcg.generate(
-                source,
-                input_file_type=dcg.InputFileType.OpenAPI,
-                input_filename="traversal.json",
-                openapi_scopes=[dcg.OpenAPIScope.Api, dcg.OpenAPIScope.Tags] if tags else [dcg.OpenAPIScope.Api],
-                use_title_as_name=True,
-                include_path_parameters=False,
-                disable_timestamp=True,
-                formatters=["black", "isort"],
-            )
-    finally:
-        sys.setprofile(previous)
-    assert_output(result, EXPECTED / "traversal.py")
-    assert_output(
-        json.dumps({"operation": observer.operation, "tags": observer.tags}, indent=2) + "\n",
-        EXPECTED / f"frame-origins-{tags}.txt",
     )

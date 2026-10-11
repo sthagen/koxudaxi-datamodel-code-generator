@@ -40,6 +40,8 @@ CI_SHARD_WEIGHTS_PATH = Path(__file__).parents[1] / "scripts" / "ci_shard_weight
 CLI_DOC_SCHEMA_VERSION = 1
 TEST_DEFAULT_FORMATTER_ENV = "DATAMODEL_CODE_GENERATOR_TEST_DEFAULT_FORMATTER"
 BUILTIN_FORMATTER_VALUE = "builtin"
+TARGET_PYTHON = (3, 11)
+TARGET_TEST_ROOTS = (Path(__file__).parent / "api_generation", Path(__file__).parent / "model_codecs")
 _VERSION_PATTERN = re.compile(r"^\d+\.\d+$")
 _MOCK_PUBLIC_IP = "93.184.216.34"
 
@@ -167,6 +169,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store_true",
         default=False,
         help="Collect CLI documentation metadata from tests marked with @pytest.mark.cli_doc",
+    )
+    parser.addoption(
+        "--test-shard",
+        metavar="INDEX/TOTAL",
+        help="Run one of TOTAL shards of the selected tests, split by their measured CI durations",
     )
     parser.addini(
         "assert_helper_direct_assert_exempt_files",
@@ -373,14 +380,34 @@ def order_slow_tests_first(items: list[pytest.Item], durations: dict[str, int], 
     return ordered
 
 
+def select_test_shard(
+    config: pytest.Config, items: list[pytest.Item], durations: dict[str, int], shard: str
+) -> list[pytest.Item]:
+    """Keep one ``INDEX/TOTAL`` shard of the items, split heaviest-first like the CI file shards.
+
+    Tests without a measured duration weigh the median of the measured ones, and the rest are deselected.
+    """
+    from scripts.select_ci_test_shard import median_weight, select_shard
+
+    index, total = map(int, shard.split("/"))
+    measured = {item.nodeid: durations[item.nodeid] for item in items if item.nodeid in durations}
+    fallback = median_weight(measured)
+    selected = set(select_shard({item.nodeid: measured.get(item.nodeid, fallback) for item in items}, index, total))
+    config.hook.pytest_deselected(items=[item for item in items if item.nodeid not in selected])
+    return [item for item in items if item.nodeid in selected]
+
+
 class SlowTestOrdering:
-    """Reorder the final collection so every xdist worker chunk starts with measured slow tests."""
+    """Select the requested test shard, then reorder it so every xdist worker chunk starts with measured slow tests."""
 
     @pytest.hookimpl(trylast=True)
     def pytest_collection_modifyitems(self, config: pytest.Config, items: list[pytest.Item]) -> None:
-        """Run after marker and keyword deselection so chunk boundaries match what xdist distributes."""
+        """Run after marker and keyword deselection so shards and chunk boundaries match what xdist distributes."""
+        durations = slow_test_durations()
+        if (shard := config.getoption("--test-shard")) is not None:
+            items[:] = select_test_shard(config, items, durations, shard)
         workers = getattr(config, "workerinput", {}).get("workercount", 1)
-        items[:] = order_slow_tests_first(items, slow_test_durations(), workers)
+        items[:] = order_slow_tests_first(items, durations, workers)
 
 
 def pytest_collection_modifyitems(
@@ -388,11 +415,17 @@ def pytest_collection_modifyitems(
     config: pytest.Config,
     items: list[pytest.Item],
 ) -> None:
-    """Collect CLI doc metadata from tests with cli_doc marker.
+    """Skip the target tests on Python 3.10 and collect CLI doc metadata from tests with cli_doc marker.
 
-    Always collects metadata for use by test_cli_doc_coverage.py.
-    Only validates markers when --collect-cli-docs is used.
+    The server and client targets need Python 3.11 or later, so their tests and those of the wire codecs they share
+    are skipped on older Pythons, including when a CI shard names their files. CLI doc metadata is always collected
+    for test_cli_doc_coverage.py, and its markers are validated only when --collect-cli-docs is used.
     """
+    if sys.version_info < TARGET_PYTHON:
+        skip = pytest.mark.skip(reason="The server and client targets need Python 3.11 or later")
+        for item in items:
+            if any(item.path.is_relative_to(root) for root in TARGET_TEST_ROOTS):
+                item.add_marker(skip)
     collect_cli_docs = config.getoption("--collect-cli-docs", default=False)
     validation_errors: list[tuple[str, list[str]]] = []
 
@@ -985,7 +1018,7 @@ def write_generated_modules(output_dir: Path, modules: dict[tuple[str, ...], Any
     for module_path, result in modules.items():
         file_path = output_dir.joinpath(*module_path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(_get_full_body(result), encoding="utf-8")
+        file_path.write_bytes(_get_full_body(result).encode("utf-8"))
 
 
 def assert_runtime_result_model(output_dir: Path) -> None:
@@ -1300,6 +1333,7 @@ def _inline_snapshot_file_formats() -> None:
     register_format_alias(".py", ".txt")
     register_format_alias(".pyi", ".txt")
     register_format_alias(".snapshot", ".txt")
+    register_format_alias(".md", ".txt")
 
 
 @pytest.fixture(scope="session")

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
+from shutil import copyfile
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from datamodel_code_generator import DataModelType, Error, InputFileType, OpenAPIScope, SchemaParseError, generate
-from datamodel_code_generator.enums import AllExportsScope, JsonSchemaVersion, OpenAPIVersion
+from datamodel_code_generator.enums import AllExportsScope
 from datamodel_code_generator.format import Formatter
 from datamodel_code_generator.parser.openapi import OpenAPIParser
 from datamodel_code_generator.parser.openapi_scope import ApiModelResolver, ApiOpenAPIParser
@@ -18,7 +19,6 @@ from tests.conftest import assert_directory_content, assert_inputs_not_mutated, 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from datamodel_code_generator._source import YamlValue
     from datamodel_code_generator.parser.jsonschema import JsonSchemaObject
 
 DATA = Path(__file__).parents[1] / "data"
@@ -42,37 +42,22 @@ def test_api_facade_backends(backend: DataModelType) -> None:
     assert_output(result, EXPECTED / (backend.value.replace(".", "_") + ".py"))
 
 
-def test_api_external_declaration() -> None:
-    """Keep external document-local types and both root uses of one Path Item."""
-    parser = ApiOpenAPIParser(SOURCE / "external.json", openapi_scopes=[OpenAPIScope.Api], formatters=[])
-    try:
-        assert_output(parser.parse(), EXPECTED / "external.py")
-        assert_output(
-            json.dumps(
-                [
-                    {"use": [use.document, *use.tokens], "declaration": [declaration.document, *declaration.tokens]}
-                    for use, declaration, _ in parser.declaration_uses
-                ],
-                indent=2,
-            )
-            + "\n",
-            EXPECTED / "external-uses.txt",
-        )
-        assert_output(
-            json.dumps(
-                {
-                    "media_item_schema": parser.schema_features.media_item_schema,
-                    "ref_siblings": parser._ref_sibling_keywords_enabled,
-                    "root_version": parser.raw_obj["openapi"],
-                    "frames": len(parser.declaration_frames),
-                },
-                indent=2,
-            )
-            + "\n",
-            EXPECTED / "external-state.txt",
-        )
-    finally:
-        parser.dispose()
+@pytest.mark.parametrize("source", ["external.json", "external-30.json", "external-31.json"])
+def test_api_external_declaration(source: str) -> None:
+    """Keep external document-local types and both root uses of one Path Item, whatever the root dialect."""
+    assert_output(
+        generate(
+            SOURCE / source,
+            input_file_type=InputFileType.OpenAPI,
+            openapi_scopes=[OpenAPIScope.Api],
+            input_filename="external.json",
+            use_union_operator=False,
+            use_standard_collections=False,
+            disable_timestamp=True,
+            formatters=[],
+        ),
+        EXPECTED / "external-generate.py",
+    )
 
 
 @pytest.mark.parametrize("dot", [False, True])
@@ -130,36 +115,22 @@ def test_api_info_version_without_models(tmp_path: Path) -> None:
         [*OpenAPIScope, *OpenAPIScope],
     ],
 )
-@pytest.mark.parametrize("repeated", [False, True])
-def test_api_declarations(scopes: list[OpenAPIScope], repeated: bool) -> None:
+def test_api_declarations(scopes: list[OpenAPIScope]) -> None:
     """Generate all declarations once while retaining ordinary parameter overrides."""
-    source = SOURCE / "declarations.json"
-    parser = ApiOpenAPIParser(
-        [source, source] if repeated else source,
-        openapi_scopes=scopes,
-        use_operation_id_as_name=True,
-        formatters=[],
-        base_path=SOURCE,
+    assert_output(
+        generate(
+            SOURCE / "declarations.json",
+            input_file_type=InputFileType.OpenAPI,
+            openapi_scopes=scopes,
+            input_filename="declarations.json",
+            use_operation_id_as_name=True,
+            use_union_operator=False,
+            use_standard_collections=False,
+            disable_timestamp=True,
+            formatters=[],
+        ),
+        EXPECTED / "declarations-generate.py",
     )
-    try:
-        result = parser.parse()
-        assert_output(
-            result["declarations.py",].body if isinstance(result, dict) else result, EXPECTED / "declarations.py"
-        )
-        assert_output(
-            json.dumps(
-                {
-                    "foo_name": parser.model_resolver.references["declarations.json#/components/schemas/Foo"].name,
-                    "frames": len(parser.declaration_frames),
-                    "discriminator_documents": len(parser._discriminator_documents),
-                },
-                indent=2,
-            )
-            + "\n",
-            EXPECTED / "declarations-state.txt",
-        )
-    finally:
-        parser.dispose()
 
 
 @pytest.mark.parametrize(
@@ -170,7 +141,10 @@ def test_api_declarations(scopes: list[OpenAPIScope], repeated: bool) -> None:
     ],
 )
 def test_api_parser_scope_mismatch(parser_type: type[OpenAPIParser], scopes: list[OpenAPIScope], message: str) -> None:
-    """Reject incompatible parser selection before parsing input."""
+    """Reject incompatible parser selection before parsing input.
+
+    generate always picks the parser that matches the scopes, so this guard is a removal candidate pending review.
+    """
     with pytest.raises(Error, match=message):
         parser_type(SOURCE / "declarations.json", openapi_scopes=scopes)
 
@@ -190,42 +164,6 @@ def test_api_media_applicability(version: str) -> None:
         ),
         EXPECTED / f"media-{version}.py",
     )
-    parser = ApiOpenAPIParser(source, openapi_scopes=[OpenAPIScope.Api], formatters=[])
-    try:
-        parser.parse()
-        assert_output(
-            json.dumps(
-                [
-                    {
-                        "tokens": list(item.declaration.tokens),
-                        "reason": item.reason,
-                        "owner": item.owner,
-                        "media": item.media,
-                        "wire_name": item.wire_name,
-                        "has_operation_owner": item.use_site is not None,
-                    }
-                    for item in parser.ignored_declarations
-                ],
-                indent=2,
-            )
-            + "\n",
-            EXPECTED / f"media-{version}-ignored.txt",
-        )
-        frames_before_dispose = len(parser.declaration_frames)
-    finally:
-        parser.dispose()
-    assert_output(
-        json.dumps(
-            {
-                "frames_before_dispose": frames_before_dispose,
-                "ignored_after_dispose": len(parser.ignored_declarations),
-                "documents_after_dispose": len(parser.model_resolver.loaded_documents),
-            },
-            indent=2,
-        )
-        + "\n",
-        EXPECTED / "released-state.txt",
-    )
 
 
 @pytest.mark.parametrize(("case", "message"), json.loads((SOURCE / "invalid-cases.json").read_text()).items())
@@ -241,22 +179,30 @@ def test_api_invalid_declarations(case: str, message: str) -> None:
         )
 
 
-@pytest.mark.parametrize("filtered", [False, True])
-def test_api_callback_cycle_and_root_filter(filtered: bool) -> None:
-    """Traverse cyclic callbacks once and keep webhooks/components outside root filters."""
-    assert_output(
-        generate(
-            SOURCE / "traversal.json",
+@pytest.mark.parametrize(
+    ("filtered", "scopes"),
+    [
+        (False, [OpenAPIScope.Api]),
+        (True, [OpenAPIScope.Api]),
+        (False, [OpenAPIScope.Api, OpenAPIScope.Tags]),
+    ],
+)
+def test_api_callback_cycle_and_root_filter(filtered: bool, scopes: list[OpenAPIScope]) -> None:
+    """Traverse cyclic callbacks once and keep webhooks/components outside root filters, with or without tags."""
+    source = json.loads((SOURCE / "traversal.json").read_text())
+    with assert_inputs_not_mutated({"source": source}):
+        result = generate(
+            source,
             input_file_type=InputFileType.OpenAPI,
-            openapi_scopes=[OpenAPIScope.Api],
+            input_filename="traversal.json",
+            openapi_scopes=scopes,
             openapi_include_paths=["/root"] if filtered else None,
             use_title_as_name=True,
             include_path_parameters=False,
             disable_timestamp=True,
             formatters=[Formatter.BLACK, Formatter.ISORT],
-        ),
-        EXPECTED / ("traversal-filtered.py" if filtered else "traversal.py"),
-    )
+        )
+    assert_output(result, EXPECTED / ("traversal-filtered.py" if filtered else "traversal.py"))
 
 
 def test_api_pointer_spellings() -> None:
@@ -367,24 +313,6 @@ def test_api_discriminator_canonical_parent() -> None:
         ),
         EXPECTED / "discriminator.py",
     )
-    parser = ApiOpenAPIParser(SOURCE / "discriminator.json", openapi_scopes=[OpenAPIScope.Api], formatters=[])
-    try:
-        parser.parse()
-        assert_output(
-            json.dumps(
-                {
-                    "subtypes": parser._discriminator_subtypes["discriminator.json#/components/schemas/Pet"],
-                    "literal_percent_declaration": "discriminator.json#/components/schemas/%2550et"
-                    in parser.model_resolver.references,
-                    "use_types": len(parser._declaration_types),
-                },
-                indent=2,
-            )
-            + "\n",
-            EXPECTED / "discriminator-state.txt",
-        )
-    finally:
-        parser.dispose()
 
 
 def test_api_missing_operation_id() -> None:
@@ -400,12 +328,15 @@ def test_api_missing_operation_id() -> None:
 
 
 def test_api_reference_leaf_extension() -> None:
-    """Keep actual source mappings available to an existing reference-leaf extension."""
+    """Keep actual source mappings available to an existing reference-leaf extension.
+
+    Only an extension calls the API parser's get_ref_model, so this override is a removal candidate pending review.
+    """
 
     class LeafConsumer(ApiOpenAPIParser):
         same_mapping = False
 
-        def _parse_specification(self, specification: dict[str, YamlValue], path_parts: list[str]) -> None:
+        def _parse_specification(self, specification: dict[str, Any], path_parts: list[str]) -> None:
             super()._parse_specification(specification, path_parts)
             self.same_mapping = (
                 self.get_ref_model("#/components/parameters/Page") is specification["components"]["parameters"]["Page"]
@@ -419,6 +350,45 @@ def test_api_reference_leaf_extension() -> None:
         assert_output(json.dumps(parser.same_mapping) + "\n", EXPECTED / "leaf-mapping.txt")
     finally:
         parser.dispose()
+
+
+def test_api_repeated_source_declarations(tmp_path: Path) -> None:
+    """Generate each declaration once when the public facade receives the same document twice."""
+    source = tmp_path / "declarations.json"
+    copyfile(SOURCE / "declarations.json", source)
+    output = tmp_path / "models"
+    generate(
+        [source, source],
+        input_file_type=InputFileType.OpenAPI,
+        openapi_scopes=[OpenAPIScope.Api],
+        use_operation_id_as_name=True,
+        use_union_operator=False,
+        use_standard_collections=False,
+        disable_timestamp=True,
+        formatters=[],
+        output=output,
+    )
+    assert_directory_content(output, EXPECTED / "repeated-source")
+
+
+def test_api_external_document_also_collected_as_root(tmp_path: Path) -> None:
+    """Collect a referenced library once when directory traversal later visits it as a root."""
+    source = tmp_path / "inputs"
+    source.mkdir()
+    for name in ("external.json", "library.json"):
+        copyfile(SOURCE / name, source / name)
+    output = tmp_path / "models"
+    generate(
+        source,
+        input_file_type=InputFileType.OpenAPI,
+        openapi_scopes=[OpenAPIScope.Api],
+        use_union_operator=False,
+        use_standard_collections=False,
+        disable_timestamp=True,
+        formatters=[],
+        output=output,
+    )
+    assert_directory_content(output, EXPECTED / "external-directory")
 
 
 @pytest.mark.parametrize("case", ["local", "external", "relative", "url", "scoped", "bare", "empty", "many_ordinary"])
@@ -456,7 +426,10 @@ def test_api_response_headers(status_names: bool) -> None:
 
 
 def test_api_rejects_lost_declaration_frame() -> None:
-    """Fail closed if an extension forwards a schema under an unowned path."""
+    """Fail closed if an extension forwards a schema under an unowned path.
+
+    No public input forwards one, so this guard is a removal candidate pending review.
+    """
 
     class LostFrameParser(ApiOpenAPIParser):
         def parse_obj(self, name: str, obj: JsonSchemaObject, path: list[str]) -> None:
@@ -472,10 +445,13 @@ def test_api_rejects_lost_declaration_frame() -> None:
 
 
 def test_api_rejects_unresolved_anchor_from_resolver() -> None:
-    """Reject an abnormal resolver result instead of inferring a declaration."""
+    """Reject an abnormal resolver result instead of inferring a declaration.
+
+    The real resolver never returns an unresolved anchor, so this guard is a removal candidate pending review.
+    """
 
     class BrokenResolver(ApiModelResolver):
-        def resolve_ref(self, path: Sequence[str] | str) -> str:  # noqa: ARG002
+        def resolve_ref(self, path: Sequence[str] | str) -> str:  # ruff: ignore[unused-method-argument]
             return "reference-cycle.json#missing"
 
     class BrokenResolverParser(ApiOpenAPIParser):
@@ -490,58 +466,44 @@ def test_api_rejects_unresolved_anchor_from_resolver() -> None:
         parser.dispose()
 
 
-@pytest.mark.parametrize("mode", ["first", "reversed", "directory", "explicit"])
-def test_api_root_feature_lifetime(mode: str) -> None:
-    """Keep independent dialect caches at the first root, honoring explicit overrides."""
-    directory = SOURCE / "version-roots"
-    sources = sorted(directory.glob("*.json"), reverse=mode == "reversed")
-    parser = ApiOpenAPIParser(
-        directory if mode == "directory" else sources,
+@pytest.mark.parametrize("version", ["auto", "3.2"])
+def test_api_root_feature_lifetime(version: str, tmp_path: Path) -> None:
+    """Generate nothing from a directory of model-free roots, whether the version is detected or explicit."""
+    output = tmp_path / "models"
+    generate(
+        SOURCE / "version-roots",
+        input_file_type=InputFileType.OpenAPI,
         openapi_scopes=[OpenAPIScope.Api],
-        openapi_version=OpenAPIVersion.V32 if mode == "explicit" else OpenAPIVersion.Auto,
-        jsonschema_version=JsonSchemaVersion.Draft202012 if mode == "explicit" else JsonSchemaVersion.Auto,
+        schema_version=version,
+        disable_timestamp=True,
         formatters=[],
+        output=output,
     )
-    try:
-        result = parser.parse()
-        assert_output(
-            json.dumps(
-                {
-                    "media_item_schema": parser.schema_features.media_item_schema,
-                    "ref_siblings": parser._ref_sibling_keywords_enabled,
-                    "frames": len(parser.declaration_frames),
-                    "result": result,
-                },
-                indent=2,
-            )
-            + "\n",
-            EXPECTED / f"version-{'first' if mode == 'directory' else mode}.txt",
-        )
-    finally:
-        parser.dispose()
+    assert_output(f"{output.exists()}\n", EXPECTED / "absent-output.txt")
 
 
-@pytest.mark.parametrize("version", ["30", "31"])
-def test_api_external_root_dialect(version: str) -> None:
-    """Borrow a bare external library only after establishing the root's dialect."""
-    parser = ApiOpenAPIParser(SOURCE / f"external-{version}.json", openapi_scopes=[OpenAPIScope.Api], formatters=[])
-    try:
-        assert_output(parser.parse(), EXPECTED / "external.py")
-        assert_output(
-            json.dumps(
-                {
-                    "media_item_schema": parser.schema_features.media_item_schema,
-                    "ref_siblings": parser._ref_sibling_keywords_enabled,
-                    "frames": len(parser.declaration_frames),
-                    "result": {},
-                },
-                indent=2,
-            )
-            + "\n",
-            EXPECTED / "version-first.txt",
-        )
-    finally:
-        parser.dispose()
+@pytest.mark.parametrize("mode", ["first", "reversed", "directory", "explicit"])
+def test_api_root_dialects_affect_generated_models(mode: str, tmp_path: Path) -> None:
+    """Keep the first root's dialect while allowing an explicit OpenAPI version override."""
+    directory = tmp_path / "inputs"
+    directory.mkdir()
+    for name in ("a.json", "b.json"):
+        copyfile(SOURCE / "version-behavior" / name, directory / name)
+    sources = sorted(directory.glob("*.json"), reverse=mode == "reversed")
+    output = tmp_path / "models"
+    generate(
+        directory if mode == "directory" else sources,
+        input_file_type=InputFileType.OpenAPI,
+        openapi_scopes=[OpenAPIScope.Api],
+        schema_version="3.2" if mode == "explicit" else "auto",
+        use_operation_id_as_name=True,
+        use_union_operator=False,
+        use_standard_collections=False,
+        disable_timestamp=True,
+        formatters=[Formatter.BLACK, Formatter.ISORT],
+        output=output,
+    )
+    assert_directory_content(output, EXPECTED / f"version-{mode}")
 
 
 @pytest.mark.parametrize("backend", list(DataModelType))

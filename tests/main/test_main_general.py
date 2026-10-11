@@ -47,6 +47,7 @@ from datamodel_code_generator.__main__ import (
     Config,
     Exit,
     _create_config,
+    _generation_config,
     run_generate_from_config,
 )
 from datamodel_code_generator.arguments import _dataclass_arguments, arg_parser
@@ -620,11 +621,11 @@ def _run_generate_from_config_generate_kwargs() -> list[tuple[str, str]]:
 
 
 def _run_generate_from_config_model_copy_updates() -> list[tuple[str, str]]:
-    source = inspect.getsource(run_generate_from_config)
+    source = inspect.getsource(_generation_config)
     module = ast.parse(source)
     function = module.body[0]
     if not isinstance(function, ast.FunctionDef):  # pragma: no cover
-        msg = "run_generate_from_config source did not parse to a function"
+        msg = "_generation_config source did not parse to a function"
         raise TypeError(msg)
 
     calls = [
@@ -1428,6 +1429,7 @@ def test_boolean_optional_option_sets_are_pinned() -> None:
         "snake_case_field",
         "use_frozen_field",
         "use_type_checking_imports",
+        "server_include_request",
     ])
 
 
@@ -2961,6 +2963,82 @@ def test_check_file_differs(output_file: Path) -> None:
     )
 
 
+def test_check_suffixless_file_matches(tmp_path: Path) -> None:
+    """Test --check returns OK when a single-module output without a suffix matches."""
+    input_path = DATA_PATH / "jsonschema" / "person.json"
+    output_path = tmp_path / "model"
+    run_main_and_assert(
+        input_path=input_path,
+        output_path=output_path,
+        input_file_type="jsonschema",
+        extra_args=["--disable-timestamp"],
+        assert_func=assert_file_content,
+        expected_file="person.py",
+    )
+    run_main_and_assert(
+        input_path=input_path,
+        output_path=output_path,
+        input_file_type="jsonschema",
+        extra_args=["--disable-timestamp", "--check"],
+        expected_exit=Exit.OK,
+    )
+
+
+def test_check_suffixless_file_differs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Test --check returns DIFF when a single-module output without a suffix differs."""
+    output_path = tmp_path / "model"
+    output_path.write_text("# Different content\n", encoding="utf-8")
+    run_main_and_assert(
+        input_path=DATA_PATH / "jsonschema" / "person.json",
+        output_path=output_path,
+        input_file_type="jsonschema",
+        extra_args=["--disable-timestamp", "--check"],
+        expected_exit=Exit.DIFF,
+    )
+    assert_output(
+        capsys.readouterr().out.replace(output_path.as_posix(), "<OUTPUT_FILE>"),
+        EXPECTED_MAIN_PATH / "check" / "suffixless_file_differs.txt",
+    )
+
+
+def test_check_suffixless_file_does_not_exist(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Test --check returns DIFF when a single-module output without a suffix does not exist."""
+    output_path = tmp_path / "model"
+    run_main_and_assert(
+        input_path=DATA_PATH / "jsonschema" / "person.json",
+        output_path=output_path,
+        input_file_type="jsonschema",
+        extra_args=["--disable-timestamp", "--check"],
+        expected_exit=Exit.DIFF,
+    )
+    assert_output(
+        capsys.readouterr().out.replace(output_path.as_posix(), "<OUTPUT_FILE>"),
+        EXPECTED_MAIN_PATH / "check" / "suffixless_file_does_not_exist.txt",
+    )
+
+
+@pytest.mark.parametrize("existing_output", [False, True])
+def test_output_format_json_writes_suffixless_file(
+    existing_output: bool, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Test --output-format json writes the single-module output without a suffix that it reports."""
+    output_path = tmp_path / "model"
+    if existing_output:
+        output_path.write_text("# Different content\n", encoding="utf-8")
+    run_main_and_assert(
+        input_path=DATA_PATH / "jsonschema" / "person.json",
+        output_path=output_path,
+        input_file_type="jsonschema",
+        extra_args=["--disable-timestamp", "--formatters", "builtin", "--output-format", "json"],
+        assert_func=assert_file_content,
+        expected_file="person.py",
+    )
+    assert_output(
+        capsys.readouterr().out.replace(output_path.as_posix(), "<OUTPUT_FILE>"),
+        EXPECTED_MAIN_PATH / "output_format_json" / "suffixless_file.txt",
+    )
+
+
 def test_check_with_stdout_output(capsys: pytest.CaptureFixture[str]) -> None:
     """Test --check with stdout output returns error."""
     run_main_and_assert(
@@ -3112,6 +3190,66 @@ def test_check_directory_ignores_pycache(output_dir: Path) -> None:
         input_file_type="openapi",
         extra_args=["--disable-timestamp", "--check"],
         expected_exit=Exit.OK,
+    )
+
+
+def test_check_file_undecodable(output_file: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Test --check reports an existing file the configured encoding cannot decode."""
+    output_file.write_bytes(b"\xff\n")
+    run_main_and_assert(
+        input_path=DATA_PATH / "jsonschema" / "person.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=["--disable-timestamp", "--check"],
+        expected_exit=Exit.ERROR,
+        capsys=capsys,
+        expected_stderr=(
+            f"Unable to decode output {output_file.as_posix()} using encoding 'utf-8': "
+            "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte\n"
+        ),
+    )
+
+
+def test_check_file_without_byte_order_mark(
+    output_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Test --check reports an existing file without the byte order mark the configured encoding requires."""
+    input_path = tmp_path / "person.json"
+    input_path.write_text((DATA_PATH / "jsonschema" / "person.json").read_text(encoding="utf-8"), encoding="utf-16")
+    output_file.write_bytes("# Different content\n".encode("utf-16-le"))
+    run_main_and_assert(
+        input_path=input_path,
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=["--disable-timestamp", "--encoding", "utf-16", "--check"],
+        expected_exit=Exit.ERROR,
+        capsys=capsys,
+        expected_stderr_contains=f"Unable to decode output {output_file.as_posix()} using encoding 'utf-16': ",
+    )
+
+
+def test_check_directory_file_undecodable(output_dir: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Test --check names the file in an output directory the configured encoding cannot decode."""
+    input_path = OPEN_API_DATA_PATH / "modular.yaml"
+    run_main_and_assert(
+        input_path=input_path,
+        output_path=output_dir,
+        input_file_type="openapi",
+        extra_args=["--disable-timestamp"],
+    )
+    undecodable_file = output_dir / "foo" / "bar.py"
+    undecodable_file.write_bytes(b"\xff\n")
+    run_main_and_assert(
+        input_path=input_path,
+        output_path=output_dir,
+        input_file_type="openapi",
+        extra_args=["--disable-timestamp", "--check"],
+        expected_exit=Exit.ERROR,
+        capsys=capsys,
+        expected_stderr=(
+            f"Unable to decode output {undecodable_file.as_posix()} using encoding 'utf-8': "
+            "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte\n"
+        ),
     )
 
 
@@ -5041,6 +5179,51 @@ def test_generate_custom_file_header_prepend_after_formatter_parenthesized_docst
     )
 
 
+@pytest.mark.parametrize(
+    ("mode", "formatter", "expected_name"),
+    [
+        pytest.param(
+            CustomFileHeaderMode.Replace,
+            "add_docstring",
+            "generate_custom_comment_header_after_formatter_docstring.py",
+            id="replace-docstring",
+        ),
+        pytest.param(
+            CustomFileHeaderMode.Prepend,
+            "add_docstring",
+            "generate_custom_comment_header_prepend_after_formatter_docstring.py",
+            id="prepend-docstring",
+        ),
+        pytest.param(
+            CustomFileHeaderMode.Replace,
+            "add_parenthesized_docstring",
+            "generate_custom_comment_header_after_formatter_parenthesized_docstring.py",
+            id="replace-parenthesized-docstring",
+        ),
+        pytest.param(
+            CustomFileHeaderMode.Replace,
+            "add_comment",
+            "generate_custom_comment_header_after_formatter_comment.py",
+            id="replace-comment",
+        ),
+    ],
+)
+def test_generate_custom_comment_header_keeps_formatter_docstring_first(
+    mode: CustomFileHeaderMode, formatter: str, expected_name: str
+) -> None:
+    """Keep a formatter docstring as the module docstring under a comment-only header."""
+    run_generate_and_assert(
+        input_=JSON_SCHEMA_DATA_PATH / "simple_string.json",
+        input_file_type=InputFileType.JsonSchema,
+        formatters=[],
+        custom_formatters=[f"tests.data.python.custom_formatters.{formatter}"],
+        custom_file_header="# My header",
+        custom_file_header_mode=mode,
+        disable_timestamp=True,
+        expected_file=EXPECTED_MAIN_PATH / expected_name,
+    )
+
+
 @pytest.mark.allow_direct_assert
 @pytest.mark.parametrize(
     ("header", "expected"),
@@ -5105,13 +5288,29 @@ def test_future_import_insertion_point_handles_runtime_tokenizer_syntax_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Treat runtime-specific tokenizer SyntaxError as malformed external input."""
+    original_generate_tokens = tokenize.generate_tokens
+    runtime_readline_name = f"{_find_future_import_insertion_point.__qualname__}.<locals>.readline"
+    syntax_error_injected = False
 
     def raise_syntax_error(_readline: Any) -> Any:
-        raise SyntaxError
+        nonlocal syntax_error_injected
+        if (
+            getattr(_readline, "__module__", None) == _find_future_import_insertion_point.__module__
+            and getattr(_readline, "__qualname__", None) == runtime_readline_name
+        ):
+            syntax_error_injected = True
+            raise SyntaxError
+        return original_generate_tokens(_readline)
 
     monkeypatch.setattr(tokenize, "generate_tokens", raise_syntax_error)
 
     assert _find_future_import_insertion_point("(") == 0
+    assert syntax_error_injected
+
+    tokens = tokenize.generate_tokens(StringIO("(").readline)
+    assert next(tokens)[:2] == (tokenize.OP, "(")
+    with pytest.raises(tokenize.TokenError, match="EOF in multi-line statement"):
+        list(tokens)
 
 
 def test_custom_file_header_prepend_preserves_future_import_text(output_file: Path) -> None:
@@ -5842,6 +6041,30 @@ def test_default_values_invalid_json(output_file: Path, capsys: pytest.CaptureFi
         expected_exit=Exit.ERROR,
         capsys=capsys,
         expected_stderr_contains="Unable to load default values mapping",
+        file_should_not_exist=output_file,
+    )
+
+
+@pytest.mark.parametrize(
+    ("aliases", "message"),
+    [
+        ("[" * 1_000_000, "Unable to load alias mapping: nests too deeply to parse"),
+        ('{"name": ' + "1" * 5000 + "}", "Unable to load alias mapping: has an integer with too many digits"),
+    ],
+    ids=["deep", "long-integer"],
+)
+def test_aliases_unparsable_json(
+    aliases: str, message: str, output_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Test --aliases JSON the parser cannot build reports a JSON error instead of crashing."""
+    run_main_and_assert(
+        input_path=JSON_SCHEMA_DATA_PATH / "person.json",
+        output_path=output_file,
+        input_file_type="jsonschema",
+        extra_args=["--aliases", aliases],
+        expected_exit=Exit.ERROR,
+        capsys=capsys,
+        expected_stderr_contains=message,
         file_should_not_exist=output_file,
     )
 

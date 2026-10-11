@@ -206,6 +206,7 @@ class OpenAPIParser(JsonSchemaParser):
     SCHEMA_PATHS: ClassVar[list[str]] = ["#/components/schemas"]
     _input_file_type: ClassVar[InputFileType] = InputFileType.OpenAPI
     _non_dict_source_is_invalid: ClassVar[bool] = True
+    _component_schemas_are_resources: ClassVar[bool] = True
     config: OpenAPIParserConfig
 
     @cached_property
@@ -264,7 +265,7 @@ class OpenAPIParser(JsonSchemaParser):
         """Resolve a reference to its model definition."""
         ref_file, ref_path = self.model_resolver.resolve_ref(ref).split("#", 1)
         ref_body = self._get_ref_body(ref_file) if ref_file else self.raw_obj
-        return get_model_by_path(ref_body, ref_path.split("/")[1:])
+        return cast("dict[str, Any]", get_model_by_path(ref_body, ref_path.split("/")[1:]))
 
     @contextmanager
     def openapi_self_context(self, specification: dict[str, Any]) -> Generator[None, None, None]:
@@ -532,7 +533,7 @@ class OpenAPIParser(JsonSchemaParser):
 
         result_fields: list[DataModelFieldBase] = []
         for field_obj in fields:
-            field = properties.get(field_obj.original_name)  # ty: ignore[invalid-argument-type]
+            field = properties.get(field_obj.original_name)
 
             if (
                 isinstance(field, JsonSchemaObject)
@@ -549,7 +550,7 @@ class OpenAPIParser(JsonSchemaParser):
                     result_fields.append(field_obj)
                     continue
                 normalized_discriminator = self._normalize_discriminator(discriminator)
-                field_obj = self.data_model_field_type(**{  # noqa: PLW2901  # ty: ignore[invalid-argument-type]
+                field_obj = self.data_model_field_type(**{  # noqa: PLW2901
                     **field_obj.__dict__,
                     "data_type": new_field_type,
                     "extras": {**field_obj.extras, "discriminator": normalized_discriminator},
@@ -822,6 +823,7 @@ class OpenAPIParser(JsonSchemaParser):
     ) -> DataType | None:
         """Parse all operation parameters into a data model."""
         fields: list[DataModelFieldBase] = []
+        field_schemas: list[tuple[JsonSchemaObject, list[str]]] = []
         exclude_field_names: set[str] = set()
         seen_parameter_names: set[str] = set()
         reference = self.model_resolver.add(path, name, class_name=True, unique=True)
@@ -854,6 +856,7 @@ class OpenAPIParser(JsonSchemaParser):
                 param_schema = parameter.schema_
                 if param_schema.has_ref_with_schema_keywords and not param_schema.is_ref_with_nullable_only:
                     param_schema = self._merge_ref_with_schema(param_schema)
+                field_schemas.append((param_schema, [*path, name, parameter_name]))
                 effective_required = parameter.required
                 effective_default, effective_has_default, use_default_with_required = self._effective_default_state(
                     parameter_name,
@@ -902,6 +905,7 @@ class OpenAPIParser(JsonSchemaParser):
                             schema_path,
                         )
                     )
+                    field_schemas.append((object_schema, schema_path))
 
                 if not data_types:
                     continue
@@ -937,6 +941,8 @@ class OpenAPIParser(JsonSchemaParser):
                 )
 
         if OpenAPIScope.Parameters in self.open_api_scopes and fields:
+            for field_schema, schema_path in field_schemas:
+                self.parse_ref(field_schema, schema_path)
             # Using _create_data_model from parent class JsonSchemaParser
             # This method automatically adds frozen=True for DataClass types
             self.generation_store.register_model(
@@ -1003,7 +1009,11 @@ class OpenAPIParser(JsonSchemaParser):
             )
 
     def parse_raw(self) -> None:
-        """Parse OpenAPI specification including schemas, paths, and operations."""
+        """Parse OpenAPI specification including schemas, paths, and operations.
+
+        Operations resolve references outside schema parsing, so models specialized for a dynamic scope
+        there are parsed once every specification has been read.
+        """
         self._discriminator_documents.clear()
         self._discriminator_schemas.clear()
         self._discriminator_subtypes.clear()
@@ -1039,9 +1049,11 @@ class OpenAPIParser(JsonSchemaParser):
                 specification = self._load_source_dict(source)
                 self._cache_source_ref_body(source, specification)
                 self.raw_obj = specification
+                self.raw_obj = specification = self._prepare_schema_resources(specification, path_parts)
                 with self.openapi_self_context(specification):
                     self._parse_specification(specification, path_parts)
 
+            self._parse_dynamic_specializations()
             self._resolve_unparsed_json_pointer()
             self._generate_forced_base_models()
         finally:

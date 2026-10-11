@@ -1,0 +1,69 @@
+# generate v1
+  file api.yaml
+  file pets/__init__.py
+  file pets/_async_client.py
+  file pets/_client.py
+  file pets/_generated/__init__.py
+  file pets/_generated/model_bindings.py
+  file pets/_generated_docs/README.md
+  file pets/_generated_docs/runtime.md
+  file pets/_operations.py
+  file pets/errors.py
+  file pets/model_codecs.py
+  file pets/options.py
+  file pets/py.typed
+  file pets/resources/__init__.py
+  file pets/resources/archive/__init__.py
+  file pets/resources/archive/_async.py
+  file pets/resources/archive/_sync.py
+  file pets/resources/pets/__init__.py
+  file pets/resources/pets/_async.py
+  file pets/resources/pets/_sync.py
+  file pets/responses.py
+  file pets/types/__init__.py
+  file pets/types/archive/__init__.py
+  file pets/types/archive/_operations.py
+  file pets/types/pets/__init__.py
+  file pets/types/pets/_operations.py
+  file pets_models.py
+  runtime files 23
+# add pets/extensions.py, edit pets/_client.py, and write pets/resources/orders/__init__.py
+# generate v2
+  file api.yaml
+  file pets/__init__.py
+  file pets/_async_client.py
+  file pets/_client.py
+  file pets/_generated/__init__.py
+  file pets/_generated/model_bindings.py
+  file pets/_generated_docs/README.md
+  file pets/_generated_docs/runtime.md
+  file pets/_operations.py
+  file pets/errors.py
+  file pets/extensions.py
+  file pets/model_codecs.py
+  file pets/options.py
+  file pets/py.typed
+  file pets/resources/__init__.py
+  file pets/resources/archive/__init__.py
+  file pets/resources/archive/_async.py
+  file pets/resources/archive/_sync.py
+  file pets/resources/orders/__init__.py
+  file pets/resources/orders/_async.py
+  file pets/resources/orders/_sync.py
+  file pets/resources/pets/__init__.py
+  file pets/resources/pets/_async.py
+  file pets/resources/pets/_sync.py
+  file pets/responses.py
+  file pets/types/__init__.py
+  file pets/types/archive/__init__.py
+  file pets/types/archive/_operations.py
+  file pets/types/orders/__init__.py
+  file pets/types/orders/_operations.py
+  file pets/types/pets/__init__.py
+  file pets/types/pets/_operations.py
+  file pets_models.py
+  runtime files 23
+  pets/extensions.py unchanged True
+  pets/_client.py still edited False
+  pets/resources/orders/__init__.py still foreign False
+  generated files written like text files True

@@ -543,6 +543,13 @@ class DataModelFieldBase(_BaseModel):  # noqa: PLR0904
     PREPARE_PYTHON_PATTERNS: ClassVar[
         Callable[[DataModelFieldBase, str, dict[str, PythonRuntimeExpression]], None] | None
     ] = None
+    PREPARE_TYPE_ALIAS_FIELD: ClassVar[
+        Callable[
+            [DataModelFieldBase, dict[str, PythonRuntimeExpression], Callable[[DataModelFieldBase, DataType], None]],
+            bool,
+        ]
+        | None
+    ] = None
     _FIELD_IMPORTS_CACHE_MAX_SIZE: ClassVar[int] = 4096
     _field_imports_cache: ClassVar[dict[tuple[Any, ...], tuple[Import, ...]]] = {}
     _SEMANTIC_CACHE_KEYS: ClassVar[tuple[str, ...]] = (
@@ -1870,6 +1877,7 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
     DEFAULT_IMPORTS: ClassVar[tuple[Import, ...]] = ()
     IS_ALIAS: ClassVar[bool] = False
     IS_ROOT_MODEL: ClassVar[bool] = False
+    DEFERS_RECURSIVE_TYPE_HINT: ClassVar[bool] = False
     SUPPORTS_GENERIC_BASE_CLASS: ClassVar[bool] = True
     FIELD_ASSIGNMENT_CHECKER: ClassVar[Callable[[DataModelFieldBase], bool]] = staticmethod(_has_field_assignment)
     FIELD_DEFAULT_CLASSIFIER: ClassVar[Callable[[DataModelFieldBase], tuple[bool, bool]]] = staticmethod(
@@ -1890,6 +1898,8 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
     SUPPORTS_DISCRIMINATOR: ClassVar[bool] = False
     SUPPORTS_INHERITED_DISCRIMINATOR_ENUM: ClassVar[bool] = False
     SUPPORTS_FIELD_RENAMING: ClassVar[bool] = False
+    SUPPORTS_FIELD_TYPE_RENAMING: ClassVar[bool] = False
+    NORMALIZES_FIELD_NAMES: ClassVar[bool] = False
     SUPPORTS_KW_ONLY: ClassVar[bool] = False
     REQUIRES_MODEL_LEVEL_KW_ONLY: ClassVar[bool] = False
     SUPPORTS_BOOLEAN_LITERAL: ClassVar[bool] = True
@@ -1933,7 +1943,7 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
     FORMAT_DESCRIPTION_AS_DOCSTRING: ClassVar[bool] = True
     CUSTOM_TEMPLATE_ADAPTER: ClassVar[Callable[[Template], Template] | None] = None
     # A static callable avoids allocating bound methods on dependency-index cache misses.
-    _INCLUDE_DICT_KEY_REFERENCE_CLASSES: ClassVar[Callable[[type[DataModel]], bool] | None] = None
+    _INCLUDE_DICT_KEY_REFERENCE_CLASSES: ClassVar[Callable[[DataModel], bool] | None] = None
     _TYPED_EXTRA_DICT_KEY_CAPABILITY: ClassVar[Callable[[DataType], bool] | None] = None
     _IMPORTS_CACHE_KEY: ClassVar[str] = "_cached_imports"
     has_forward_reference: bool = False
@@ -2071,6 +2081,15 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
         configured_root_model_type: type[DataModel],
     ) -> type[DataModel]:
         """Return the model type used for nested constrained values."""
+        return configured_root_model_type
+
+    @classmethod
+    def resolve_type_alias_model_type(
+        cls,
+        configured_root_model_type: type[DataModel],
+        target_python_version: PythonVersion,  # noqa: ARG003
+    ) -> type[DataModel]:
+        """Return the model type that --use-type-alias selects for a root value."""
         return configured_root_model_type
 
     @staticmethod
@@ -2274,12 +2293,16 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
         if cached is not None:
             return cached
 
-        if self.IS_ROOT_MODEL:
-            self.finalize_sequence_interface()
         render_class_name = class_name if class_name is not None or not use_default else "M"
-        result = tuple(to_hashable(v) for v in (self.render(class_name=render_class_name), self.imports))
+        result = self._render_dedup_key(render_class_name)
         self._dedup_key_cache[cache_key] = result
         return result
+
+    def _render_dedup_key(self, class_name: str | None) -> tuple[Any, ...]:
+        """Render the hashable deduplication key for a class name without caching it."""
+        if self.IS_ROOT_MODEL:
+            self.finalize_sequence_interface()
+        return tuple(to_hashable(v) for v in (self.render(class_name=class_name), self.imports))
 
     def create_reuse_model(self, base_ref: Reference) -> Self:
         """Create inherited model with empty fields pointing to base reference."""
@@ -2435,6 +2458,15 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
         self.__dict__[self._IMPORTS_CACHE_KEY] = imports
         return imports
 
+    def assign_forward_reference_fields(self, positions: Mapping[str, int], index: int) -> bool:  # noqa: ARG002, PLR6301
+        """Render fields by assignment when ``Field()`` inside ``Annotated`` is unsafe for a forward reference.
+
+        ``positions`` maps the path of each model in the module to its order and ``index`` is this model's order.
+        The neutral model policy intentionally changes nothing. Output backends whose target mishandles such a
+        field can override this hook and return whether a field changed.
+        """
+        return False
+
     def clear_imports_cache(self) -> None:
         """Clear cached imports after import-affecting model, field, or data type mutations."""
         self.__dict__.pop(self._IMPORTS_CACHE_KEY, None)
@@ -2445,6 +2477,9 @@ class DataModel(TemplateBase, Nullable, ABC):  # noqa: PLR0904
         self.clear_imports_cache()
         if dedup_key_cache := getattr(self, "_dedup_key_cache", None):
             dedup_key_cache.clear()
+
+    def refresh_field_config(self) -> None:
+        """Update config derived from field types once the parser has finished replacing them."""
 
     @property
     def reference_classes(self) -> frozenset[str]:

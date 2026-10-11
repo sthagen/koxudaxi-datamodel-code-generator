@@ -1,0 +1,6 @@
+not-struct: ValidationError
+renamed: ValidationError
+required-disagrees: ValidationError
+tag-disagrees: ValidationError
+unreadable-pattern: TypeError
+constrained-tuple: TypeError
