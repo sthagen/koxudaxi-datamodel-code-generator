@@ -59,7 +59,7 @@ jobs:
         fetch-depth: 1
         persist-credentials: false
     - name: Install the latest version of uv
-      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
       with:
         enable-cache: true
         cache-local-path: .tox/uv-cache
@@ -97,7 +97,7 @@ jobs:
       env:
         COVERAGE_NAME: .coverage.${{ matrix.coverage_name }}-ubuntu-24.04
     - name: Upload coverage data
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         include-hidden-files: true
         name: .coverage.${{ matrix.coverage_name }}-ubuntu-24.04
@@ -128,7 +128,7 @@ jobs:
         fetch-depth: 1
         persist-credentials: false
     - name: Install the latest version of uv
-      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
       with:
         enable-cache: true
         cache-local-path: .tox/uv-cache
@@ -209,7 +209,7 @@ jobs:
       env:
         COVERAGE_NAME: .coverage.${{ matrix.coverage_name }}-ubuntu-24.04
     - name: Upload coverage data
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         include-hidden-files: true
         name: .coverage.${{ matrix.coverage_name }}-ubuntu-24.04
@@ -272,7 +272,7 @@ jobs:
         fetch-depth: 1
         persist-credentials: false
     - name: Install the latest version of uv
-      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
       with:
         enable-cache: true
         cache-local-path: .tox/uv-cache
@@ -302,7 +302,7 @@ jobs:
         UV_PYTHON_PREFERENCE: "only-managed"
     - name: Upload test durations
       if: ${{ !cancelled() }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         include-hidden-files: true
         name: junit.${{ env.RUN_NAME }}
@@ -326,7 +326,7 @@ jobs:
         COVERAGE_NAME: .coverage.${{ env.RUN_NAME }}
     - name: Upload coverage data
       if: matrix.coverage == true
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         include-hidden-files: true
         name: .coverage.${{ env.RUN_NAME }}
@@ -622,7 +622,7 @@ jobs:
         persist-credentials: false
     - name: Install uv (Windows)
       if: matrix.os == 'windows-latest'
-      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
       with:
         version: ${{ env.WINDOWS_UV_VERSION }}
         enable-cache: true
@@ -636,7 +636,7 @@ jobs:
         save-cache: ${{ matrix.shard == 1 }}
     - name: Install the latest version of uv
       if: matrix.os != 'windows-latest'
-      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
       with:
         enable-cache: true
         cache-local-path: .tox/uv-cache
@@ -707,7 +707,7 @@ jobs:
         UV_PYTHON_PREFERENCE: "only-managed"
     - name: Upload test durations
       if: ${{ !cancelled() }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         include-hidden-files: true
         name: junit.${{ matrix.tox_env }}-shard${{ matrix.shard }}-${{ matrix.os }}
@@ -731,7 +731,7 @@ jobs:
         COVERAGE_NAME: .coverage.${{ matrix.tox_env }}-shard${{ matrix.shard }}-${{ matrix.os }}
     - name: Upload coverage data
       if: matrix.coverage == true
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         include-hidden-files: true
         name: .coverage.${{ matrix.tox_env }}-shard${{ matrix.shard }}-${{ matrix.os }}
@@ -1073,7 +1073,7 @@ jobs:
         fetch-depth: 1
         persist-credentials: false
     - name: Install the latest version of uv
-      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
       with:
         enable-cache: true
         cache-local-path: .tox/uv-cache
@@ -1125,7 +1125,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install the latest version of uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           enable-cache: true
           cache-local-path: .tox/uv-cache
@@ -1141,7 +1141,7 @@ jobs:
         env:
           UV_PYTHON_PREFERENCE: only-managed
       - name: Download coverage data
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: .tox/coverage-input
           pattern: .coverage.*
@@ -1168,13 +1168,13 @@ jobs:
         run: COVERAGE_FILE=.tox/.coverage .tox/coverage/bin/coverage html --fail-under=0 -d .tox/htmlcov
       - name: Upload HTML report
         if: steps.coverage.outcome == 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: html-report
           path: .tox/htmlcov
       - name: Upload coverage to Codecov
         if: always()
-        uses: codecov/codecov-action@0b35c9ecc4f0529d0eb674914510c22f85b196b4 # v7
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
         with:
           flags: unittests
           files: .tox/coverage.xml
@@ -1194,7 +1194,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install the latest version of uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           enable-cache: true
           cache-local-path: .tox/uv-cache
@@ -1263,7 +1263,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install the latest version of uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           enable-cache: true
           cache-local-path: .tox/uv-cache
